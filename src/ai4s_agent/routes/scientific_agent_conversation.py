@@ -20,6 +20,13 @@ from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
     ScientificAgentConversationStaleAuthority,
 )
+from ai4s_agent.scientific_agent_autonomy_l2 import AutonomyL2MaterialityError
+from ai4s_agent.scientific_agent_replanner import (
+    ScientificAgentReplannerConflict,
+    ScientificAgentReplannerOutcomeUnknown,
+    ScientificAgentReplannerResponseInvalid,
+    ScientificAgentReplannerStale,
+)
 from ai4s_agent.scientific_agent_run_input_binding import (
     ScientificAgentRunInputBindingError,
 )
@@ -355,6 +362,96 @@ def register_scientific_agent_conversation_routes(
                         "ok": False,
                         "error_code": "scientific_agent_session_failed",
                         "error": "The scientific Agent session could not continue safely.",
+                    }
+                ),
+                409,
+            )
+
+    @app.post(base + "/replan")
+    def scientific_agent_conversation_replan(project_id: str, conversation_id: str):
+        """Explicit mutating L2 entrypoint for one current Controller failure."""
+
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {"run_id", "llm_provider", "external_llm_approved"}
+            if set(payload).difference(allowed):
+                raise ValueError("conversation replan contains an unsupported field")
+            session = service.read_session(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
+            if not run_id:
+                run_id = f"conversation-{conversation_id}"
+            resolution = resolve_llm_provider_payload(
+                payload,
+                settings=llm_settings,
+                providers=llm_providers,
+            )
+            actor = resolve_authenticated_actor(request, required=True)
+            with resolution.provider_context as provider:
+                result = service.replan_current_controller_failure(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider=provider,
+                    provider_binding_digest=resolution.provider_binding_digest,
+                    actor=actor,
+                )
+            return jsonify({"ok": True, **result.as_dict()})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except LLMProviderError as exc:
+            return _provider_error(exc)
+        except ScientificAgentConversationAuthorizationRequired:
+            return _fixed_error(
+                "authorization_actor_required",
+                "L2 replanning requires a server-resolved actor.",
+                403,
+            )
+        except (
+            ScientificAgentReplannerOutcomeUnknown,
+            ScientificAgentReplannerResponseInvalid,
+        ):
+            return _fixed_error(
+                "replanner_outcome_unavailable",
+                "The L2 provider outcome is unavailable and will not be retried.",
+                409,
+            )
+        except (
+            ScientificAgentReplannerConflict,
+            ScientificAgentReplannerStale,
+            AutonomyL2MaterialityError,
+            ScientificAgentConversationStaleAuthority,
+        ):
+            return _fixed_error(
+                "replanner_authority_stale",
+                "The current failed Controller or plan revision is stale and cannot be replanned safely.",
+                409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "The scientific Agent session is unavailable.",
+                409,
+            )
+        except ValueError as exc:
+            if _provider_boundary_error(exc):
+                return _provider_error(exc)
+            return _fixed_error(
+                "invalid_conversation_replan_request",
+                "Invalid conversation replan request.",
+                400,
+            )
+        except Exception:
+            app.logger.warning("scientific_agent_conversation_replan_failed")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "scientific_agent_replan_failed",
+                        "error": "The scientific Agent could not replan safely.",
                     }
                 ),
                 409,

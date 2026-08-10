@@ -279,6 +279,16 @@ def register_routes(
         ),
     )
     app.extensions["scientific_agent_run_input_binding_service"] = input_binding_service
+    replanner = ScientificAgentReplannerService(
+        storage=projects,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        observation_builder=app.extensions["scientific_agent_plan_observation_builder"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        control_store=app.extensions["scientific_agent_plan_control_store"],
+        controller=harness_controller,
+        execution_agent_store=execution_agent_store,
+        tracer=harness_tracer,
+    )
     conversation_session_service = ScientificAgentConversationSessionService(
         projects=projects,
         conversations=conversations,
@@ -290,22 +300,13 @@ def register_routes(
         input_binding_service=input_binding_service,
         resource_authority_service=app.extensions["remote_resource_authority_service"],
         result_projection_service=result_projection_service,
+        replanner=replanner,
     )
     register_scientific_agent_conversation_routes(
         app,
         service=conversation_session_service,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
-    )
-    replanner = ScientificAgentReplannerService(
-        storage=projects,
-        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
-        observation_builder=app.extensions["scientific_agent_plan_observation_builder"],
-        authorization_service=app.extensions["scientific_agent_authorization_service"],
-        control_store=app.extensions["scientific_agent_plan_control_store"],
-        controller=harness_controller,
-        execution_agent_store=execution_agent_store,
-        tracer=harness_tracer,
     )
     register_scientific_agent_replanner_routes(
         app,

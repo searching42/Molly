@@ -3801,6 +3801,13 @@ class AgentAutonomyActionClass(str, Enum):
     PROHIBITED = "prohibited"
 
 
+class AgentAutonomyL2MaterialityClass(str, Enum):
+    """Deterministic materiality result for one verified plan revision."""
+
+    NON_MATERIAL = "non_material"
+    MATERIAL = "material"
+
+
 AGENT_AUTONOMY_REASON_CODES: tuple[str, ...] = (
     "AUTONOMY_ACTION_AUTO_CONTINUE",
     "AUTONOMY_GATE_APPROVAL_REQUIRES_HUMAN",
@@ -9326,6 +9333,155 @@ class AgentPlanRevisionProposal(BaseModel):
         return payload
 
 
+AGENT_AUTONOMY_L2_MATERIALITY_REASON_CODES: tuple[str, ...] = (
+    "AUTONOMY_L2_NO_MATERIAL_CHANGE",
+    "AUTONOMY_L2_MATERIAL_PLAN_CHANGE",
+    "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED",
+    "AUTONOMY_L2_CONTROLLER_FAILED_NO_EXECUTABLE_CHANGE",
+    "AUTONOMY_L2_DIFF_DIMENSION_UNRECOGNIZED",
+)
+
+
+class AgentAutonomyL2MaterialityDecision(BaseModel):
+    """Immutable, non-executable materiality projection for one revision.
+
+    This model is deliberately only a projection.  A serialized instance is
+    not trusted by a coordinator; the current verified revision and canonical
+    plan diff must be recomputed before it can be used as a policy result.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_autonomy_l2_materiality_decision.v1"] = (
+        "agent_autonomy_l2_materiality_decision.v1"
+    )
+    decision_id: str = ""
+    policy_version: str
+    policy_digest: str
+    revision_id: str
+    revision_digest: str
+    plan_diff_id: str
+    plan_diff_digest: str
+    baseline_proposal_id: str
+    baseline_proposal_digest: str
+    baseline_semantic_plan_digest: str
+    baseline_projection_digest: str
+    baseline_authorization_id: str
+    baseline_authorization_digest: str
+    baseline_authorization_scope_digest: str = ""
+    successor_candidate_id: str = ""
+    successor_proposal_digest: str = ""
+    successor_semantic_plan_digest: str = ""
+    successor_projection_digest: str
+    successor_authorization_scope_digest: str = ""
+    authorization_scope_equal: bool
+    classification: AgentAutonomyL2MaterialityClass
+    material_change: bool
+    current_authority_reuse_eligible: bool
+    fresh_permission_required: bool
+    fresh_authorization_required: bool
+    reason_codes: list[str]
+    executable: Literal[False] = False
+    decision_digest: str = ""
+
+    @field_validator(
+        "decision_id", "policy_version", "revision_id", "plan_diff_id",
+        "baseline_proposal_id", "baseline_authorization_id", "successor_candidate_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "decision_id"
+            or info.field_name == "successor_candidate_id",
+        )
+
+    @field_validator(
+        "policy_digest", "revision_digest", "plan_diff_digest",
+        "baseline_proposal_digest", "baseline_semantic_plan_digest",
+        "baseline_projection_digest", "baseline_authorization_digest",
+        "baseline_authorization_scope_digest", "successor_proposal_digest",
+        "successor_semantic_plan_digest", "successor_projection_digest",
+        "successor_authorization_scope_digest", "decision_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {
+                "baseline_authorization_scope_digest",
+                "successor_proposal_digest",
+                "successor_semantic_plan_digest",
+                "successor_authorization_scope_digest",
+                "decision_digest",
+            },
+        )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="reason_codes",
+            sort_values=True,
+            max_items=len(AGENT_AUTONOMY_L2_MATERIALITY_REASON_CODES),
+        )
+        if not cleaned or any(
+            item not in AGENT_AUTONOMY_L2_MATERIALITY_REASON_CODES for item in cleaned
+        ):
+            raise ValueError("reason_codes must use the bounded L2 materiality vocabulary")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "AgentAutonomyL2MaterialityDecision":
+        material = self.classification is AgentAutonomyL2MaterialityClass.MATERIAL
+        if self.material_change != material:
+            raise ValueError("materiality class and material_change disagree")
+        if self.classification is AgentAutonomyL2MaterialityClass.NON_MATERIAL:
+            if any(
+                (
+                    self.successor_candidate_id,
+                    self.successor_proposal_digest,
+                )
+            ):
+                raise ValueError("non-material decisions must not bind a successor")
+            if (
+                self.baseline_semantic_plan_digest
+                != self.successor_semantic_plan_digest
+                or self.baseline_projection_digest != self.successor_projection_digest
+            ):
+                raise ValueError("non-material decisions must preserve plan projections")
+            if self.fresh_permission_required or self.fresh_authorization_required:
+                raise ValueError("non-material decisions must not require fresh authority")
+        else:
+            if not self.successor_candidate_id or not self.successor_proposal_digest:
+                raise ValueError("material decisions require a successor binding")
+            if not self.fresh_permission_required or not self.fresh_authorization_required:
+                raise ValueError("material decisions require fresh authority")
+        if self.authorization_scope_equal != (
+            self.baseline_authorization_scope_digest
+            == self.successor_authorization_scope_digest
+        ):
+            raise ValueError("authorization scope equality is not derived correctly")
+        expected = _agent_digest(self.semantic_material())
+        if self.decision_digest and self.decision_digest != expected:
+            raise ValueError("L2 materiality decision digest mismatch")
+        object.__setattr__(self, "decision_digest", expected)
+        expected_id = f"autonomy-l2-materiality-decision-{expected.split(':', 1)[1][:32]}"
+        if self.decision_id and self.decision_id != expected_id:
+            raise ValueError("L2 materiality decision ID must derive from its digest")
+        object.__setattr__(self, "decision_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("decision_id", None)
+        payload.pop("decision_digest", None)
+        return payload
+
+
 class AgentPlanRevisionApplicationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -9883,6 +10039,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
     "agent_autonomy_policy_decision": AgentAutonomyPolicyDecision,
+    "agent_autonomy_l2_materiality_decision": AgentAutonomyL2MaterialityDecision,
     "agent_run_inspection": AgentRunInspection,
     "harness_telemetry_correlation": HarnessTelemetryCorrelationContext,
     "harness_telemetry_health": HarnessTelemetryHealthSnapshot,

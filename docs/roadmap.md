@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-L2 — Bounded replanning and materiality boundary
+> Current focus: M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -149,15 +149,16 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Closed by: PR #46.
   - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; every continuation recomputes the current PR #45 policy decision; cumulative transition, LLM-call, dispatch, wall-clock, task-graph, and resource boundaries are enforced from durable evidence; pause/tick continuation remains finite; every human, uncertain, stale, or prohibited condition fails closed before an LLM call or effect. This closes implementation and automated-test evidence only; it does not provide representative runtime acceptance (`V`).
 
-- [ ] **M3.5-AUT-L2 — Bounded replanning and materiality boundary**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-L2 — Bounded replanning and materiality boundary**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-L1`.
   - Target PR: #47.
-  - Definition of Done: verified failure or changed observation produces a successor proposal; deterministic materiality classification permits only non-material reuse of current authority, while every material change creates a new digest and requires fresh human authorization.
+  - Closed by: PR #47.
+  - Definition of Done: the explicit server-derived failure replan operation accepts only the exact current typed `FAILED` Controller state; the existing Replanner produces a deterministic canonical diff and non-executable materiality projection; no-change revisions remain stopped, while material revisions publish one review-only successor and clear old authority bindings so exact user approval creates fresh Permission, Authorization, StartIntent, and Controller artifacts. Crash/restart/replay and duplicate-request paths reuse the existing Replanner checkpoints and publication locks. This closes implementation and automated-test evidence only; representative L1/L2 runtime acceptance remains at `M3.5-AUT-ACCEPT`.
 
 - [ ] **M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-L2`.
   - Target PR: #48.
@@ -239,6 +240,31 @@ path, but Gate approval, remote approval, recovery, cancel, retry, unknown LLM
 outcomes, and material changes remain human/L2 boundaries. Read-only session,
 SSE, and telemetry projections remain non-authoritative. This is `I/T/—` only;
 representative L1/L2 runtime acceptance remains at `M3.5-AUT-ACCEPT`.
+
+### M3.5-AUT-L2 implementation closure
+
+PR #47 freezes and implements the bounded L2 materiality boundary without adding
+an execution authority. The versioned policy is
+`scientific-agent-autonomy-l2-materiality-policy.v1`; it explicitly reviews the
+canonical `task`, `dependency`, `option`, `artifact`,
+`route_profile_resource`, `budget`, `gate`, and `semantic` diff dimensions. An
+empty current canonical diff is `NON_MATERIAL`; a non-empty diff is `MATERIAL`.
+Option changes remain material even when the proposal and authorization carry
+the same authorization-scope digest. An unknown dimension fails closed.
+
+The only autonomous L2 entrypoint is the explicit mutating conversation
+operation `POST /agent-session/replan`. The server derives the failure trigger,
+baseline authority, Controller execution, current inspection, and deterministic
+request identity. It permits exactly the current typed `FAILED` Controller
+state; it does not automatically replan success, cancellation, recovery, Gate
+waiting, remote approval, stale authority, damaged evidence, or unknown LLM
+outcomes. The existing Replanner remains review-only and publication-only:
+material revisions stop at a fresh-authorization-required pending proposal,
+while no-change failures stay stopped. Existing Controller, Permission,
+Authorization, Executor, worker, and Replanner publication contracts remain the
+only authority paths. This is `I/T/—`; representative adversarial, restart,
+replay, and exactly-once L1/L2 acceptance remains queued at
+`M3.5-AUT-ACCEPT`.
 
 ### BR1 acceptance closure
 
