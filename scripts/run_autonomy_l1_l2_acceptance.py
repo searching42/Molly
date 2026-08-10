@@ -140,7 +140,7 @@ def _scenario_a03(workspace: Path) -> dict[str, Any]:
         "same_controller": True,
         "same_remote_request": True,
         "replay_verified": True,
-        "restart_performed": True,
+        "restart_performed": False,
         "restart_scope": "durable-controller-receipt-crash-window",
         "authority_preserved": True,
     }
@@ -176,6 +176,10 @@ def _scenario_a05(workspace: Path) -> dict[str, Any]:
         "observed_reason_codes": ["AUTONOMY_L1_TRANSITION_BUDGET_EXHAUSTED"],
         "transitions_used": AUTONOMY_L1_MAX_TRANSITIONS,
         "transition_limit": AUTONOMY_L1_MAX_TRANSITIONS,
+        "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
+        "controller_effect_call_count": 0,
+        "execution_agent_proposal_call_count": 0,
+        "controller_receipt_count_delta": 0,
         "next_effect_blocked": True,
         "automatic_cancel": False,
         "automatic_replan": False,
@@ -194,7 +198,10 @@ def _scenario_a06(workspace: Path) -> dict[str, Any]:
         "observed_reason_codes": ["AUTONOMY_L1_LLM_BUDGET_EXHAUSTED"],
         "llm_calls_used": AUTONOMY_L1_MAX_LLM_CALLS,
         "llm_call_limit": AUTONOMY_L1_MAX_LLM_CALLS,
-        "provider_calls_at_limit": AUTONOMY_L1_MAX_LLM_CALLS,
+        "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
+        "llm_evidence_calls_at_limit": AUTONOMY_L1_MAX_LLM_CALLS,
+        "provider_call_count": 0,
+        "execution_agent_checkpoint_count": 0,
         "next_provider_call_blocked": True,
         "usage_rebuilt_from": "durable_execution_agent_request_checkpoints",
         "authority_preserved": True,
@@ -458,8 +465,8 @@ def _scenario_a15(workspace: Path) -> dict[str, Any]:
 
 def _scenario_l1_l2_epoch(workspace: Path) -> dict[str, Any]:
     result = _invoke_test(
-        "tests.test_scientific_agent_autonomy_l2",
-        "test_l2_material_successor_receives_fresh_authority_after_conversational_approval",
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_l2_handoff_starts_fresh_l1_budget_epoch",
         workspace,
         needs_monkeypatch=True,
     )
@@ -469,7 +476,8 @@ def _scenario_l1_l2_epoch(workspace: Path) -> dict[str, Any]:
             "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED",
         ],
         "controller_a_to_controller_b": True,
-        "fresh_l1_epoch_scope": "new_controller_execution_id",
+        "fresh_l1_epoch_scope": "real_tick_new_controller_execution_id",
+        "fresh_l1_runtime_continuation": True,
         "old_l1_projection_authoritative": False,
         "old_budget_evidence_immutable": True,
         "new_budget_rebuilt_from_new_controller": True,
@@ -480,7 +488,7 @@ def _scenario_l1_l2_epoch(workspace: Path) -> dict[str, Any]:
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario("AUT-A01", "L1 ordinary continuation stops at human Gate", "L1", "USER_GATE_APPROVAL", _scenario_a01),
     Scenario("AUT-A02", "Remote approval remains a human boundary", "L1", "USER_REMOTE_APPROVAL", _scenario_a02),
-    Scenario("AUT-A03", "Remote restart and exactly-once adoption", "L1", "REMOTE_LIFECYCLE", _scenario_a03),
+    Scenario("AUT-A03", "Remote adoption crash-window exactly-once reconciliation", "L1", "REMOTE_LIFECYCLE", _scenario_a03),
     Scenario("AUT-A04", "Per-invocation cap resumes on next tick", "L1", "BOUNDED_PAUSE", _scenario_a04),
     Scenario("AUT-A05", "Cumulative transition budget stops before effect", "L1", "BUDGET", _scenario_a05),
     Scenario("AUT-A06", "Cumulative LLM-call budget stops before provider", "L1", "BUDGET", _scenario_a06),
@@ -706,6 +714,8 @@ def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str,
         "restart_scope", "authority_preserved", "invocation_steps_before", "transitions_before",
         "transitions_after", "resumed_on_next_tick", "run_failure_claimed", "transitions_used",
         "transition_limit", "llm_calls_used", "llm_call_limit", "provider_calls_at_limit",
+        "runtime_entrypoint", "controller_effect_call_count", "execution_agent_proposal_call_count",
+        "execution_agent_checkpoint_count", "llm_evidence_calls_at_limit",
         "next_provider_call_blocked", "usage_rebuilt_from", "anchor_initialized", "request_root_removed",
         "llm_calls_not_reset_to_zero", "controller_advanced", "wall_clock_limit_seconds",
         "clock_injected", "clock_boundary_effect", "task_graph_mutation", "resource_expansion",
@@ -721,6 +731,7 @@ def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str,
         "same_revision", "same_canonical_diff", "same_successor", "same_application_receipt",
         "duplicate_successor", "concurrent_replan", "concurrent_provider_calls",
         "concurrent_successor_count", "controller_a_to_controller_b", "fresh_l1_epoch_scope",
+        "fresh_l1_runtime_continuation",
         "old_l1_projection_authoritative", "old_budget_evidence_immutable", "new_budget_rebuilt_from_new_controller",
         "unknown_outcome_retry_count", "automatic_cancel", "automatic_replan",
     }
@@ -786,7 +797,10 @@ def _run_acceptance(args: argparse.Namespace) -> int:
         "restart_count": sum(1 for item in records if item.get("restart_performed")),
         "provider_call_summary": {"unknown_outcome_retries": 0, "l2_provider_replay_calls": 1},
         "controller_transition_summary": {"cumulative_limit": AUTONOMY_L1_MAX_TRANSITIONS, "invocation_limit": AUTONOMY_L1_PER_INVOCATION_MAX_STEPS},
-        "remote_dispatch_summary": {"duplicate_dispatch_count": 0, "remote_restart_dispatch_count": 1},
+        "remote_dispatch_summary": {
+            "duplicate_dispatch_count": 0,
+            "remote_exactly_once_dispatch_count": 1,
+        },
         "authority_invariant_summary": {
             "autonomy_does_not_create_authority": True,
             "automatic_gate_approval": False,
@@ -806,7 +820,7 @@ def _run_acceptance(args: argparse.Namespace) -> int:
     restart_summary = {
         "schema_version": "scientific_autonomy_l1_l2_restart_replay_summary.v1",
         "acceptance_code_head": head,
-        "l1_remote_restart": {
+        "l1_remote_adoption_crash_window": {
             "same_controller": True,
             "same_remote_request": True,
             "dispatch_before": 1,

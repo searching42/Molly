@@ -73,6 +73,7 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert manifest["scenario_count"] == len(SCENARIO_IDS)
     assert manifest["passed_count"] == len(SCENARIO_IDS)
     assert manifest["failed_count"] == 0
+    assert manifest["restart_count"] == 1
 
     policies = manifest["policy_identities"]
     assert policies == {
@@ -110,7 +111,7 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert matrix["scenario_roster_digest"] == expected_roster_digest
 
     assert restart["acceptance_code_head"] == manifest["acceptance_code_head"]
-    assert restart["l1_remote_restart"] == {
+    assert restart["l1_remote_adoption_crash_window"] == {
         "same_controller": True,
         "same_remote_request": True,
         "dispatch_before": 1,
@@ -123,10 +124,28 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert restart["l2_provider_restart"]["provider_calls_before"] == 1
     assert restart["l2_provider_restart"]["provider_calls_after"] == 1
     assert restart["l2_successor_reconciliation"]["duplicate_successor"] is False
+    a03 = next(item for item in scenarios if item["scenario_id"] == "AUT-A03")
+    assert a03["title"] == "Remote adoption crash-window exactly-once reconciliation"
+    assert a03["restart_performed"] is False
+    assert a03["restart_scope"] == "durable-controller-receipt-crash-window"
     a15 = next(item for item in scenarios if item["scenario_id"] == "AUT-A15")
     assert a15["concurrent_replan"] is True
     assert a15["concurrent_provider_calls"] == 1
     assert a15["concurrent_successor_count"] == 1
+    a05 = next(item for item in scenarios if item["scenario_id"] == "AUT-A05")
+    assert a05["runtime_entrypoint"] == "ScientificAgentConversationSessionService.tick"
+    assert a05["controller_effect_call_count"] == 0
+    assert a05["execution_agent_proposal_call_count"] == 0
+    assert a05["next_effect_blocked"] is True
+    a06 = next(item for item in scenarios if item["scenario_id"] == "AUT-A06")
+    assert a06["runtime_entrypoint"] == "ScientificAgentConversationSessionService.tick"
+    assert a06["llm_evidence_calls_at_limit"] == 64
+    assert a06["provider_call_count"] == 0
+    assert a06["execution_agent_checkpoint_count"] == 0
+    assert a06["next_provider_call_blocked"] is True
+    a16 = next(item for item in scenarios if item["scenario_id"] == "AUT-A16")
+    assert a16["fresh_l1_runtime_continuation"] is True
+    assert a16["fresh_l1_epoch_scope"] == "real_tick_new_controller_execution_id"
 
     assert authority["acceptance_code_head"] == manifest["acceptance_code_head"]
     for key in (
