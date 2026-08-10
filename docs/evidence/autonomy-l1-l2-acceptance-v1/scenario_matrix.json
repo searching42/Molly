@@ -1,0 +1,292 @@
+{
+  "acceptance_code_head": "358eed6da5aed2a6fb83e73c783f9ee40d8afbac",
+  "scenario_roster_digest": "sha256:fb3d46268c924d061e34471b1f30559c5c7a1c50504a62641233b3c5de49325d",
+  "scenarios": [
+    {
+      "authority_preserved": true,
+      "expected_boundary": "USER_GATE_APPROVAL",
+      "observed_reason_codes": [
+        "USER_GATE_APPROVAL_REQUIRED"
+      ],
+      "provider_call_count": 0,
+      "remote_dispatch_count": 0,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A01",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_plan_approval_does_not_auto_approve_a_later_gate",
+      "title": "L1 ordinary continuation stops at human Gate"
+    },
+    {
+      "authority_preserved": true,
+      "expected_boundary": "USER_REMOTE_APPROVAL",
+      "observed_reason_codes": [
+        "REMOTE_APPROVAL_REQUIRED",
+        "REMOTE_EXECUTION_RUNNING",
+        "REMOTE_OUTPUTS_ADOPTED"
+      ],
+      "provider_call_count": 0,
+      "remote_dispatch_count": 1,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A02",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_harness_controller.py::test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adoption",
+      "title": "Remote approval remains a human boundary"
+    },
+    {
+      "authority_preserved": true,
+      "expected_boundary": "REMOTE_LIFECYCLE",
+      "observed_reason_codes": [
+        "REMOTE_OUTPUTS_ADOPTED"
+      ],
+      "provider_call_count": 0,
+      "remote_dispatch_count_after": 1,
+      "remote_dispatch_count_before": 1,
+      "replay_verified": true,
+      "restart_performed": true,
+      "restart_scope": "durable-controller-receipt-crash-window",
+      "runtime_phase": "L1",
+      "same_controller": true,
+      "same_remote_request": true,
+      "scenario_id": "AUT-A03",
+      "status": "PASS",
+      "test_adapter": "tests/test_controller_remote_successor_crash_windows.py::test_adopt_effect_without_persisted_receipt_recovers_without_second_adoption",
+      "title": "Remote restart and exactly-once adoption"
+    },
+    {
+      "authority_preserved": true,
+      "expected_boundary": "BOUNDED_PAUSE",
+      "invocation_steps_before": 32,
+      "observed_reason_codes": [
+        "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED"
+      ],
+      "resumed_on_next_tick": true,
+      "run_failure_claimed": false,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A04",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_invocation_bound_pauses_and_resumes_on_the_next_tick",
+      "title": "Per-invocation cap resumes on next tick",
+      "transitions_after": 64,
+      "transitions_before": 32
+    },
+    {
+      "authority_preserved": true,
+      "automatic_cancel": false,
+      "automatic_replan": false,
+      "expected_boundary": "BUDGET",
+      "observed_reason_codes": [
+        "AUTONOMY_L1_TRANSITION_BUDGET_EXHAUSTED"
+      ],
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A05",
+      "status": "PASS",
+      "test_adapter": "tests/test_autonomy_acceptance_runtime.py::test_l1_acceptance_rebuilds_128_transition_receipts_and_stops_before_effect",
+      "title": "Cumulative transition budget stops before effect",
+      "transition_limit": 128,
+      "transitions_used": 128
+    },
+    {
+      "authority_preserved": true,
+      "expected_boundary": "BUDGET",
+      "llm_call_limit": 64,
+      "llm_calls_used": 64,
+      "next_provider_call_blocked": true,
+      "observed_reason_codes": [
+        "AUTONOMY_L1_LLM_BUDGET_EXHAUSTED"
+      ],
+      "provider_calls_at_limit": 64,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A06",
+      "status": "PASS",
+      "test_adapter": "tests/test_autonomy_acceptance_runtime.py::test_l1_acceptance_rebuilds_64_llm_checkpoints_and_stops_before_provider",
+      "title": "Cumulative LLM-call budget stops before provider",
+      "usage_rebuilt_from": "durable_execution_agent_request_checkpoints"
+    },
+    {
+      "anchor_initialized": true,
+      "authority_preserved": true,
+      "expected_boundary": "FAIL_CLOSED",
+      "llm_calls_not_reset_to_zero": true,
+      "next_provider_call_blocked": true,
+      "observed_reason_codes": [
+        "AUTONOMY_L1_EVIDENCE_UNAVAILABLE"
+      ],
+      "request_root_removed": true,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A07",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_missing_l1_llm_evidence_fails_closed_after_store_recreation",
+      "title": "Missing LLM evidence fails closed"
+    },
+    {
+      "authority_preserved": true,
+      "controller_advanced": false,
+      "expected_boundary": "FAIL_CLOSED",
+      "observed_reason_codes": [
+        "EXECUTION_AGENT_LLM_OUTCOME_UNKNOWN"
+      ],
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A08",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_unknown_execution_agent_outcome_is_not_retried_by_a_later_tick",
+      "title": "Unknown Execution Agent outcome is never retried",
+      "unknown_outcome_retry_count": 0
+    },
+    {
+      "authority_preserved": true,
+      "clock_boundary_effect": "blocked_before_effect",
+      "clock_injected": true,
+      "expected_boundary": "BOUNDARY",
+      "observed_reason_codes": [
+        "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED",
+        "AUTONOMY_L1_TASK_GRAPH_BOUNDARY",
+        "AUTONOMY_L1_RESOURCE_BOUNDARY"
+      ],
+      "resource_evidence_fail_closed": true,
+      "resource_expansion": false,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A09",
+      "status": "PASS",
+      "task_graph_identity_verified": true,
+      "task_graph_mutation": false,
+      "test_adapter": "tests/test_scientific_agent_autonomy_l1.py::test_invalid_clock_or_dispatch_evidence_fails_closed",
+      "test_adapter_2": "tests/test_scientific_agent_autonomy_l1.py::test_task_graph_and_execution_digest_are_exactly_bound",
+      "title": "Wall-clock, task-graph, and resource boundaries",
+      "wall_clock_limit_seconds": 86400
+    },
+    {
+      "authority_preserved": true,
+      "budget_bypass": false,
+      "concurrency_scope": "same-session-lock",
+      "duplicate_remote_dispatch_count": 0,
+      "effective_controller_transitions": 1,
+      "expected_boundary": "EXACTLY_ONCE",
+      "observed_reason_codes": [
+        "RUN_SUCCEEDED"
+      ],
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A10",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_concurrent_l1_ticks_do_not_duplicate_controller_effect",
+      "title": "Concurrent ticks cannot duplicate effects"
+    },
+    {
+      "authority_preserved": true,
+      "authorization_count_delta": 0,
+      "controller_receipt_count_delta": 0,
+      "events_may_drive_execution": false,
+      "expected_boundary": "READ_ONLY",
+      "observed_reason_codes": [
+        "PLAN_APPROVAL_REQUIRED"
+      ],
+      "provider_call_count_delta": 0,
+      "read_only_surface_effect_count": 0,
+      "replanner_call_count_delta": 0,
+      "runtime_phase": "L1",
+      "scenario_id": "AUT-A11",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_conversation_session.py::test_conversation_turn_publishes_real_review_only_scientific_proposal_and_sse",
+      "title": "Read-only surfaces have zero effects"
+    },
+    {
+      "authority_preserved": true,
+      "exact_failed_only": true,
+      "expected_boundary": "FAILED_ONLY",
+      "matrix": [
+        "SUCCEEDED",
+        "CANCELLED",
+        "RECOVERY_REQUIRED",
+        "WAITING_GATE",
+        "WAITING_REMOTE_APPROVAL"
+      ],
+      "new_authorization_count": 0,
+      "observed_reason_codes": [
+        "REPLANNER_SOURCE_STALE"
+      ],
+      "provider_calls": 0,
+      "runtime_phase": "L2",
+      "scenario_id": "AUT-A12",
+      "status": "PASS",
+      "successor_count": 0,
+      "test_adapter": "tests/test_autonomy_acceptance_runtime.py::test_non_failed_l2_trigger_matrix_rejects_before_provider_or_successor",
+      "title": "Only exact FAILED enters autonomous L2"
+    },
+    {
+      "apply_revision": false,
+      "authority_preserved": true,
+      "expected_boundary": "NON_MATERIAL",
+      "materiality": "NON_MATERIAL",
+      "new_authorization_count": 0,
+      "observed_reason_codes": [
+        "AUTONOMY_L2_NO_MATERIAL_CHANGE"
+      ],
+      "old_controller_remains_failed": true,
+      "provider_calls": 1,
+      "runtime_phase": "L2",
+      "scenario_id": "AUT-A13",
+      "status": "PASS",
+      "successor_count": 0,
+      "test_adapter": "tests/test_scientific_agent_autonomy_l2.py::test_l2_failed_no_change_stays_stopped_without_restarting_authority",
+      "title": "FAILED plus NON_MATERIAL remains stopped"
+    },
+    {
+      "authority_preserved": true,
+      "baseline_authorization_can_start_successor": false,
+      "expected_boundary": "FRESH_AUTHORITY",
+      "fresh_authorization": true,
+      "fresh_controller": true,
+      "fresh_permission": true,
+      "fresh_start_intent": true,
+      "materiality": "MATERIAL",
+      "observed_reason_codes": [
+        "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED"
+      ],
+      "old_authorization_reused": false,
+      "option_change_same_scope_is_material": true,
+      "runtime_phase": "L2",
+      "scenario_id": "AUT-A14",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_autonomy_l2.py::test_l2_material_successor_receives_fresh_authority_after_conversational_approval",
+      "title": "MATERIAL successor requires fresh authority"
+    },
+    {
+      "authority_preserved": true,
+      "duplicate_successor": false,
+      "expected_boundary": "REPLAY",
+      "observed_reason_codes": [
+        "REPLANNER_REQUEST_REPLAYED"
+      ],
+      "provider_calls_after": 1,
+      "provider_calls_before": 1,
+      "restart_performed": true,
+      "restart_scope": "separate-python-process",
+      "runtime_phase": "L2",
+      "same_application_receipt": true,
+      "same_canonical_diff": true,
+      "same_revision": true,
+      "same_successor": true,
+      "scenario_id": "AUT-A15",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_replanner.py::test_application_recovers_successor_published_before_receipt",
+      "title": "L2 provider and successor crash-window replay"
+    },
+    {
+      "authority_preserved": true,
+      "controller_a_to_controller_b": true,
+      "expected_boundary": "FRESH_EPOCH",
+      "fresh_l1_epoch_scope": "new_controller_execution_id",
+      "new_budget_rebuilt_from_new_controller": true,
+      "observed_reason_codes": [
+        "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED"
+      ],
+      "old_budget_evidence_immutable": true,
+      "old_l1_projection_authoritative": false,
+      "runtime_phase": "L1_L2_HANDOFF",
+      "scenario_id": "AUT-A16",
+      "status": "PASS",
+      "test_adapter": "tests/test_scientific_agent_autonomy_l2.py::test_l2_material_successor_receives_fresh_authority_after_conversational_approval",
+      "title": "L1 to L2 to fresh L1 epoch handoff"
+    }
+  ],
+  "schema_version": "scientific_autonomy_l1_l2_scenario_matrix.v1"
+}

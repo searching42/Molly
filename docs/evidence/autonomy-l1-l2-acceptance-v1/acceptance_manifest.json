@@ -1,0 +1,57 @@
+{
+  "acceptance_code_head": "358eed6da5aed2a6fb83e73c783f9ee40d8afbac",
+  "acceptance_id": "autonomy-l1-l2-acceptance-v1",
+  "authority_invariant_summary": {
+    "automatic_cancel": false,
+    "automatic_failed_task_retry": false,
+    "automatic_gate_approval": false,
+    "automatic_recovery": false,
+    "automatic_remote_approval": false,
+    "autonomy_does_not_create_authority": true,
+    "duplicate_remote_dispatch_count": 0,
+    "material_successor_reused_old_authorization": false,
+    "read_only_surface_effect_count": 0,
+    "unknown_llm_outcome_retry_count": 0
+  },
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot"
+  },
+  "complementary_real_evidence": "PR #43 BR1 representative remote evidence",
+  "controller_transition_summary": {
+    "cumulative_limit": 128,
+    "invocation_limit": 32
+  },
+  "failed_count": 0,
+  "formal_acceptance_started": true,
+  "passed_count": 16,
+  "policy_identities": {
+    "action_policy": {
+      "digest": "sha256:e2817db40ff0eea38b563ee67af63d0cadd9bea3e12544b28ba6f88a15e0f2ac",
+      "version": "scientific-agent-autonomy-policy.v1"
+    },
+    "l1_runtime_policy": {
+      "digest": "sha256:80937dc367ab61887c6614c39f78a060ddd4b03b36ab91e2f83d8490e82110f7",
+      "version": "scientific-agent-autonomy-l1-runtime-policy.v1"
+    },
+    "l2_materiality_policy": {
+      "digest": "sha256:d3c5196dd2e61cc84a613fce3c7a7741467d58a536658830c93fe3b25537e1af",
+      "version": "scientific-agent-autonomy-l2-materiality-policy.v1"
+    }
+  },
+  "provider_call_summary": {
+    "l2_provider_replay_calls": 1,
+    "unknown_outcome_retries": 0
+  },
+  "remote_dispatch_summary": {
+    "duplicate_dispatch_count": 0,
+    "remote_restart_dispatch_count": 1
+  },
+  "restart_count": 2,
+  "runtime_kind": "flask_control_plane_with_filesystem_authority_and_synthetic_external_edges",
+  "scenario_count": 16,
+  "scenario_roster_digest": "sha256:fb3d46268c924d061e34471b1f30559c5c7a1c50504a62641233b3c5de49325d",
+  "schema_version": "scientific_autonomy_l1_l2_acceptance_manifest.v1",
+  "scientific_scope": "control_plane_autonomy_only",
+  "status": "SUCCEEDED",
+  "verification_status": "runtime_verified"
+}

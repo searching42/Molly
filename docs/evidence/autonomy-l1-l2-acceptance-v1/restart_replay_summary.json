@@ -1,0 +1,25 @@
+{
+  "acceptance_code_head": "358eed6da5aed2a6fb83e73c783f9ee40d8afbac",
+  "l1_remote_restart": {
+    "adopt_dispatch_occurred": false,
+    "dispatch_after": 1,
+    "dispatch_before": 1,
+    "process_boundary": false,
+    "refresh_dispatch_occurred": false,
+    "same_controller": true,
+    "same_remote_request": true
+  },
+  "l2_provider_restart": {
+    "process_boundary": true,
+    "provider_calls_after": 1,
+    "provider_calls_before": 1,
+    "same_diff": true,
+    "same_revision": true
+  },
+  "l2_successor_reconciliation": {
+    "duplicate_successor": false,
+    "same_application_receipt": true,
+    "same_successor": true
+  },
+  "schema_version": "scientific_autonomy_l1_l2_restart_replay_summary.v1"
+}
