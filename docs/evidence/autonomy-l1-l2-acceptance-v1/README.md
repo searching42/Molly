@@ -27,7 +27,7 @@ at the exhausted boundary. The L1→L2 handoff also enters a real B-side tick
 and verifies that its budget snapshot is rebuilt from Controller B evidence.
 
 The acceptance code was frozen at
-`02deae19194a20c079253dabc917cfe7c9a05945`; after that freeze, only this
+`d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94`; after that freeze, only this
 evidence projection, its contract checks, and the roadmap were finalized. The
 final evidence commit is recorded in the pull request body.
 
