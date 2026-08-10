@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "AgentAutonomyActionClass": {
+      "description": "Derived eligibility for a future bounded autonomy coordinator.",
+      "enum": [
+        "auto_continue",
+        "require_human",
+        "prohibited"
+      ],
+      "title": "AgentAutonomyActionClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable, non-executable policy projection for one exact inspection.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_autonomy_policy_decision.v1",
+      "default": "agent_autonomy_policy_decision.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "decision_id": {
+      "default": "",
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "controller_action": {
+      "title": "Controller Action",
+      "type": "string"
+    },
+    "classification": {
+      "$ref": "#/$defs/AgentAutonomyActionClass"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "decision_digest": {
+      "default": "",
+      "title": "Decision Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy_version",
+    "policy_digest",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "inspection_digest",
+    "controller_action",
+    "classification",
+    "reason_codes"
+  ],
+  "title": "AgentAutonomyPolicyDecision",
+  "type": "object"
+}

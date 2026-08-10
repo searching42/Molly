@@ -3793,6 +3793,26 @@ class AgentHarnessControllerAction(str, Enum):
     COMPLETE_EXECUTION = "complete_execution"
 
 
+class AgentAutonomyActionClass(str, Enum):
+    """Derived eligibility for a future bounded autonomy coordinator."""
+
+    AUTO_CONTINUE = "auto_continue"
+    REQUIRE_HUMAN = "require_human"
+    PROHIBITED = "prohibited"
+
+
+AGENT_AUTONOMY_REASON_CODES: tuple[str, ...] = (
+    "AUTONOMY_ACTION_AUTO_CONTINUE",
+    "AUTONOMY_GATE_APPROVAL_REQUIRES_HUMAN",
+    "AUTONOMY_REMOTE_APPROVAL_REQUIRES_HUMAN",
+    "AUTONOMY_RECOVERY_REQUIRES_HUMAN",
+    "AUTONOMY_CANCEL_REQUIRES_HUMAN",
+    "AUTONOMY_ACTION_UNRECOGNIZED",
+    "AUTONOMY_DIRECT_EFFECT_BYPASS_PROHIBITED",
+    "AUTONOMY_MATERIAL_CHANGE_REQUIRES_REPLAN",
+)
+
+
 class AgentHarnessControllerStatus(str, Enum):
     ACTIVE = "active"
     WAITING_GATE = "waiting_gate"
@@ -4842,6 +4862,93 @@ class AgentHarnessControllerInspection(BaseModel):
         payload = self.model_dump(mode="json")
         payload.pop("inspection_digest", None)
         payload.pop("inspected_at", None)
+        return payload
+
+
+class AgentAutonomyPolicyDecision(BaseModel):
+    """Immutable, non-executable policy projection for one exact inspection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_autonomy_policy_decision.v1"] = (
+        "agent_autonomy_policy_decision.v1"
+    )
+    decision_id: str = ""
+    policy_version: str
+    policy_digest: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    inspection_digest: str
+    controller_action: str
+    classification: AgentAutonomyActionClass
+    reason_codes: list[str]
+    executable: Literal[False] = False
+    decision_digest: str = ""
+
+    @field_validator(
+        "decision_id",
+        "policy_version",
+        "controller_execution_id",
+        "controller_action",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "decision_id",
+        )
+
+    @field_validator(
+        "policy_digest",
+        "controller_execution_digest",
+        "inspection_digest",
+        "decision_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "decision_digest",
+        )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="reason_codes",
+            sort_values=True,
+            max_items=len(AGENT_AUTONOMY_REASON_CODES),
+        )
+        if not cleaned or any(item not in AGENT_AUTONOMY_REASON_CODES for item in cleaned):
+            raise ValueError("reason_codes must use the bounded autonomy vocabulary")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "AgentAutonomyPolicyDecision":
+        if self.classification is AgentAutonomyActionClass.AUTO_CONTINUE:
+            try:
+                AgentHarnessControllerAction(self.controller_action)
+            except ValueError as exc:
+                raise ValueError(
+                    "an unknown Controller action cannot receive AUTO_CONTINUE"
+                ) from exc
+        expected = _agent_digest(self.semantic_material())
+        if self.decision_digest and self.decision_digest != expected:
+            raise ValueError("autonomy policy decision digest mismatch")
+        object.__setattr__(self, "decision_digest", expected)
+        expected_id = f"autonomy-policy-decision-{expected.split(':', 1)[1][:32]}"
+        if self.decision_id and self.decision_id != expected_id:
+            raise ValueError("autonomy policy decision ID must derive from its semantic digest")
+        object.__setattr__(self, "decision_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("decision_id", None)
+        payload.pop("decision_digest", None)
         return payload
 
 
@@ -9775,6 +9882,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_decision": AgentHarnessControllerDecision,
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
+    "agent_autonomy_policy_decision": AgentAutonomyPolicyDecision,
     "agent_run_inspection": AgentRunInspection,
     "harness_telemetry_correlation": HarnessTelemetryCorrelationContext,
     "harness_telemetry_health": HarnessTelemetryHealthSnapshot,
