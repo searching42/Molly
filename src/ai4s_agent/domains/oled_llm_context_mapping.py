@@ -432,8 +432,9 @@ def run_oled_llm_context_mapping(
         invocation = provider.complete_json(
             messages=_mapping_messages(request),
             prompt_version=PROMPT_VERSION,
+            response_model=OledLLMPaperMappingResponse,
         )
-    except (LLMProviderError, OSError) as exc:
+    except (LLMProviderError, OSError, TypeError) as exc:
         return _failed_result(
             request,
             status="provider_error",
@@ -442,7 +443,13 @@ def run_oled_llm_context_mapping(
         )
 
     try:
-        response = OledLLMPaperMappingResponse.model_validate(invocation.parsed_output)
+        # The provider's response_model validation is authoritative for the
+        # transport contract.  Re-read the original structured payload when
+        # available so downstream semantic validation can still distinguish
+        # an omitted optional comparison-context field from an explicit null.
+        response = OledLLMPaperMappingResponse.model_validate(
+            _invocation_structured_payload(invocation)
+        )
         _validate_response_binding(request, response)
         schema_candidates = _materialize_schema_candidates(request, response)
         semantic_validation = validate_oled_schema_candidates(schema_candidates)
@@ -853,6 +860,26 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
     ]
+
+
+def _invocation_structured_payload(invocation: LLMInvocationRecord) -> dict[str, Any]:
+    raw_response = invocation.raw_response
+    stub_payload = raw_response.get("response") if isinstance(raw_response, dict) else None
+    if isinstance(stub_payload, dict):
+        return stub_payload
+    choices = raw_response.get("choices") if isinstance(raw_response, dict) else None
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        message = first.get("message") if isinstance(first, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+    return invocation.parsed_output
 
 
 def _failed_result(

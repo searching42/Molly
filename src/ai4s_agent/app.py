@@ -17,6 +17,7 @@ from ai4s_agent.api import register_routes
 from ai4s_agent.local_security import install_local_request_protection
 from ai4s_agent.planner import (
     AtomicTaskRegistry,
+    br2_contextual_mapping_task_registry_v1,
     private_structured_dataset_real_tool_task_registry_v3,
 )
 from ai4s_agent.profiles import route_extension_inspection_enabled, selected_profile
@@ -36,6 +37,8 @@ def create_app(
             scientific_task_registry = (
                 private_structured_dataset_real_tool_task_registry_v3()
             )
+        elif registry_id == "br2-contextual-mapping-v1":
+            scientific_task_registry = br2_contextual_mapping_task_registry_v1()
         elif registry_id:
             raise ValueError("unknown server-owned scientific task registry")
     install_local_request_protection(app)
