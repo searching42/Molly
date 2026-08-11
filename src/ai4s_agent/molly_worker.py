@@ -1508,6 +1508,12 @@ class MollyWorker:
                 str(input_pdf),
                 "-o",
                 str(raw_output),
+                # The configured MinerU/vLLM stack rejects this worker during
+                # hybrid startup with FlashInfer's sm75 error.  Pipeline is
+                # the supported MinerU backend for this profile and still
+                # keeps execution inside the fixed worker subprocess boundary.
+                "--backend",
+                "pipeline",
             ]
             self._run_adapter_command(
                 request,

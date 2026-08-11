@@ -127,6 +127,7 @@ def _successful_mineru_output(
 ) -> None:
     del request, cwd, env, pass_fds
     assert command[1:3] == ["-p", command[2]]
+    assert command[-2:] == ["--backend", "pipeline"]
     output_dir = Path(command[command.index("-o") + 1])
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "paper.md").write_text(
