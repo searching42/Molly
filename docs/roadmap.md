@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance
+> Current focus: M3.5-BR2-RUNTIME — Real MinerU runtime closure
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -143,29 +143,32 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
 
 - [x] **M3.5-AUT-L1 — Bounded auto-continuation runtime**
   - State: `DONE`
-  - Evidence: `I/T/—`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-POLICY`.
   - Target PR: #46.
   - Closed by: PR #46.
-  - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; every continuation recomputes the current PR #45 policy decision; cumulative transition, LLM-call, dispatch, wall-clock, task-graph, and resource boundaries are enforced from durable evidence; pause/tick continuation remains finite; every human, uncertain, stale, or prohibited condition fails closed before an LLM call or effect. This closes implementation and automated-test evidence only; it does not provide representative runtime acceptance (`V`).
+  - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; every continuation recomputes the current PR #45 policy decision; cumulative transition, LLM-call, dispatch, wall-clock, task-graph, and resource boundaries are enforced from durable evidence; pause/tick continuation remains finite; every human, uncertain, stale, or prohibited condition fails closed before an LLM call or effect. Representative runtime, restart, replay, budget, and adversarial evidence is recorded by PR #48; this remains a control-plane claim and does not rerun BR1 scientific work.
+  - Evidence: [Autonomy L1/L2 acceptance manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), and [restart/replay summary](evidence/autonomy-l1-l2-acceptance-v1/restart_replay_summary.json).
 
 - [x] **M3.5-AUT-L2 — Bounded replanning and materiality boundary**
   - State: `DONE`
-  - Evidence: `I/T/—`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-L1`.
   - Target PR: #47.
   - Closed by: PR #47.
-  - Definition of Done: the explicit server-derived failure replan operation accepts only the exact current typed `FAILED` Controller state; the existing Replanner produces a deterministic canonical diff and non-executable materiality projection; no-change revisions remain stopped, while material revisions publish one review-only successor and clear old authority bindings so exact user approval creates fresh Permission, Authorization, StartIntent, and Controller artifacts. Crash/restart/replay and duplicate-request paths reuse the existing Replanner checkpoints and publication locks. This closes implementation and automated-test evidence only; representative L1/L2 runtime acceptance remains at `M3.5-AUT-ACCEPT`.
+  - Definition of Done: the explicit server-derived failure replan operation accepts only the exact current typed `FAILED` Controller state; the existing Replanner produces a deterministic canonical diff and non-executable materiality projection; no-change revisions remain stopped, while material revisions publish one review-only successor and clear old authority bindings so exact user approval creates fresh Permission, Authorization, StartIntent, and Controller artifacts. Crash/restart/replay and duplicate-request paths reuse the existing Replanner checkpoints and publication locks. Representative L2 trigger, materiality, fresh-authority, restart, replay, and handoff evidence is recorded by PR #48.
+  - Evidence: [Autonomy L1/L2 acceptance manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), and [authority-boundary summary](evidence/autonomy-l1-l2-acceptance-v1/authority_boundary_summary.json).
 
-- [ ] **M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance**
+  - State: `DONE`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-L2`.
   - Target PR: #48.
-  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain.
+  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, concurrent-replan, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `d225b6315dd6ab221c73e5d80f80922ccb62e492`, including real conversation-tick budget stop-before-effect checks, a real fresh-L1 handoff tick, wall-clock exhaustion before effect, task-graph/resource fail-closed checks, one separate-Python-process L2 restart/replay path, and one concurrent `/replan` reconciliation path; checked-in evidence is control-plane-only and privacy-safe. The L1 remote adoption case is explicitly a durable receipt crash-window reconciliation, not a process-boundary restart claim.
+  - Closed by: PR #48, [acceptance README](evidence/autonomy-l1-l2-acceptance-v1/README.md), [manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), [restart/replay summary](evidence/autonomy-l1-l2-acceptance-v1/restart_replay_summary.json), and [authority-boundary summary](evidence/autonomy-l1-l2-acceptance-v1/authority_boundary_summary.json).
 
 - [ ] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-ACCEPT`.
   - Target PR: #49.
@@ -238,8 +241,10 @@ and resource/budget digests bind task-graph and resource boundaries. A bounded
 `tick()` may resume an Execution Agent pause or perform one remote refresh/adopt
 path, but Gate approval, remote approval, recovery, cancel, retry, unknown LLM
 outcomes, and material changes remain human/L2 boundaries. Read-only session,
-SSE, and telemetry projections remain non-authoritative. This is `I/T/—` only;
-representative L1/L2 runtime acceptance remains at `M3.5-AUT-ACCEPT`.
+SSE, and telemetry projections remain non-authoritative. PR #48 provides
+representative runtime, restart, replay, budget, and adversarial evidence for
+this implementation, recorded as `I/T/V` in the active queue. This evidence
+does not rerun the scientific BR1 path.
 
 ### M3.5-AUT-L2 implementation closure
 
@@ -262,9 +267,22 @@ outcomes. The existing Replanner remains review-only and publication-only:
 material revisions stop at a fresh-authorization-required pending proposal,
 while no-change failures stay stopped. Existing Controller, Permission,
 Authorization, Executor, worker, and Replanner publication contracts remain the
-only authority paths. This is `I/T/—`; representative adversarial, restart,
-replay, and exactly-once L1/L2 acceptance remains queued at
-`M3.5-AUT-ACCEPT`.
+only authority paths. PR #48 provides representative adversarial, restart,
+replay, exactly-once, and fresh-authority evidence for this boundary, recorded
+as `I/T/V` in the active queue.
+
+### M3.5-AUT-ACCEPT closure
+
+PR #48 closes the bounded autonomy acceptance gate with a finite runner over 16
+stable scenarios. The evidence covers human Gate and remote-approval stops,
+exactly-once remote lifecycle adoption and crash-window reconciliation, invocation and cumulative budgets,
+missing evidence and unknown LLM outcome fail-closed behavior, wall-clock/task-
+graph/resource boundaries, concurrent ticks, read-only zero-effect surfaces,
+the exact-`FAILED` L2 trigger, non-material stop, material successor fresh
+authority, process-boundary Replanner replay, successor reconciliation, and the
+L1→L2→fresh-L1 epoch handoff through a real B-side tick. `GATE-AUT-L1-L2` is closed by the same reviewed
+evidence. This is a control-plane acceptance claim only; PR #48 does not rerun
+BR1, implement BR2, or change the scientific claim boundary.
 
 ### BR1 acceptance closure
 
@@ -524,11 +542,11 @@ The following gates are separate from the active execution queue, but use the sa
   - Evidence: `I/T/V`
   - Completion criterion: one real training remote stage survives control-plane restart using the same Controller/request with no duplicate dispatch; this is not a claim about every task or failure mode.
 
-- [ ] **GATE-AUT-L1-L2 — Bounded autonomy acceptance**
-  - State: `QUEUED`
-  - Evidence: `—/—/—`
+- [x] **GATE-AUT-L1-L2 — Bounded autonomy acceptance**
+  - State: `DONE`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-ACCEPT`.
-  - Completion criterion: L1/L2 action classification, budgets, fail-closed boundaries, materiality handling, adversarial cases, restart, replay, and duplicate-dispatch behavior pass on exact reviewed code.
+  - Completion criterion: L1/L2 action classification, budgets, fail-closed boundaries, materiality handling, adversarial cases, restart, replay, duplicate-dispatch behavior, and fresh-authority handoff pass on exact reviewed code. Closed by PR #48 [acceptance evidence](evidence/autonomy-l1-l2-acceptance-v1/README.md).
 
 - [ ] **GATE-BR2 — PDF–MinerU–LLM real acceptance**
   - State: `QUEUED`

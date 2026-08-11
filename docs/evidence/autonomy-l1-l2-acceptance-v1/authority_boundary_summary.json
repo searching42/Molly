@@ -1,0 +1,17 @@
+{
+  "acceptance_code_head": "d225b6315dd6ab221c73e5d80f80922ccb62e492",
+  "automatic_cancel": false,
+  "automatic_failed_task_retry": false,
+  "automatic_gate_approval": false,
+  "automatic_recovery": false,
+  "automatic_remote_approval": false,
+  "autonomy_does_not_create_authority": true,
+  "duplicate_remote_dispatch_count": 0,
+  "fresh_l1_epoch": true,
+  "fresh_material_successor_authority": true,
+  "material_successor_reused_old_authorization": false,
+  "read_only_surface_effect_count": 0,
+  "read_only_surfaces_non_authoritative": true,
+  "schema_version": "scientific_autonomy_l1_l2_authority_boundary_summary.v1",
+  "unknown_llm_outcome_retry_count": 0
+}
