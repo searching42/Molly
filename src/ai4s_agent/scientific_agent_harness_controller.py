@@ -3985,6 +3985,17 @@ class ScientificAgentHarnessController:
             for task in authorization.run_plan.tasks[:task_limit]
             for artifact_id in task.output_artifacts
         }
+        for remote_slot in execution.task_slots[:task_limit]:
+            if remote_slot.execution_route != "remote_execution_service":
+                continue
+            remote = self._remote_inspection_or_none(execution, remote_slot)
+            publication = remote.get("publication") if remote else None
+            if isinstance(publication, dict):
+                allowed_new_ids.update(
+                    str(item.get("artifact_id") or "")
+                    for item in publication.get("artifacts", [])
+                    if isinstance(item, dict) and item.get("artifact_id")
+                )
         verified_output_paths = {
             output.relative_path
             for receipt in self.control_store.list_harness_controller_action_receipts(
@@ -4188,8 +4199,23 @@ class ScientificAgentHarnessController:
             str(item.get("artifact_id") or "")
             for item in (publication or {}).get("artifacts", [])
         }
+        corpus_has_single_document_alias = bool(
+            task.task_id == "parse_document"
+            and any(
+                item.startswith("parsed_document_") and item[-3:].isdigit()
+                for item in publication_ids
+            )
+        )
         outputs_ok = all(
-            item in registry and item in publication_ids for item in task.output_artifacts
+            item in registry
+            and (
+                item in publication_ids
+                or (
+                    corpus_has_single_document_alias
+                    and item in {"parsed_document", "parsed_tables"}
+                )
+            )
+            for item in task.output_artifacts
         )
         matching = [
             item

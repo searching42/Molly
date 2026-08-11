@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from ai4s_agent.schemas import ParsedDocument
+
 
 _MIB = 1024 * 1024
 _GIB = 1024 * _MIB
@@ -250,12 +252,46 @@ def verify_remote_output_contents(
         raise ValueError("MinerU corpus audit schema is invalid")
     if audit.get("document_count") != expected_count:
         raise ValueError("MinerU corpus audit count does not match publication roster")
+    binding_fields = ("request_id", "request_sha256", "input_manifest_sha256")
+    corpus_binding = {
+        field: audit.get(field)
+        for field in binding_fields
+        if audit.get(field) is not None
+    }
     for index in range(1, expected_count + 1):
+        parsed_document = _json_object(
+            read_bytes(by_id[f"parsed_document_{index:03d}"].relative_path),
+            "MinerU parsed document",
+        )
+        try:
+            parsed = ParsedDocument.model_validate(parsed_document)
+        except ValueError as exc:
+            raise ValueError("MinerU parsed document schema is invalid") from exc
+        if (
+            not parsed.pages
+            or not (parsed.elements or parsed.tables)
+            or not parsed.paper_id.strip()
+            or not parsed.parser_backend.strip()
+            or _unsafe_published_path(parsed.source_path)
+        ):
+            raise ValueError("MinerU parsed document structure is incomplete")
+        markdown = read_bytes(
+            by_id[f"parsed_document_markdown_{index:03d}"].relative_path
+        )
+        if not markdown.strip() or b"\x00" in markdown:
+            raise ValueError("MinerU parsed document Markdown is invalid")
         member_audit = _json_object(
             read_bytes(by_id[f"parser_audit_{index:03d}"].relative_path),
             "MinerU member audit",
         )
-        if member_audit.get("schema_version") != "parser_audit.v1":
+        if (
+            member_audit.get("schema_version") != "parser_audit.v1"
+            or member_audit.get("member_index") != index
+            or any(
+                member_audit.get(field) != value
+                for field, value in corpus_binding.items()
+            )
+        ):
             raise ValueError("MinerU member audit schema is invalid")
 
 
@@ -385,6 +421,13 @@ def _safe_version(value: Any) -> bool:
         and value == value.strip()
         and not any(ord(char) < 32 for char in value)
     )
+
+
+def _unsafe_published_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return True
+    clean = value.strip().replace("\\", "/")
+    return clean.startswith("/") or ".." in clean.split("/")
 
 
 __all__ = ["verify_remote_output_contents", "verify_remote_output_contract"]

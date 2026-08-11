@@ -220,7 +220,10 @@ def test_probe_is_read_only_and_reports_only_verified_adapters(
             raise AssertionError(command)
         return subprocess.CompletedProcess(command, 0, output, b"")
 
-    monkeypatch.setattr("ai4s_agent.molly_worker.shutil.which", lambda _: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(
+        "ai4s_agent.molly_worker.shutil.which",
+        lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None,
+    )
     worker = MollyWorker(settings, run_command=fake_run)
 
     payload = worker.probe()

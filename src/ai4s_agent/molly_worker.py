@@ -578,6 +578,13 @@ class MollyWorker:
             if pytorch_cuda:
                 cuda["pytorch_cuda_version"] = pytorch_cuda
 
+        mineru_executable = shutil.which("mineru")
+        if mineru_executable:
+            capabilities.add("mineru")
+            mineru_version = self._probe_executable_version(mineru_executable)
+            if mineru_version:
+                versions["mineru"] = mineru_version
+
         return {
             "hostname": os.uname().nodename.split(".", 1)[0].lower(),
             "capabilities": sorted(capabilities),
@@ -1428,6 +1435,7 @@ class MollyWorker:
         if profile.profile_id not in {
             "reinvent4-cpu-v1",
             "reinvent4-br1-v2",
+            "mineru-v1",
             "unimol-predict-br1-v1",
             "unimol-train-br1-v2",
             "unimol-train-v1",
@@ -1448,10 +1456,228 @@ class MollyWorker:
         if request.execution_profile_id in {"unimol-train-v1", "unimol-train-br1-v2"}:
             self._execute_unimol(request, inputs)
             return
+        if request.execution_profile_id == "mineru-v1":
+            self._execute_mineru(request, inputs)
+            return
         if request.execution_profile_id == "unimol-predict-br1-v1":
             self._execute_unimol_prediction(request, inputs)
             return
         raise WorkerProtocolError("adapter_unavailable")
+
+    def _execute_mineru(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs,
+    ) -> None:
+        mineru_executable = shutil.which("mineru")
+        if not mineru_executable:
+            raise WorkerProtocolError("mineru_environment_unavailable")
+        self._require_runtime_path(Path(mineru_executable), executable=True)
+        source_artifacts = [
+            artifact
+            for artifact in request.input_manifest.artifacts
+            if artifact.purpose == "source-pdf"
+            and artifact.media_type == "application/pdf"
+        ]
+        if not source_artifacts:
+            raise WorkerProtocolError("mineru_source_pdf_missing")
+
+        from ai4s_agent.adapters.phase3 import _parser_markdown_bytes
+        from ai4s_agent.mineru_output_normalizer import (
+            discover_mineru_output_bundle,
+            normalize_mineru_output_bundle,
+        )
+
+        job_dir = self.store.job_dir(request.request_id)
+        raw_root = _ensure_private_directory(job_dir / "work" / "mineru")
+        mineru_version = self._probe_executable_version(mineru_executable) or "unknown"
+        documents: list[dict[str, Any]] = []
+        for index, source_artifact in enumerate(
+            sorted(source_artifacts, key=lambda item: item.relative_path),
+            start=1,
+        ):
+            input_pdf = inputs.paths.get(source_artifact.relative_path)
+            if input_pdf is None:
+                raise WorkerProtocolError("mineru_source_pdf_missing")
+            raw_output = Path(
+                tempfile.mkdtemp(prefix=f"document-{index:03d}-", dir=raw_root)
+            )
+            command = [
+                str(mineru_executable),
+                "-p",
+                str(input_pdf),
+                "-o",
+                str(raw_output),
+            ]
+            self._run_adapter_command(
+                request,
+                command,
+                cwd=raw_root,
+                env=self._adapter_environment(),
+            )
+            try:
+                bundle = discover_mineru_output_bundle(raw_output)
+                normalized = normalize_mineru_output_bundle(
+                    input_pdf=input_pdf,
+                    bundle=bundle,
+                    parser_backend="mineru_worker_cli",
+                )
+            except (OSError, ValueError) as exc:
+                raise WorkerProtocolError("mineru_output_invalid") from exc
+
+            metadata = dict(normalized.parsed_document.metadata)
+            for key in (
+                "mineru_output_dir",
+                "mineru_markdown_path",
+                "mineru_content_list_json",
+                "mineru_content_list_v2_json",
+                "mineru_middle_json",
+            ):
+                metadata.pop(key, None)
+            metadata["mineru_version"] = (
+                mineru_version
+                if mineru_version != "unknown"
+                else str(metadata.get("mineru_version") or "unknown")
+            )
+            parsed_document = normalized.parsed_document.model_copy(
+                update={
+                    "source_path": source_artifact.relative_path,
+                    "metadata": metadata,
+                }
+            )
+            document_root = f"parsed_corpus/documents/{index:03d}"
+            parsed_path = self.store.output_path(
+                request.request_id,
+                f"{document_root}/parsed_document.json",
+                create_parents=True,
+            )
+            markdown_path = self.store.output_path(
+                request.request_id,
+                f"{document_root}/parsed_document.md",
+                create_parents=True,
+            )
+            audit_path = self.store.output_path(
+                request.request_id,
+                f"{document_root}/parser_audit.json",
+                create_parents=True,
+            )
+            _write_private_json(
+                parsed_path,
+                parsed_document.model_dump(mode="json"),
+            )
+            markdown_payload = (
+                Path(bundle.markdown_path).read_bytes()
+                if bundle.markdown_path and Path(bundle.markdown_path).is_file()
+                else _parser_markdown_bytes(parsed_document)
+            )
+            if not markdown_payload.strip():
+                raise WorkerProtocolError("mineru_output_invalid")
+            _write_private_bytes(markdown_path, markdown_payload)
+            source_sha256 = str(parsed_document.metadata.get("source_hash") or "")
+            _write_private_json(
+                audit_path,
+                {
+                    "schema_version": "parser_audit.v1",
+                    "request_id": request.request_id,
+                    "request_sha256": request.request_sha256,
+                    "input_manifest_sha256": request.input_manifest.manifest_sha256,
+                    "member_index": index,
+                    "source": {
+                        "relative_path": source_artifact.relative_path,
+                        "media_type": source_artifact.media_type,
+                        "sha256": source_sha256,
+                    },
+                    "parser_backend": parsed_document.parser_backend,
+                    "mineru_version": mineru_version,
+                    "warnings": list(normalized.warnings),
+                    "status": "success",
+                },
+            )
+            documents.append(
+                {
+                    "member_index": index,
+                    "source": {
+                        "relative_path": source_artifact.relative_path,
+                        "media_type": source_artifact.media_type,
+                        "sha256": source_sha256,
+                    },
+                    "outputs": {
+                        "parsed_document": self._output_descriptor(
+                            artifact_id=f"parsed_document_{index:03d}",
+                            relative_path=f"{document_root}/parsed_document.json",
+                            path=parsed_path,
+                        ),
+                        "parsed_document_markdown": self._output_descriptor(
+                            artifact_id=f"parsed_document_markdown_{index:03d}",
+                            relative_path=f"{document_root}/parsed_document.md",
+                            path=markdown_path,
+                        ),
+                        "parser_audit": self._output_descriptor(
+                            artifact_id=f"parser_audit_{index:03d}",
+                            relative_path=f"{document_root}/parser_audit.json",
+                            path=audit_path,
+                        ),
+                    },
+                }
+            )
+
+        corpus_audit_path = self.store.output_path(
+            request.request_id,
+            "parsed_corpus/parser_audit.json",
+            create_parents=True,
+        )
+        corpus_audit = {
+            "schema_version": "parser_corpus_audit.v1",
+            "request_id": request.request_id,
+            "request_sha256": request.request_sha256,
+            "input_manifest_sha256": request.input_manifest.manifest_sha256,
+            "parser_profile": "mineru_worker_cli",
+            "mineru_version": mineru_version,
+            "document_count": len(documents),
+            "documents": documents,
+            "created_at": now_iso(),
+        }
+        _write_private_json(corpus_audit_path, corpus_audit)
+        manifest = {
+            "schema_version": "literature_parse_corpus_result.v1",
+            "request_id": request.request_id,
+            "request_sha256": request.request_sha256,
+            "input_manifest_sha256": request.input_manifest.manifest_sha256,
+            "parser_profile": "mineru_worker_cli",
+            "document_count": len(documents),
+            "documents": documents,
+            "corpus_audit": self._output_descriptor(
+                artifact_id="parser_audit",
+                relative_path="parsed_corpus/parser_audit.json",
+                path=corpus_audit_path,
+            ),
+            "created_at": now_iso(),
+        }
+        manifest_path = self.store.output_path(
+            request.request_id,
+            "parsed_corpus/manifest.json",
+            create_parents=True,
+        )
+        _write_private_json(manifest_path, manifest)
+
+    @staticmethod
+    def _output_descriptor(
+        *,
+        artifact_id: str,
+        relative_path: str,
+        path: Path,
+    ) -> dict[str, Any]:
+        descriptor = _open_regular_no_follow(path)
+        try:
+            identity, sha256 = _descriptor_digest(descriptor)
+        finally:
+            os.close(descriptor)
+        return {
+            "artifact_id": artifact_id,
+            "relative_path": relative_path,
+            "size_bytes": identity.size,
+            "sha256": sha256.removeprefix("sha256:"),
+        }
 
     def _execute_reinvent4(
         self,
@@ -1904,6 +2130,42 @@ class MollyWorker:
             ),
         }
         roster = roster_by_contract.get(request.output_contract)
+        if request.output_contract == "parsed-corpus-output-v1":
+            document_count = sum(
+                1
+                for artifact in request.input_manifest.artifacts
+                if artifact.purpose == "source-pdf"
+                and artifact.media_type == "application/pdf"
+            )
+            roster = (
+                (
+                    "parsed_corpus_manifest",
+                    "parsed_corpus/manifest.json",
+                    "application/json",
+                ),
+                ("parser_audit", "parsed_corpus/parser_audit.json", "application/json"),
+                *tuple(
+                    item
+                    for index in range(1, document_count + 1)
+                    for item in (
+                        (
+                            f"parsed_document_{index:03d}",
+                            f"parsed_corpus/documents/{index:03d}/parsed_document.json",
+                            "application/json",
+                        ),
+                        (
+                            f"parsed_document_markdown_{index:03d}",
+                            f"parsed_corpus/documents/{index:03d}/parsed_document.md",
+                            "text/markdown",
+                        ),
+                        (
+                            f"parser_audit_{index:03d}",
+                            f"parsed_corpus/documents/{index:03d}/parser_audit.json",
+                            "application/json",
+                        ),
+                    )
+                ),
+            )
         if roster is None:
             raise WorkerProtocolError("output_contract_unavailable")
         artifacts: list[RemoteOutputArtifact] = []
@@ -1920,8 +2182,13 @@ class MollyWorker:
                 } and media_type == "text/csv":
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     verification_payloads[relative_path] = os.read(descriptor, 4096)
-                elif media_type in {"application/json", "application/yaml"}:
-                    if identity.size > 16 * 1024 * 1024:
+                elif media_type in {"application/json", "application/yaml", "text/markdown"}:
+                    max_verification_bytes = (
+                        512 * 1024 * 1024
+                        if request.output_contract == "parsed-corpus-output-v1"
+                        else 16 * 1024 * 1024
+                    )
+                    if identity.size > max_verification_bytes:
                         raise WorkerProtocolError("output_content_invalid")
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     payload = b""
@@ -2300,6 +2567,30 @@ class MollyWorker:
         except UnicodeDecodeError:
             return ""
         return version if _SAFE_VERSION.fullmatch(version) else ""
+
+    def _probe_executable_version(self, executable: str) -> str:
+        try:
+            completed = self.run_command(
+                [str(executable), "--version"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        output = bytes(completed.stdout or b"") + bytes(completed.stderr or b"")
+        if completed.returncode != 0 or not output or len(output) > _MAX_PROBE_OUTPUT_BYTES:
+            return ""
+        try:
+            text = output.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return ""
+        for candidate in re.findall(r"\b\d+(?:\.\d+){1,4}(?:[A-Za-z0-9._+:-]*)?\b", text):
+            if _SAFE_VERSION.fullmatch(candidate):
+                return candidate
+        return ""
 
     def _probe_unimol_cuda(self) -> str:
         python = self.settings.unimol_python
