@@ -128,6 +128,8 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert a03["title"] == "Remote adoption crash-window exactly-once reconciliation"
     assert a03["restart_performed"] is False
     assert a03["restart_scope"] == "durable-controller-receipt-crash-window"
+    assert a03["remote_dispatch_count_before"] == 1
+    assert a03["remote_dispatch_count_after"] == 1
     a15 = next(item for item in scenarios if item["scenario_id"] == "AUT-A15")
     assert a15["concurrent_replan"] is True
     assert a15["concurrent_provider_calls"] == 1
@@ -143,6 +145,22 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert a06["provider_call_count"] == 0
     assert a06["execution_agent_checkpoint_count"] == 0
     assert a06["next_provider_call_blocked"] is True
+    a09 = next(item for item in scenarios if item["scenario_id"] == "AUT-A09")
+    assert a09["runtime_entrypoint"] == "ScientificAgentConversationSessionService.tick"
+    assert a09["wall_clock_limit_seconds"] == 86_400
+    assert a09["wall_clock_elapsed_seconds"] >= 86_400
+    assert a09["clock_boundary_effect"] == "blocked_before_effect"
+    assert "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED" in a09["observed_reason_codes"]
+    assert "AUTONOMY_L1_EVIDENCE_UNAVAILABLE" in a09["observed_reason_codes"]
+    assert a09["task_graph_expansion_attempted"] is True
+    assert a09["task_graph_mutation"] is False
+    assert a09["task_graph_boundary_effect"] == "fail_closed_before_effect"
+    assert a09["resource_expansion"] is True
+    assert a09["resource_binding_changed"] is True
+    assert a09["resource_evidence_fail_closed"] is True
+    assert a09["resource_boundary_effect"] == "fail_closed_before_effect"
+    assert a09["controller_effect_call_count"] == 0
+    assert a09["execution_agent_proposal_call_count"] == 0
     a16 = next(item for item in scenarios if item["scenario_id"] == "AUT-A16")
     assert a16["fresh_l1_runtime_continuation"] is True
     assert a16["fresh_l1_epoch_scope"] == "real_tick_new_controller_execution_id"

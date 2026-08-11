@@ -543,6 +543,8 @@ def test_adopt_effect_without_persisted_receipt_recovers_without_second_adoption
 ) -> None:
     ctx = _remote_first_workspace(tmp_path, second_remote=False)
     _approve_and_dispatch_first_remote(ctx, "adopt-crash")
+    dispatches_before_adoption = ctx.transport.dispatches
+    assert dispatches_before_adoption == 1
     ctx.transport.status = "SUCCEEDED"
     _advance(ctx, "adopt-crash-refresh-1")
     _crash_receipt_publish(
@@ -566,6 +568,7 @@ def test_adopt_effect_without_persisted_receipt_recovers_without_second_adoption
         if item.action_kind == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS
     ]
     assert len(adopt_receipts) == 1
+    assert ctx.transport.dispatches == dispatches_before_adoption == 1
     registry = ctx.storage.read_artifact_registry("project-1", "run-1")
     assert "reinvent4_candidates" in registry
 

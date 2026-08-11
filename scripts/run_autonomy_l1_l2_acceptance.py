@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -71,21 +72,31 @@ def _invoke_test(
     documented synthetic external/fault boundaries.
     """
 
-    del workspace, needs_monkeypatch
+    workspace.mkdir(parents=True, exist_ok=True)
     node_id = f"{module_name.replace('.', '/')}.py::{function_name}"
+    observation_path = workspace / "acceptance-observation.json"
+    environment = os.environ.copy()
+    environment["MOLLY_ACCEPTANCE_OBSERVATION_PATH"] = str(observation_path)
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", node_id],
         cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
     if result.returncode != 0:
         raise AssertionError("reviewed runtime test adapter failed")
-    return {
+    details: dict[str, Any] = {
         "test_adapter": node_id,
         "test_adapter_exit_code": result.returncode,
     }
+    if observation_path.exists():
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        if not isinstance(observation, dict):
+            raise AssertionError("acceptance observation must be an object")
+        details.update(observation)
+    return details
 
 
 def _scenario_a01(workspace: Path) -> dict[str, Any]:
@@ -243,31 +254,53 @@ def _scenario_a08(workspace: Path) -> dict[str, Any]:
 
 
 def _scenario_a09(workspace: Path) -> dict[str, Any]:
-    result = _invoke_test(
-        "tests.test_scientific_agent_autonomy_l1",
-        "test_invalid_clock_or_dispatch_evidence_fails_closed",
-        workspace,
+    wall_clock = _invoke_test(
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_acceptance_wall_clock_budget_stops_before_effect",
+        workspace / "wall-clock",
     )
     graph_binding = _invoke_test(
-        "tests.test_scientific_agent_autonomy_l1",
-        "test_task_graph_and_execution_digest_are_exactly_bound",
-        workspace / "graph-binding",
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_acceptance_task_graph_expansion_fails_closed_before_effect",
+        workspace / "task-graph",
     )
+    resource_binding = _invoke_test(
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_acceptance_resource_binding_expansion_fails_closed_before_effect",
+        workspace / "resource",
+    )
+    legacy_evidence = _invoke_test(
+        "tests.test_scientific_agent_autonomy_l1",
+        "test_invalid_clock_or_dispatch_evidence_fails_closed",
+        workspace / "evidence-validation",
+    )
+    observed_reason_codes: list[str] = []
+    for observation in (wall_clock, graph_binding, resource_binding):
+        for reason_code in observation.get("observed_reason_codes", []):
+            if reason_code not in observed_reason_codes:
+                observed_reason_codes.append(reason_code)
     return {
-        **result,
+        "test_adapter": wall_clock["test_adapter"],
         "test_adapter_2": graph_binding["test_adapter"],
-        "observed_reason_codes": [
-            "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED",
-            "AUTONOMY_L1_TASK_GRAPH_BOUNDARY",
-            "AUTONOMY_L1_RESOURCE_BOUNDARY",
-        ],
-        "wall_clock_limit_seconds": AUTONOMY_L1_MAX_WALL_CLOCK_SECONDS,
-        "clock_injected": True,
-        "clock_boundary_effect": "blocked_before_effect",
-        "task_graph_mutation": False,
-        "resource_expansion": False,
-        "task_graph_identity_verified": True,
-        "resource_evidence_fail_closed": True,
+        "test_adapter_3": resource_binding["test_adapter"],
+        "test_adapter_4": legacy_evidence["test_adapter"],
+        "observed_reason_codes": observed_reason_codes,
+        "wall_clock_limit_seconds": wall_clock.get("wall_clock_limit_seconds"),
+        "clock_injected": wall_clock.get("clock_injected"),
+        "clock_boundary_effect": wall_clock.get("clock_boundary_effect"),
+        "wall_clock_elapsed_seconds": wall_clock.get("wall_clock_elapsed_seconds"),
+        "task_graph_mutation": graph_binding.get("task_graph_mutation"),
+        "task_graph_boundary_effect": graph_binding.get("boundary_effect"),
+        "task_graph_identity_verified": graph_binding.get("task_graph_identity_verified"),
+        "resource_expansion": resource_binding.get("resource_expansion"),
+        "resource_boundary_effect": resource_binding.get("boundary_effect"),
+        "resource_evidence_fail_closed": resource_binding.get("resource_evidence_fail_closed"),
+        "controller_effect_call_count": wall_clock.get("controller_effect_call_count", 0)
+        + graph_binding.get("controller_effect_call_count", 0)
+        + resource_binding.get("controller_effect_call_count", 0),
+        "execution_agent_proposal_call_count": wall_clock.get("execution_agent_proposal_call_count", 0)
+        + graph_binding.get("execution_agent_proposal_call_count", 0)
+        + resource_binding.get("execution_agent_proposal_call_count", 0),
         "authority_preserved": True,
     }
 
@@ -708,7 +741,7 @@ def _assert_code_head(expected: str) -> str:
 
 def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "test_adapter", "test_adapter_2", "observed_reason_codes", "provider_call_count", "provider_calls",
+        "test_adapter", "test_adapter_2", "test_adapter_3", "test_adapter_4", "observed_reason_codes", "provider_call_count", "provider_calls",
         "remote_dispatch_count", "remote_dispatch_count_before", "remote_dispatch_count_after",
         "same_controller", "same_remote_request", "replay_verified", "restart_performed",
         "restart_scope", "authority_preserved", "invocation_steps_before", "transitions_before",
@@ -718,7 +751,7 @@ def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str,
         "execution_agent_checkpoint_count", "llm_evidence_calls_at_limit",
         "next_effect_blocked", "next_provider_call_blocked", "usage_rebuilt_from", "anchor_initialized", "request_root_removed",
         "llm_calls_not_reset_to_zero", "controller_advanced", "wall_clock_limit_seconds",
-        "clock_injected", "clock_boundary_effect", "task_graph_mutation", "resource_expansion",
+        "clock_injected", "clock_boundary_effect", "wall_clock_elapsed_seconds", "task_graph_mutation", "task_graph_expansion_attempted", "task_graph_boundary_effect", "resource_expansion", "resource_binding_changed", "resource_boundary_effect",
         "task_graph_identity_verified", "resource_evidence_fail_closed",
         "concurrency_scope", "effective_controller_transitions", "duplicate_remote_dispatch_count",
         "budget_bypass", "read_only_surface_effect_count", "events_may_drive_execution",

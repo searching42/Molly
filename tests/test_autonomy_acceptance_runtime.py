@@ -5,6 +5,10 @@ from __future__ import annotations
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timedelta
+import json
+import os
+from pathlib import Path
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
@@ -17,6 +21,8 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerAction,
     AgentHarnessControllerActionBoundaryClass,
     AgentHarnessControllerActionReceipt,
+    AgentHarnessControllerExecution,
+    AgentHarnessControllerInspection,
     AgentHarnessControllerStatus,
     AgentToolCallApplicationOutcome,
     _agent_digest,
@@ -25,6 +31,8 @@ from ai4s_agent.execution_agent_store import ExecutionAgentStore
 from ai4s_agent.scientific_agent_autonomy_l1 import (
     AUTONOMY_L1_MAX_LLM_CALLS,
     AUTONOMY_L1_MAX_TRANSITIONS,
+    AUTONOMY_L1_MAX_WALL_CLOCK_SECONDS,
+    resource_binding_digest,
 )
 from tests.test_scientific_agent_conversation_session import (
     _auto_controller_result,
@@ -77,6 +85,23 @@ class _CountingRevisionProvider(StubLLMProvider):
         with self._calls_lock:
             self.calls += 1
         return super().complete_json(**kwargs)
+
+
+def _write_acceptance_observation(payload: dict[str, object]) -> None:
+    """Publish only bounded, privacy-safe observations to the runner adapter."""
+
+    target = os.environ.get("MOLLY_ACCEPTANCE_OBSERVATION_PATH")
+    if not target:
+        return
+    Path(target).write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _offset_timestamp(value: str, seconds: int) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (parsed + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
 
 def test_non_failed_l2_trigger_matrix_rejects_before_provider_or_successor(
@@ -338,6 +363,240 @@ def test_l1_acceptance_rebuilds_64_llm_checkpoints_and_stops_before_provider(
     ) == AUTONOMY_L1_MAX_LLM_CALLS
     assert provider.calls == 0
     assert effects == {"advance": 0, "create_proposal": 0}
+
+
+def test_l1_acceptance_wall_clock_budget_stops_before_effect(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, _client, service, state, current = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    current = _auto_controller_result(current)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    service.clock = lambda: _offset_timestamp(
+        current.execution.created_at,
+        AUTONOMY_L1_MAX_WALL_CLOCK_SECONDS,
+    )
+    effects = {"advance": 0, "create_proposal": 0}
+
+    def forbidden_advance(*_args, **_kwargs):
+        effects["advance"] += 1
+        raise AssertionError("wall-clock exhaustion reached Controller.advance")
+
+    def forbidden_create_proposal(*_args, **_kwargs):
+        effects["create_proposal"] += 1
+        raise AssertionError("wall-clock exhaustion reached the Execution Agent")
+
+    monkeypatch.setattr(service.controller, "get", lambda **_kwargs: current)
+    monkeypatch.setattr(service.controller, "advance", forbidden_advance)
+    monkeypatch.setattr(service.execution_agent, "create_proposal", forbidden_create_proposal)
+    service._transition(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        status="running",
+        reason_code="EXECUTION_AGENT_PAUSED",
+        updates={
+            "controller_status": current.inspection.status.value,
+            "current_task_id": current.inspection.current_task_id,
+        },
+        event_type="execution.paused",
+    )
+    provider = _BudgetGuardProvider()
+    result = service.tick(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        run_id=state["run_id"],
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "wall-clock-budget"}),
+    )
+    usage = result.session["autonomy_budget_usage"]
+    assert result.session["status"] == "running"
+    assert result.session["reason_code"] == "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED"
+    assert usage["wall_clock_elapsed_seconds"] >= AUTONOMY_L1_MAX_WALL_CLOCK_SECONDS
+    assert effects == {"advance": 0, "create_proposal": 0}
+    assert provider.calls == 0
+    _write_acceptance_observation(
+        {
+            "observed_reason_codes": [result.session["reason_code"]],
+            "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
+            "wall_clock_limit_seconds": AUTONOMY_L1_MAX_WALL_CLOCK_SECONDS,
+            "wall_clock_elapsed_seconds": usage["wall_clock_elapsed_seconds"],
+            "clock_injected": True,
+            "clock_boundary_effect": "blocked_before_effect",
+            "controller_effect_call_count": effects["advance"],
+            "execution_agent_proposal_call_count": effects["create_proposal"],
+            "provider_call_count": provider.calls,
+            "next_effect_blocked": True,
+            "authority_preserved": True,
+        }
+    )
+
+
+def test_l1_acceptance_task_graph_expansion_fails_closed_before_effect(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, _client, service, state, current = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    current = _auto_controller_result(current)
+    invalid_payload = current.inspection.model_dump(mode="json")
+    invalid_payload.update(
+        {
+            "current_task_index": len(current.execution.ordered_task_ids),
+            "current_task_id": "task-outside-authorized-roster",
+            "current_slot_id": "slot-outside-authorized-roster",
+            "inspection_digest": "",
+        }
+    )
+    expanded_inspection = AgentHarnessControllerInspection(**invalid_payload)
+    adversarial = replace(current, inspection=expanded_inspection)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    effects = {"advance": 0, "create_proposal": 0}
+
+    def forbidden_advance(*_args, **_kwargs):
+        effects["advance"] += 1
+        raise AssertionError("task-graph expansion reached Controller.advance")
+
+    def forbidden_create_proposal(*_args, **_kwargs):
+        effects["create_proposal"] += 1
+        raise AssertionError("task-graph expansion reached the Execution Agent")
+
+    monkeypatch.setattr(service.controller, "get", lambda **_kwargs: adversarial)
+    monkeypatch.setattr(service.controller, "advance", forbidden_advance)
+    monkeypatch.setattr(service.execution_agent, "create_proposal", forbidden_create_proposal)
+    service._transition(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        status="running",
+        reason_code="EXECUTION_AGENT_PAUSED",
+        updates={
+            "controller_status": current.inspection.status.value,
+            "current_task_id": current.inspection.current_task_id,
+        },
+        event_type="execution.paused",
+    )
+    provider = _BudgetGuardProvider()
+    result = service.tick(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        run_id=state["run_id"],
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "task-graph-boundary"}),
+    )
+    assert result.session["status"] == "unknown"
+    assert result.session["reason_code"] == "AUTONOMY_L1_EVIDENCE_UNAVAILABLE"
+    assert effects == {"advance": 0, "create_proposal": 0}
+    assert provider.calls == 0
+    _write_acceptance_observation(
+        {
+            "observed_reason_codes": [result.session["reason_code"]],
+            "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
+            "task_graph_expansion_attempted": True,
+            "task_graph_mutation": False,
+            "task_graph_identity_verified": False,
+            "boundary_effect": "fail_closed_before_effect",
+            "controller_effect_call_count": effects["advance"],
+            "execution_agent_proposal_call_count": effects["create_proposal"],
+            "provider_call_count": provider.calls,
+            "next_effect_blocked": True,
+            "authority_preserved": True,
+        }
+    )
+
+
+def test_l1_acceptance_resource_binding_expansion_fails_closed_before_effect(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, _client, service, state, current = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    current = _auto_controller_result(current)
+    expanded_payload = current.execution.model_dump(mode="json")
+    expanded_payload.update(
+        {
+            "controller_execution_id": "",
+            "execution_digest": "",
+            "budget_binding_digest": _agent_digest({"resource": "expanded-budget"}),
+            "aggregate_budget_digest": _agent_digest({"resource": "expanded-aggregate"}),
+        }
+    )
+    expanded_execution = AgentHarnessControllerExecution(**expanded_payload)
+    assert resource_binding_digest(expanded_execution) != resource_binding_digest(
+        current.execution
+    )
+    adversarial = replace(current, execution=expanded_execution)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    effects = {"advance": 0, "create_proposal": 0}
+
+    def forbidden_advance(*_args, **_kwargs):
+        effects["advance"] += 1
+        raise AssertionError("resource expansion reached Controller.advance")
+
+    def forbidden_create_proposal(*_args, **_kwargs):
+        effects["create_proposal"] += 1
+        raise AssertionError("resource expansion reached the Execution Agent")
+
+    monkeypatch.setattr(service.controller, "get", lambda **_kwargs: adversarial)
+    monkeypatch.setattr(service.controller, "advance", forbidden_advance)
+    monkeypatch.setattr(service.execution_agent, "create_proposal", forbidden_create_proposal)
+    service._transition(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        status="running",
+        reason_code="EXECUTION_AGENT_PAUSED",
+        updates={
+            "controller_execution_id": expanded_execution.controller_execution_id,
+            "controller_execution_digest": expanded_execution.execution_digest,
+            "controller_status": current.inspection.status.value,
+            "current_task_id": current.inspection.current_task_id,
+        },
+        event_type="execution.paused",
+    )
+    provider = _BudgetGuardProvider()
+    result = service.tick(
+        project_id=current.execution.project_id,
+        conversation_id="conversation-one",
+        run_id=state["run_id"],
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "resource-boundary"}),
+    )
+    assert result.session["status"] == "unknown"
+    assert result.session["reason_code"] == "AUTONOMY_L1_EVIDENCE_UNAVAILABLE"
+    assert effects == {"advance": 0, "create_proposal": 0}
+    assert provider.calls == 0
+    _write_acceptance_observation(
+        {
+            "observed_reason_codes": [result.session["reason_code"]],
+            "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
+            "resource_expansion": True,
+            "resource_binding_changed": True,
+            "resource_evidence_fail_closed": True,
+            "boundary_effect": "fail_closed_before_effect",
+            "controller_effect_call_count": effects["advance"],
+            "execution_agent_proposal_call_count": effects["create_proposal"],
+            "provider_call_count": provider.calls,
+            "next_effect_blocked": True,
+            "authority_preserved": True,
+        }
+    )
 
 
 def test_l1_l2_handoff_starts_fresh_l1_budget_epoch(
