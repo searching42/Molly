@@ -99,7 +99,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
     assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
     assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
-    assert "Current focus: M3.5-BR2-RUNTIME — Real MinerU runtime closure" in roadmap
+    assert "Current focus: M3.5-BR2-MAPPING — Contextual mapping and evidence binding" in roadmap
     assert "### M3.5-AUT-POLICY contract closure" in roadmap
     assert "### M3.5-AUT-L2 implementation closure" in roadmap
     assert "A new Controller action cannot inherit autonomous eligibility" in roadmap
@@ -149,8 +149,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-L1", "DONE"),
         ("M3.5-AUT-L2", "DONE"),
         ("M3.5-AUT-ACCEPT", "DONE"),
-        ("M3.5-BR2-RUNTIME", "READY"),
-        ("M3.5-BR2-MAPPING", "QUEUED"),
+        ("M3.5-BR2-RUNTIME", "DONE"),
+        ("M3.5-BR2-MAPPING", "READY"),
         ("M3.5-BR2-ACCEPT", "QUEUED"),
         ("M3.5-UI", "DEFERRED"),
         ("M3.5-V1-ACCEPT", "DEFERRED"),
