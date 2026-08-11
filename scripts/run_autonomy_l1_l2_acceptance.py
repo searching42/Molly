@@ -285,6 +285,7 @@ def _scenario_a09(workspace: Path) -> dict[str, Any]:
         "test_adapter_3": resource_binding["test_adapter"],
         "test_adapter_4": legacy_evidence["test_adapter"],
         "observed_reason_codes": observed_reason_codes,
+        "runtime_entrypoint": wall_clock.get("runtime_entrypoint"),
         "wall_clock_limit_seconds": wall_clock.get("wall_clock_limit_seconds"),
         "clock_injected": wall_clock.get("clock_injected"),
         "clock_boundary_effect": wall_clock.get("clock_boundary_effect"),
