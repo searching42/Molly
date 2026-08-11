@@ -1,0 +1,51 @@
+{
+  "real_parsed_document": true,
+  "deterministic_extraction": "success",
+  "semantic_packets_created": true,
+  "real_llm_called": true,
+  "structured_llm_response_valid": true,
+  "semantic_candidate_validation": "pass",
+  "evidence_referential_integrity": "pass",
+  "layered_schema_compilation_ran": true,
+  "candidate_raw_dataset_created": true,
+  "candidate_raw_dataset_non_empty": true,
+  "all_promoted_rows_have_evidence": true,
+  "mapping_status": "ready_for_human_review",
+  "candidate_counts": {
+    "mineru_candidates": 32,
+    "semantic_packets": 32,
+    "deterministic_schema_candidates": 31,
+    "llm_schema_candidates": 96,
+    "final_review_records": 31,
+    "property_observations": 96
+  },
+  "review_disposition": {
+    "compiled": 0,
+    "partial": 31,
+    "needs_review": 0,
+    "rejected": 0,
+    "unresolved": 16,
+    "source_check": 0,
+    "ontology_review": 1,
+    "device_only_excluded": 15
+  },
+  "scientific_context": {
+    "material_identity_preserved": true,
+    "causal_layer_preserved": true,
+    "measurement_condition_preserved": true,
+    "interaction_context_preserved": true,
+    "evidence_references_preserved": true,
+    "device_only_rows_excluded_from_dataset_scope": true
+  },
+  "boundary": {
+    "confirmed_dataset_created": false,
+    "human_confirmation_performed": false,
+    "confirmation_receipt_created": false,
+    "gate_approved": false,
+    "ontology_mutated": false,
+    "training_executed": false,
+    "generation_executed": false,
+    "prediction_executed": false,
+    "ranking_executed": false
+  }
+}

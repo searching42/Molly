@@ -1,0 +1,67 @@
+{
+  "acceptance_version": "br2-contextual-mapping-v1",
+  "overall_status": "PASS",
+  "base_sha": "bd51ba4585ccf8e9beebde006d0b21ffcafc96e5",
+  "acceptance_code_head": "2e5ba55cf1c658d07c50b527c79435247fc13d57",
+  "input": {
+    "paper_logical_identity": "oled-paper-018",
+    "parsed_document_logical_identity": "parsed_document",
+    "parsed_document_sha256": "sha256:8927d670f97cf16a417476da2a8200b9e71ebca8046b0d68eb1fb1a33737632f"
+  },
+  "deterministic": {
+    "extraction_status": "success",
+    "mineru_candidate_count": 32,
+    "semantic_packet_count": 32,
+    "deterministic_schema_candidate_count": 31,
+    "finding_count": 101
+  },
+  "llm": {
+    "provider_class": "openai_compatible",
+    "model": "deepseek-v4-flash",
+    "prompt_version": "oled.contextual_semantic_mapping.v5",
+    "real_provider_call": true,
+    "request_digest": "6c50c73dbc7585fab00debb8f732109cc8b0d96f7598b369bddf2a08b99003a9",
+    "response_id": "b13a2a85-55c6-49de-9590-8b912d1d7991",
+    "response_sha256": "sha256:ed46c2b1beb3fee18dad7eadd8f0430b076ee900a3e5278231dea90e3e49ef2a",
+    "structured_response_valid": true,
+    "semantic_validation": "pass"
+  },
+  "mapping": {
+    "status": "ready_for_human_review",
+    "llm_schema_candidate_count": 96,
+    "final_review_candidate_record_count": 31,
+    "property_observation_count": 96,
+    "compiled_count": 0,
+    "partial_count": 31,
+    "needs_review_count": 0,
+    "rejected_count": 0,
+    "unresolved_count": 16,
+    "source_check_count": 0,
+    "llm_ontology_extension_proposal_count": 5,
+    "dataset_ontology_review_proposal_count": 1,
+    "layered_schema_compilation_ran": true,
+    "evidence_referential_integrity": "pass",
+    "evidence_coverage": {
+      "property_observations": 96,
+      "property_observations_with_evidence": 96,
+      "records_with_evidence": 31,
+      "all_promoted_rows_have_evidence": true
+    },
+    "device_only_excluded_count": 15
+  },
+  "review_only": {
+    "confirmed": false,
+    "gold_records_created": false,
+    "human_confirmation_performed": false,
+    "confirmation_receipt_created": false,
+    "ontology_mutated": false,
+    "automatic_candidate_merge": false
+  },
+  "boundary": {
+    "gate_approved": false,
+    "training_started": false,
+    "generation_started": false,
+    "prediction_started": false,
+    "ranking_started": false
+  }
+}
