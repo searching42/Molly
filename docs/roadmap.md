@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-BR2-RUNTIME — Real MinerU runtime closure
+> Current focus: M3.5-BR2-MAPPING — Contextual mapping and evidence binding
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -167,15 +167,17 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, concurrent-replan, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `d225b6315dd6ab221c73e5d80f80922ccb62e492`, including real conversation-tick budget stop-before-effect checks, a real fresh-L1 handoff tick, wall-clock exhaustion before effect, task-graph/resource fail-closed checks, one separate-Python-process L2 restart/replay path, and one concurrent `/replan` reconciliation path; checked-in evidence is control-plane-only and privacy-safe. The L1 remote adoption case is explicitly a durable receipt crash-window reconciliation, not a process-boundary restart claim.
   - Closed by: PR #48, [acceptance README](evidence/autonomy-l1-l2-acceptance-v1/README.md), [manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), [restart/replay summary](evidence/autonomy-l1-l2-acceptance-v1/restart_replay_summary.json), and [authority-boundary summary](evidence/autonomy-l1-l2-acceptance-v1/authority_boundary_summary.json).
 
-- [ ] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**
+  - State: `DONE`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-ACCEPT`.
   - Target PR: #49.
+  - Closed by: PR #49.
   - Definition of Done: at least one real OLED PDF completes the real MinerU and parsed-document runtime stages without extending the BR2 terminal boundary.
+  - Evidence: [acceptance README](evidence/br2-real-mineru-runtime-v1/README.md), [acceptance manifest](evidence/br2-real-mineru-runtime-v1/acceptance_manifest.json), and [runtime summary](evidence/br2-real-mineru-runtime-v1/runtime_summary.json).
 
 - [ ] **M3.5-BR2-MAPPING — Contextual mapping and evidence binding**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-BR2-RUNTIME`.
   - Target PR: #50.

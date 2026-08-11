@@ -1,0 +1,72 @@
+{
+  "acceptance_version": "br2-real-mineru-runtime-v1",
+  "overall_status": "PASS",
+  "base_sha": "2886aac2e2f8bd2896856bd40f06d7124a2ea5dd",
+  "code_head": "47ce2aa8623d07d6002adcf2b5576f0b9abee949",
+  "acceptance_code_head": "47ce2aa8623d07d6002adcf2b5576f0b9abee949",
+  "input": {
+    "logical_identity": "oled-paper-018",
+    "source_artifact_id": "pdf_corpus",
+    "media_type": "application/pdf",
+    "sha256": "sha256:b0005bbdb14c572404bb441aa819c96c56a73a9c408a785f31b01bb4d3e75e22",
+    "page_count": 12
+  },
+  "runtime": {
+    "task_type": "parse_document",
+    "execution_profile": "mineru-v1",
+    "provider": "MinerU",
+    "provider_version": "3.4.0",
+    "backend": "pipeline",
+    "real_remote_execution_path": true
+  },
+  "controller": {
+    "execution_id": "controller-a4c2def72a1b737b751abda670a90359",
+    "execution_digest": "sha256:a4c2def72a1b737b751abda670a90359e8e95da2c11b25cf8ace392f9d199fb0",
+    "status": "SUCCEEDED",
+    "next_action": "complete_execution"
+  },
+  "remote": {
+    "request_id": "remote-c080e8677dcd83e18dd570d3f236334f",
+    "request_sha256": "sha256:922c12bc5e259bf9c56e58b79c79ee7ff0e9faa6159a3316fc2db9fce26b0e67",
+    "connection_id": "mineru-worker",
+    "status": "SUCCEEDED",
+    "dispatch_count": 1,
+    "duplicate_dispatch": false,
+    "refresh_count": 5,
+    "adopt_count": 1
+  },
+  "parsed_document": {
+    "logical_identity": "parsed_document",
+    "validation": "passed",
+    "parser_backend": "mineru_worker_cli",
+    "mineru_backend": "pipeline",
+    "source_path": "input-0000.pdf",
+    "page_count": 12,
+    "element_count": 126,
+    "table_count": 2,
+    "non_empty": true
+  },
+  "result_publication": {
+    "logical_identity": "remote_execution_publication",
+    "publication_sha256": "sha256:08822f829513bde6caccfb706e0d485eee339144e938af34e588d9a876f392df",
+    "adopted": true,
+    "artifact_ids": [
+      "parsed_corpus_manifest",
+      "parsed_document_001",
+      "parsed_document_markdown_001",
+      "parser_audit",
+      "parser_audit_001"
+    ],
+    "existing_verifier": "passed"
+  },
+  "boundary": {
+    "operational_data_mining_gate_approved": true,
+    "contextual_mapping_started": false,
+    "candidate_dataset_created": false,
+    "human_confirmation_gate_reached": false,
+    "training_started": false,
+    "generation_started": false,
+    "prediction_started": false,
+    "ranking_started": false
+  }
+}

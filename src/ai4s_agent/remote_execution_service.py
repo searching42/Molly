@@ -645,7 +645,9 @@ class DescriptorRemoteExecutionLifecycleService:
             self._require_pending_success_anchor(tree, request, approval, publication)
             self._verify_local_publication(tree, request, approval, publication)
             if stage is not None and stage.status == RunStatus.SUCCEEDED:
-                self._verify_completed_publication_anchor(tree, publication, stage)
+                self._verify_completed_publication_anchor(
+                    tree, request, publication, stage
+                )
                 authority_succeeded = True
         elif stage is not None and stage.status == RunStatus.SUCCEEDED:
             raise ValueError("successful remote execution publication is unavailable")
@@ -773,7 +775,7 @@ class DescriptorRemoteExecutionLifecycleService:
             tree.publish_immutable_json("remote", "publication.json", publication.model_dump(mode="json"))
             lifecycle._commit_boundary("success.publication")
             tree.assert_named_identity()
-            registry = self._publication_registry(tree, publication)
+            registry = self._publication_registry(tree, request, publication)
             tree.add_registry_group(registry)
             lifecycle._commit_boundary("success.registry")
             tree.assert_named_identity()
@@ -818,7 +820,7 @@ class DescriptorRemoteExecutionLifecycleService:
             tree, request, approval, publication
         )
         self._verify_local_publication(tree, request, approval, publication)
-        registry = self._publication_registry(tree, publication)
+        registry = self._publication_registry(tree, request, publication)
         tree.add_registry_group(registry)
         lifecycle._commit_boundary("recovery.registry")
         self._write_success_stage(
@@ -912,6 +914,7 @@ class DescriptorRemoteExecutionLifecycleService:
     @staticmethod
     def _publication_registry(
         tree: PinnedExecutionTree,
+        request: Any,
         publication: Any,
     ) -> dict[str, str]:
         registry = {
@@ -920,6 +923,33 @@ class DescriptorRemoteExecutionLifecycleService:
             )
             for item in publication.artifacts
         }
+        if (
+            request.task_id == "parse_document"
+            and publication.output_contract == "parsed-corpus-output-v1"
+        ):
+            first_document = next(
+                (
+                    item
+                    for item in sorted(
+                        publication.artifacts,
+                        key=lambda item: (item.artifact_id, item.relative_path),
+                    )
+                    if item.artifact_id.startswith("parsed_document_")
+                    and item.artifact_id[-3:].isdigit()
+                ),
+                None,
+            )
+            if first_document is not None:
+                alias_path = (
+                    f"{tree.remote_relative_root}/outputs/committed/payload/"
+                    f"{first_document.relative_path}"
+                )
+                # The task contract and existing local downstream interface
+                # use stable single-document IDs.  Keep those IDs as aliases
+                # in the existing Registry, pointing at the verified first
+                # corpus member; the publication remains the corpus roster.
+                registry["parsed_document"] = alias_path
+                registry["parsed_tables"] = alias_path
         registry[tree.publication_artifact_id] = (
             f"{tree.remote_relative_root}/publication.json"
         )
@@ -1031,7 +1061,11 @@ class DescriptorRemoteExecutionLifecycleService:
         )
 
     def _verify_completed_publication_anchor(
-        self, tree: PinnedExecutionTree, publication: Any, stage: StageState
+        self,
+        tree: PinnedExecutionTree,
+        request: Any,
+        publication: Any,
+        stage: StageState,
     ) -> None:
         lifecycle = self._types()
         anchor = stage.details.get("remote_execution_publication")
@@ -1045,7 +1079,7 @@ class DescriptorRemoteExecutionLifecycleService:
             or anchor.get("sha256") != lifecycle._digest(payload)
         ):
             raise ValueError("remote publication StageState anchor mismatch")
-        expected = self._publication_registry(tree, publication)
+        expected = self._publication_registry(tree, request, publication)
         registry = tree.read_registry()
         if any(registry.get(key) != value for key, value in expected.items()):
             raise ValueError("remote publication Artifact Registry binding mismatch")

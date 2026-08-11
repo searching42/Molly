@@ -1,0 +1,30 @@
+{
+  "real_pdf": true,
+  "real_mineru": true,
+  "real_remote_execution_path": true,
+  "mineru_success": true,
+  "parsed_document_valid": true,
+  "verified_output_adopted": true,
+  "duplicate_dispatch": false,
+  "dispatch_count": 1,
+  "terminal_br2_stage": "parsed-document-runtime",
+  "operational_data_mining_gate_approved": true,
+  "contextual_mapping_started": false,
+  "candidate_dataset_created": false,
+  "human_confirmation_gate_reached": false,
+  "training_started": false,
+  "generation_started": false,
+  "prediction_started": false,
+  "ranking_started": false,
+  "controller_status": "SUCCEEDED",
+  "remote_status": "SUCCEEDED",
+  "publication_adopted": true,
+  "parsed_document_validation": {
+    "status": "passed",
+    "page_count": 12,
+    "element_count": 126,
+    "table_count": 2,
+    "non_empty": true
+  },
+  "acceptance_code_head": "47ce2aa8623d07d6002adcf2b5576f0b9abee949"
+}
