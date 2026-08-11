@@ -122,6 +122,13 @@ _PRIVATE_REAL_TOOL_LOCAL_TASK_IDS = frozenset(
         "evaluate_private_structured_dataset_canary_v1",
     }
 )
+_BR2_MAPPING_TASK_IDS = frozenset(
+    {
+        "extract_oled_evidence",
+        "map_oled_contextual_semantics",
+        "prepare_oled_candidate_raw_dataset",
+    }
+)
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
@@ -788,6 +795,11 @@ class RunPlanExecutor:
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
         )
+        self._verify_br2_mapping_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
+        )
 
     def verify_one_task_committed_outputs(
         self,
@@ -841,6 +853,11 @@ class RunPlanExecutor:
             task_id=task.task_id,
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
+        )
+        self._verify_br2_mapping_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
         )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
@@ -1107,6 +1124,85 @@ class RunPlanExecutor:
             task_id=task_id,
             artifact_paths=artifact_paths,
         )
+
+    def _verify_br2_mapping_task(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+    ) -> None:
+        """Verify the small BR2 artifact contracts at the existing executor seam."""
+
+        if task_id not in _BR2_MAPPING_TASK_IDS:
+            return
+        from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
+            OledBr2CandidateRawDataset,
+            OledBr2CandidateRawDatasetReview,
+        )
+        from ai4s_agent.domains.oled_llm_context_mapping import OledLLMContextMappingResult
+        from ai4s_agent.domains.oled_mineru_candidates import OledMineruCandidate
+        from ai4s_agent.domains.oled_mineru_semantic_mapping import (
+            OledSemanticMappingPacket,
+            OledSemanticMappingReport,
+        )
+
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
+        artifact_id = {
+            "extract_oled_evidence": "oled_mapping_evidence",
+            "map_oled_contextual_semantics": "contextual_mapping_result",
+            "prepare_oled_candidate_raw_dataset": "candidate_raw_dataset",
+        }[task_id]
+        payload = self._read_json_file(Path(self._require_artifact(artifact_paths, artifact_id)))
+        if task_id == "extract_oled_evidence":
+            candidates = payload.get("mineru_candidates")
+            packets = payload.get("semantic_packets")
+            report = payload.get("deterministic_report")
+            if not isinstance(candidates, list) or not candidates:
+                raise ValueError("BR2 deterministic evidence is empty")
+            if not isinstance(packets, list) or len(packets) != len(candidates):
+                raise ValueError("BR2 semantic packet roster is incomplete")
+            if not isinstance(report, dict):
+                raise ValueError("BR2 deterministic report is missing")
+            candidate_models = [OledMineruCandidate.model_validate(item) for item in candidates]
+            packet_models = [OledSemanticMappingPacket.model_validate(item) for item in packets]
+            report_model = OledSemanticMappingReport.model_validate(report)
+            if report_model.source_candidate_count != len(candidate_models):
+                raise ValueError("BR2 deterministic report source count changed")
+            if len(report_model.packets) != len(packet_models):
+                raise ValueError("BR2 deterministic report packet roster is incomplete")
+            if {item.packet_id for item in report_model.packets} != {
+                item.packet_id for item in packet_models
+            }:
+                raise ValueError("BR2 deterministic packet binding changed")
+            return
+        if task_id == "map_oled_contextual_semantics":
+            result = OledLLMContextMappingResult.model_validate(payload)
+            if not result.is_valid:
+                raise ValueError("BR2 contextual mapping result is not review-valid")
+            if result.llm_invocation is None or not result.metadata.get("llm_called"):
+                raise ValueError("BR2 contextual mapping did not record an LLM call")
+            return
+        package = OledBr2CandidateRawDataset.model_validate(payload)
+        if package.metadata.get("llm_called") is not True:
+            raise ValueError("BR2 candidate dataset lacks a recorded LLM call")
+        if package.metadata.get("automatic_candidate_merge") is not False:
+            raise ValueError("BR2 candidate dataset automatic merge boundary changed")
+        if package.metadata.get("ontology_mutated") not in {None, False}:
+            raise ValueError("BR2 candidate dataset ontology mutation is not allowed")
+        if package.metadata.get("layered_schema_compilation_ran") is not True:
+            raise ValueError("BR2 layered schema compilation was not recorded")
+        review_path = Path(
+            self._require_artifact(artifact_paths, "candidate_raw_dataset_review")
+        )
+        review = OledBr2CandidateRawDatasetReview.model_validate(
+            self._read_json_file(review_path)
+        )
+        if review.paper_id != package.paper_id:
+            raise ValueError("BR2 candidate dataset review paper binding changed")
+        if review.candidate_record_count != len(package.candidate_records):
+            raise ValueError("BR2 candidate dataset review count changed")
 
     def _execute_from(
         self,
@@ -1927,6 +2023,23 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id in _BR2_MAPPING_TASK_IDS:
+            task_options = self._payload_options(options)
+            if task_options:
+                raise ValueError(f"{task_id} does not accept task options")
+            payload: dict[str, Any] = {
+                "run_id": run_id,
+                "output_root": str(run_dir / "br2_contextual_mapping"),
+                "workspace_dir": str(self.storage.workspace_dir),
+            }
+            config_dir = str(os.environ.get("MOLLY_CONFIG_DIR") or "").strip()
+            if config_dir:
+                payload["llm_config_dir"] = config_dir
+            for artifact_id in self.registry.get(task_id).required_artifacts:
+                payload[f"{artifact_id}_path"] = self._absolute_artifact_path(
+                    artifact_paths, artifact_id
+                )
+            return payload
         if task_id in _STRUCTURED_DATASET_TASK_IDS:
             task_options = self._payload_options(options)
             payload: dict[str, Any] = {
@@ -3302,6 +3415,36 @@ class RunPlanExecutor:
         payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
+        if task_id in _BR2_MAPPING_TASK_IDS:
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            spec = self.registry.get(task_id)
+            if set(outputs) != set(spec.output_artifacts):
+                raise ValueError("BR2 mapping task output roster is incomplete")
+            registered_paths: dict[str, str] = {}
+            for artifact_id in spec.output_artifacts:
+                output_path = Path(str(outputs[artifact_id])).expanduser().absolute()
+                if output_path.is_symlink() or not output_path.is_file():
+                    raise ValueError("BR2 mapping task output is not a regular file")
+                relative = self._relative(run_dir, output_path)
+                self._register(project_id, run_id, artifact_id, relative)
+                registered_paths[artifact_id] = relative
+                artifact_paths[artifact_id] = str(output_path)
+            try:
+                self._verify_br2_mapping_task(
+                    project_id=project_id,
+                    run_id=run_id,
+                    task_id=task_id,
+                )
+            except Exception:
+                self.storage.remove_artifact_registry_paths_if_all_equal(
+                    project_id,
+                    run_id,
+                    registered_paths,
+                )
+                for artifact_id in spec.output_artifacts:
+                    artifact_paths.pop(artifact_id, None)
+                raise
+            return
         if task_id in _STRUCTURED_DATASET_TASK_IDS:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             spec = self.registry.get(task_id)

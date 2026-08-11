@@ -27,6 +27,10 @@ class LLMResponseValidationError(LLMProviderError):
     pass
 
 
+class _UnsupportedResponseFormatError(LLMProviderError):
+    """The endpoint rejected provider-side JSON Schema enforcement."""
+
+
 ResponseModel = type[BaseModel]
 
 
@@ -180,7 +184,24 @@ class OpenAICompatibleProvider:
             response_model=response_model,
             response_schema=response_schema,
         )
-        raw = self._request_raw(payload, deadline=deadline)
+        try:
+            raw = self._request_raw(
+                payload,
+                deadline=deadline,
+                read_timeout_sec=self.config.total_timeout_sec,
+            )
+        except _UnsupportedResponseFormatError:
+            # Some OpenAI-compatible endpoints (including the configured
+            # DeepSeek endpoint) support JSON-object mode but reject the
+            # provider-side ``json_schema`` response format.  Keep the
+            # existing response_model/schema validation locally and retry
+            # only this explicit compatibility failure without the optional
+            # provider-side constraint.
+            raw = self._request_raw(
+                self._payload(messages=messages, json_mode=True),
+                deadline=deadline,
+                read_timeout_sec=self.config.total_timeout_sec,
+            )
         parsed_output = _parse_chat_completion_json(raw)
         parsed_output = _validate_structured_output(
             parsed_output,
@@ -291,16 +312,26 @@ class OpenAICompatibleProvider:
             "model": self.config.model or "default",
             "messages": messages,
         }
+        if _endpoint_prefers_json_object(self.config.endpoint) and (
+            response_model is not None or response_schema is not None
+        ):
+            payload["temperature"] = 0
         if response_model is not None:
-            payload["response_format"] = _json_schema_response_format(
-                name=response_model.__name__,
-                schema=response_model.model_json_schema(),
-            )
+            if _endpoint_prefers_json_object(self.config.endpoint):
+                payload["response_format"] = {"type": "json_object"}
+            else:
+                payload["response_format"] = _json_schema_response_format(
+                    name=response_model.__name__,
+                    schema=response_model.model_json_schema(),
+                )
         elif response_schema is not None:
-            payload["response_format"] = _json_schema_response_format(
-                name="molly_response",
-                schema=response_schema,
-            )
+            if _endpoint_prefers_json_object(self.config.endpoint):
+                payload["response_format"] = {"type": "json_object"}
+            else:
+                payload["response_format"] = _json_schema_response_format(
+                    name="molly_response",
+                    schema=response_schema,
+                )
         elif json_mode:
             payload["response_format"] = {"type": "json_object"}
         return payload
@@ -310,6 +341,7 @@ class OpenAICompatibleProvider:
         payload: dict[str, object],
         *,
         deadline: float,
+        read_timeout_sec: float | None = None,
     ) -> dict[str, object]:
         self._ensure_open()
         if self.transport is not None:
@@ -336,7 +368,10 @@ class OpenAICompatibleProvider:
                     self._url,
                     json=payload,
                     headers=self._headers,
-                    timeout=self._httpx_timeout(deadline),
+                    timeout=self._httpx_timeout(
+                        deadline,
+                        read_timeout_sec=read_timeout_sec,
+                    ),
                 )
                 self._check_deadline(deadline)
                 self._raise_for_status(response)
@@ -361,11 +396,21 @@ class OpenAICompatibleProvider:
             except httpx.HTTPError as exc:
                 raise self._request_error(exc) from exc
 
-    def _httpx_timeout(self, deadline: float) -> httpx.Timeout:
+    def _httpx_timeout(
+        self,
+        deadline: float,
+        *,
+        read_timeout_sec: float | None = None,
+    ) -> httpx.Timeout:
         remaining = self._remaining(deadline)
+        read_timeout = (
+            float(self.config.timeout_sec)
+            if read_timeout_sec is None
+            else float(read_timeout_sec)
+        )
         return httpx.Timeout(
             connect=min(float(self.config.connect_timeout_sec), remaining),
-            read=min(float(self.config.timeout_sec), remaining),
+            read=min(read_timeout, remaining),
             write=min(float(self.config.write_timeout_sec), remaining),
             pool=min(float(self.config.pool_timeout_sec), remaining),
         )
@@ -390,6 +435,10 @@ class OpenAICompatibleProvider:
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code < 300:
             return
+        if response.status_code == 400 and _response_format_is_unavailable(response):
+            raise _UnsupportedResponseFormatError(
+                "OpenAI-compatible endpoint does not support JSON Schema response format"
+            )
         request_id = response.headers.get("x-request-id") or response.headers.get(
             "x-correlation-id"
         )
@@ -533,6 +582,36 @@ def _json_schema_response_format(*, name: str, schema: dict[str, Any]) -> dict[s
             "schema": schema,
         },
     }
+
+
+def _endpoint_prefers_json_object(endpoint: str) -> bool:
+    """Use the interoperable JSON mode for DeepSeek's OpenAI-compatible API."""
+
+    hostname = str(urlparse(endpoint).hostname or "").strip().lower()
+    return hostname == "api.deepseek.com" or hostname.endswith(".api.deepseek.com")
+
+
+def _response_format_is_unavailable(response: httpx.Response) -> bool:
+    """Recognize only an explicit provider-side response-format limitation."""
+
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+    else:
+        message = error
+    normalized = str(message or "").strip().lower()
+    if "response_format" not in normalized and "json_schema" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in ("unavailable", "unsupported", "not supported", "does not support")
+    )
 
 
 def _validate_schema_arguments(

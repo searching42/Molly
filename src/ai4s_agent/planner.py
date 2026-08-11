@@ -1325,6 +1325,136 @@ def private_structured_dataset_task_registry_v2() -> AtomicTaskRegistry:
     return AtomicTaskRegistry(tasks)
 
 
+def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
+    """Add the BR2 mapping projection to the existing task catalog.
+
+    The document parser remains the default ``parse_document`` task and is
+    deliberately not overridden here.  These three local tasks only consume
+    its verified output, build the existing deterministic OLED evidence, call
+    the configured contextual mapper, and publish a review-only package.
+    """
+
+    trust = {
+        "parsed_document": ["registered_intermediate", "verified_output"],
+    }
+    extract_evidence = AtomicTaskSpec(
+        task_id="extract_oled_evidence",
+        required_artifacts=["parsed_document"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=["oled_mapping_evidence"],
+        risk_level=RiskLevel.LOW,
+        default_adapter="extract_oled_evidence_adapter",
+        scientific_tool_id="extract_oled_evidence",
+        label="Extract deterministic OLED evidence",
+        description=(
+            "Build evidence-bound OLED MinerU candidates, semantic packets, and "
+            "deterministic schema candidates from a verified ParsedDocument."
+        ),
+        effect_class="derive_local",
+        required_permissions=["read_content_bound_input", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=trust,
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
+    )
+    contextual_mapping = AtomicTaskSpec(
+        task_id="map_oled_contextual_semantics",
+        required_artifacts=["parsed_document", "oled_mapping_evidence"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=["contextual_mapping_result"],
+        risk_level=RiskLevel.MEDIUM,
+        default_adapter="map_oled_contextual_semantics_adapter",
+        scientific_tool_id="map_oled_contextual_semantics",
+        label="Map OLED contextual semantics",
+        description=(
+            "Call the configured structured-output LLM mapper on full document "
+            "context and keep proposals review-only."
+        ),
+        effect_class="external_io",
+        required_permissions=["external_document_processing", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "parsed_document": ["registered_intermediate", "verified_output"],
+            "oled_mapping_evidence": ["registered_intermediate", "verified_output"],
+        },
+        budget_dimensions=["max_runtime_sec", "max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
+    )
+    candidate_dataset = AtomicTaskSpec(
+        task_id="prepare_oled_candidate_raw_dataset",
+        required_artifacts=[
+            "parsed_document",
+            "oled_mapping_evidence",
+            "contextual_mapping_result",
+        ],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=["candidate_raw_dataset", "candidate_raw_dataset_review"],
+        risk_level=RiskLevel.LOW,
+        default_adapter="prepare_oled_candidate_raw_dataset_adapter",
+        scientific_tool_id="prepare_oled_candidate_raw_dataset",
+        label="Prepare OLED candidate raw dataset",
+        description=(
+            "Compile evidence-bound layered OLED candidates into a review-only "
+            "package without confirmation or downstream execution."
+        ),
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "parsed_document": ["registered_intermediate", "verified_output"],
+            "oled_mapping_evidence": ["registered_intermediate", "verified_output"],
+            "contextual_mapping_result": ["registered_intermediate", "verified_output"],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
+    )
+    return AtomicTaskRegistry(
+        [*DEFAULT_ATOMIC_TASKS, extract_evidence, contextual_mapping, candidate_dataset]
+    )
+
+
 def private_structured_dataset_real_tool_task_registry_v3() -> AtomicTaskRegistry:
     """Build the explicitly selected BR1 real-tool runtime catalog.
 

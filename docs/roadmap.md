@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-BR2-MAPPING — Contextual mapping and evidence binding
+> Current focus: M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -176,15 +176,16 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: at least one real OLED PDF completes the real MinerU and parsed-document runtime stages without extending the BR2 terminal boundary.
   - Evidence: [acceptance README](evidence/br2-real-mineru-runtime-v1/README.md), [acceptance manifest](evidence/br2-real-mineru-runtime-v1/acceptance_manifest.json), and [runtime summary](evidence/br2-real-mineru-runtime-v1/runtime_summary.json).
 
-- [ ] **M3.5-BR2-MAPPING — Contextual mapping and evidence binding**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-BR2-MAPPING — Contextual mapping and evidence binding**
+  - State: `DONE`
+  - Evidence: `I/T/V`
   - Dependency: after `M3.5-BR2-RUNTIME`.
   - Target PR: #50.
   - Definition of Done: deterministic extraction, LLM contextual mapping, schema validation, and evidence binding produce a confirmation-ready candidate raw dataset with privacy-safe provenance.
+  - Closed by: PR #50, [acceptance README](evidence/br2-contextual-mapping-v1/README.md), [acceptance manifest](evidence/br2-contextual-mapping-v1/acceptance_manifest.json), and [mapping summary](evidence/br2-contextual-mapping-v1/mapping_summary.json).
 
 - [ ] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-BR2-MAPPING`.
   - Target PR: #51.

@@ -649,6 +649,16 @@ from ai4s_agent.domains.oled_llm_context_mapping import (
     build_oled_paper_context_elements,
     run_oled_llm_context_mapping,
 )
+from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
+    BR2_CANDIDATE_DATASET_SCHEMA_VERSION,
+    BR2_DATASET_SCOPE,
+    OledBr2CandidateRawDataset,
+    OledBr2CandidateRawDatasetReview,
+    OledBr2PacketDisposition,
+    OledBr2ReviewItem,
+    build_oled_br2_candidate_raw_dataset,
+    build_oled_br2_candidate_raw_dataset_review,
+)
 from ai4s_agent.domains.oled_supplementary_evidence_recovery import (
     OledSupplementaryEvidenceRecoveryItem,
     OledSupplementaryEvidenceRecoveryPlan,
@@ -1360,6 +1370,14 @@ __all__ = [
     "run_oled_curated_gold_view_preflight",
     "run_oled_curated_gold_view_preflight_from_files",
     "run_oled_llm_context_mapping",
+    "BR2_CANDIDATE_DATASET_SCHEMA_VERSION",
+    "BR2_DATASET_SCOPE",
+    "OledBr2CandidateRawDataset",
+    "OledBr2CandidateRawDatasetReview",
+    "OledBr2PacketDisposition",
+    "OledBr2ReviewItem",
+    "build_oled_br2_candidate_raw_dataset",
+    "build_oled_br2_candidate_raw_dataset_review",
     "oled_document_context_digest",
     "oled_mapping_result_digest",
     "oled_supplementary_review_item_digest",

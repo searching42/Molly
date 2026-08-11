@@ -402,6 +402,35 @@ def _compile_group(
             if layer is not None:
                 layer.metadata["system_label"] = system_label
     property_subject = _single_property_subject_label(candidates)
+    interaction_identity = property_subject
+    if interaction_identity is None and interaction is not None:
+        material_roles = interaction.metadata.get("material_roles")
+        if isinstance(material_roles, dict):
+            names = sorted(
+                str(value).strip()
+                for value in material_roles.values()
+                if str(value).strip()
+            )
+            if len(names) == 1:
+                interaction_identity = names[0]
+    if (
+        molecule is None
+        and interaction is not None
+        and interaction.properties
+        and interaction_identity is not None
+    ):
+        # Interaction claims are contractually bound to a molecule layer.  A
+        # table row may provide only a material-role identity (not a structure
+        # or molecule-level property), so preserve that identity as a thin
+        # molecule-layer context instead of rejecting the otherwise
+        # evidence-bound interaction observation.
+        molecule = OledMolecularLayer(
+            metadata={
+                "material_name": interaction_identity,
+                "identity_source": "interaction_material_identity",
+            }
+        )
+        reason_codes.add("interaction_material_identity_bound")
     if property_subject is not None:
         if molecule is not None:
             molecule.metadata["material_name"] = property_subject
