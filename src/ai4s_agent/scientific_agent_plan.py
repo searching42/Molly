@@ -26,6 +26,7 @@ from jsonschema import Draft202012Validator
 from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.observability_correlation import (
@@ -1710,6 +1711,17 @@ def build_scientific_agent_plan_messages(
         "explicit_constraints": observation.explicit_constraints,
         "tool_catalog": observation.tool_catalog.model_dump(mode="json"),
     }
+    br2_routing_instruction = ""
+    if ConversationAgent.is_br2_contextual_request(observation.goal_context):
+        br2_routing_instruction = (
+            " This is a bounded OLED literature review request. Select exactly the registered "
+            "planner tool `prepare_oled_candidate_raw_dataset` when it is present in the catalog, "
+            "select the server-registered `pdf_corpus` input when it is available, and select "
+            "the available logical execution profile `mineru-v1` for the parser when it is present. The server "
+            "will expand that tool into parse_document -> extract_oled_evidence -> "
+            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. Do not select "
+            "training, generation, prediction, ranking, confirmation, or any other downstream task."
+        )
     return [
         {
             "role": "system",
@@ -1721,6 +1733,7 @@ def build_scientific_agent_plan_messages(
                 "and questions. Never return approval, execution, dispatch, status, "
                 "adapter, command, path, SSH, worker, or credential fields. The "
                 "proposal is review-only and will not start work."
+                + br2_routing_instruction
             ),
         },
         {

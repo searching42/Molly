@@ -41,6 +41,25 @@ def test_conversation_turn_decision_is_ready_when_target_and_approval_are_presen
     assert decision.modeling_plan_payload["available_inputs"] == ["SMILES", "solvent"]
 
 
+def test_conversation_turn_decision_routes_oled_literature_review_without_fake_property() -> None:
+    decision = ConversationAgent().decide_next_turn(
+        run_id="run-br2-conversation",
+        messages=[
+            {
+                "role": "user",
+                "content": "帮我从这篇 OLED 文献中整理可用于后续建模的数据，整理后让我确认。",
+            }
+        ],
+    )
+
+    assert decision.status == "ready_for_modeling_plan"
+    assert decision.modeling_plan_payload["br2_contextual_request"] is True
+    assert decision.modeling_plan_payload["property_id"] == ""
+    assert decision.requires_user_response is False
+    assert decision.executable is False
+    assert "generate_modeling_plan" in decision.next_actions
+
+
 def test_conversation_turn_decision_blocks_unapproved_external_evidence() -> None:
     agent = ConversationAgent()
 
