@@ -289,10 +289,15 @@ def _scenario_a09(workspace: Path) -> dict[str, Any]:
         "clock_injected": wall_clock.get("clock_injected"),
         "clock_boundary_effect": wall_clock.get("clock_boundary_effect"),
         "wall_clock_elapsed_seconds": wall_clock.get("wall_clock_elapsed_seconds"),
+        "provider_call_count": wall_clock.get("provider_call_count", 0)
+        + graph_binding.get("provider_call_count", 0)
+        + resource_binding.get("provider_call_count", 0),
         "task_graph_mutation": graph_binding.get("task_graph_mutation"),
+        "task_graph_expansion_attempted": graph_binding.get("task_graph_expansion_attempted"),
         "task_graph_boundary_effect": graph_binding.get("boundary_effect"),
         "task_graph_identity_verified": graph_binding.get("task_graph_identity_verified"),
         "resource_expansion": resource_binding.get("resource_expansion"),
+        "resource_binding_changed": resource_binding.get("resource_binding_changed"),
         "resource_boundary_effect": resource_binding.get("boundary_effect"),
         "resource_evidence_fail_closed": resource_binding.get("resource_evidence_fail_closed"),
         "controller_effect_call_count": wall_clock.get("controller_effect_call_count", 0)
