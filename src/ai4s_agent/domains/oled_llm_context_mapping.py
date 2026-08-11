@@ -29,11 +29,16 @@ from ai4s_agent.domains.oled_reported_values import (
     is_numeric_reported_value,
     validate_reported_value_contract,
 )
-from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
+from ai4s_agent.llm_provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMResponseValidationError,
+)
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
 PROMPT_VERSION = "oled.contextual_semantic_mapping.v5"
+_MAX_MAPPING_VALIDATION_ATTEMPTS = 2
 
 OledLLMMappingAction = Literal[
     "keep_deterministic",
@@ -428,41 +433,69 @@ def run_oled_llm_context_mapping(
 ) -> OledLLMContextMappingResult:
     request_digest = request.request_digest
     invocation: LLMInvocationRecord | None = None
-    try:
-        invocation = provider.complete_json(
-            messages=_mapping_messages(request),
-            prompt_version=PROMPT_VERSION,
-            response_model=OledLLMPaperMappingResponse,
-        )
-    except (LLMProviderError, OSError, TypeError) as exc:
+    messages = _mapping_messages(request)
+    response: OledLLMPaperMappingResponse | None = None
+    schema_candidates: list[OledSchemaCandidate] = []
+    for attempt in range(_MAX_MAPPING_VALIDATION_ATTEMPTS):
+        invocation = None
+        try:
+            invocation = provider.complete_json(
+                messages=messages,
+                prompt_version=PROMPT_VERSION,
+                response_model=OledLLMPaperMappingResponse,
+            )
+        except LLMResponseValidationError as exc:
+            if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
+                messages = _mapping_retry_messages(messages, error=str(exc))
+                continue
+            return _failed_result(
+                request,
+                status="provider_error",
+                code="llm_provider_error",
+                message=str(exc),
+            )
+        except (LLMProviderError, OSError, TypeError) as exc:
+            return _failed_result(
+                request,
+                status="provider_error",
+                code="llm_provider_error",
+                message=str(exc),
+            )
+
+        try:
+            # The provider's response_model validation is authoritative for
+            # the transport contract.  Re-read the original structured payload
+            # when available so downstream semantic validation can still
+            # distinguish an omitted optional comparison-context field from
+            # an explicit null.
+            response = OledLLMPaperMappingResponse.model_validate(
+                _invocation_structured_payload(invocation)
+            )
+            _validate_response_binding(request, response)
+            schema_candidates = _materialize_schema_candidates(request, response)
+            semantic_validation = validate_oled_schema_candidates(schema_candidates)
+            if not semantic_validation.is_valid:
+                error_codes = sorted(set(semantic_validation.error_codes))
+                raise ValueError(f"materialized schema candidate validation failed: {error_codes}")
+        except (ValidationError, ValueError) as exc:
+            if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
+                messages = _mapping_retry_messages(messages, error=str(exc))
+                continue
+            return _failed_result(
+                request,
+                status="invalid_response",
+                code="invalid_llm_mapping_response",
+                message=str(exc),
+                invocation=invocation,
+            )
+        break
+
+    if response is None or invocation is None:
         return _failed_result(
             request,
             status="provider_error",
             code="llm_provider_error",
-            message=str(exc),
-        )
-
-    try:
-        # The provider's response_model validation is authoritative for the
-        # transport contract.  Re-read the original structured payload when
-        # available so downstream semantic validation can still distinguish
-        # an omitted optional comparison-context field from an explicit null.
-        response = OledLLMPaperMappingResponse.model_validate(
-            _invocation_structured_payload(invocation)
-        )
-        _validate_response_binding(request, response)
-        schema_candidates = _materialize_schema_candidates(request, response)
-        semantic_validation = validate_oled_schema_candidates(schema_candidates)
-        if not semantic_validation.is_valid:
-            error_codes = sorted(set(semantic_validation.error_codes))
-            raise ValueError(f"materialized schema candidate validation failed: {error_codes}")
-    except (ValidationError, ValueError) as exc:
-        return _failed_result(
-            request,
-            status="invalid_response",
-            code="invalid_llm_mapping_response",
-            message=str(exc),
-            invocation=invocation,
+            message="contextual mapping did not produce a validated response",
         )
 
     extensions = [
@@ -853,12 +886,63 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
                 "Use needs_ontology_review when evidence is complete but the ontology lacks the property. "
                 "For every numeric property proposal, preserve the exact source numeric lexeme in "
                 "reported_value_text and its decimal-place count in reported_decimal_places. "
+                "The numeric value must equal reported_value_text exactly; do not convert percentages "
+                "to fractions (use unit '%' when the source reports a percentage). "
+                "reported_value_text must be a bare numeric lexeme such as '89' or '4.35', never include "
+                "a unit or percent sign; put the unit in unit. "
                 "For properties with required_comparison_context_fields, include comparison_context "
                 "and explicitly provide every required field, using null when the source does not report it. "
+                "Prefer keep_deterministic when the supplied deterministic candidate already covers the "
+                "property; only supplement or replace when contextual evidence requires it. "
+                "Action constraints are strict: keep_deterministic and no_eligible_property must have "
+                "no candidate_proposals; supplement requires at least one candidate_proposal and no "
+                "superseded_deterministic_candidate_ids; replace requires at least one candidate_proposal "
+                "and at least one explicitly superseded_deterministic_candidate_id; needs_source_check "
+                "must contain source-check questions and missing-evidence items with no candidate proposals; "
+                "needs_ontology_review must contain an ontology extension proposal. "
+                "Return exactly one packet_results item for every supplied packet, in the supplied order; "
+                "never omit a packet, even when it has no eligible property (use no_eligible_property). "
+                "Do not add extra packet results, echo source text, or write long rationales; keep each "
+                "rationale_summary concise. "
+                "For table packets, prefer keep_deterministic when deterministic candidates already exist. "
+                "Only emit a table candidate when column_name is copied verbatim from the supplied table "
+                "row keys and cell_value is copied verbatim from the matching row; if that exact binding "
+                "is uncertain, use needs_source_check with unresolved_identity and no candidate proposals "
+                "instead of inventing or normalizing a locator. "
+                "When a packet has a deterministic molecule/interaction property candidate for its source "
+                "hash, keep_deterministic is mandatory and candidate_proposals must be empty; a material-role "
+                "candidate alone does not satisfy this rule. "
+                "Every proposed property_id and target_layer must be allowed by both the packet and the "
+                "supplied ontology definition; if the allowed layer or property identity is uncertain, use "
+                "needs_source_check with no candidate proposals. "
+                "explicit_property_exclusion_reason is allowed only for no_eligible_property and must be "
+                "one of background_or_external_reference, duplicate_of_existing_candidate, or "
+                "ambiguous_identity_or_assignment. "
+                f"The top-level paper_id must be exactly {request.paper_id!r}. "
                 "Every candidate must cite the source packet and may cite only supplied document context."
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def _mapping_retry_messages(
+    messages: list[dict[str, str]],
+    *,
+    error: str,
+) -> list[dict[str, str]]:
+    detail = str(error or "validation failed").strip()[:1200]
+    return [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "The previous JSON response failed Molly's local validation. Regenerate the complete "
+                "response from the original request and fix this exact issue: "
+                f"{detail} "
+                "Return JSON only, preserve the full packet roster, and do not omit or invent evidence."
+            ),
+        },
     ]
 
 
@@ -976,7 +1060,18 @@ _CONTEXT_MAPPING_INSTRUCTIONS = (
     "The current dataset admits molecule- and interaction-layer properties only.",
     "Measurement/device-only properties and device/measurement-only extensions stay outside the dataset.",
     "Replace actions must name only the deterministic candidate ids they supersede and preserve all others.",
-    "Table candidate proposals must cite an exact row_index and matching source cell.",
+    "Table candidate proposals must cite an exact row_index and matching source cell; unresolved table header binding uses needs_source_check with unresolved_identity.",
+    (
+        "When a packet has one or more deterministic molecule/interaction property candidates for its "
+        "source_candidate_hash, use keep_deterministic and do not repeat or reinterpret those values; "
+        "a material-role candidate alone does not satisfy this rule."
+    ),
+    (
+        "When a packet has no deterministic schema candidate, emit a new proposal only when its exact "
+        "source value and evidence binding are certain; otherwise use needs_source_check or "
+        "no_eligible_property rather than guessing."
+    ),
+    "Every proposed property_id and target_layer must be allowed by the packet and ontology; uncertainty uses needs_source_check with no proposal.",
     "Use needs_source_check only for evidence absent from the supplied full text, such as SI or images.",
     "Use needs_ontology_review when evidence is complete but a molecule/interaction property is unsupported.",
     "A supplement may include both known-property candidates and ontology extension proposals.",

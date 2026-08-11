@@ -115,6 +115,58 @@ def test_complete_json_validates_pydantic_model_and_sends_generated_schema() -> 
     assert response_format["json_schema"]["schema"]["required"] == ["answer", "score"]
 
 
+def test_complete_json_uses_json_object_for_deepseek_endpoint() -> None:
+    captured_payload: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_payload.update(json.loads(request.content))
+        return httpx.Response(200, json=_completion('{"answer":"ok","score":3}'))
+
+    provider = OpenAICompatibleProvider(
+        config=_config(endpoint="https://api.deepseek.com", model="deepseek-v4-flash"),
+        client=_client(handler),
+    )
+    result = provider.complete_json(
+        messages=[{"role": "user", "content": "structured"}],
+        prompt_version="structured.v1",
+        response_model=_Answer,
+    )
+
+    assert result.parsed_output == {"answer": "ok", "score": 3}
+    assert captured_payload["response_format"] == {"type": "json_object"}
+    assert captured_payload["temperature"] == 0
+
+
+def test_complete_json_falls_back_to_json_object_when_schema_format_is_unavailable() -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This response_format type is unavailable now"
+                    }
+                },
+            )
+        return httpx.Response(200, json=_completion('{"answer":"ok","score":3}'))
+
+    provider = OpenAICompatibleProvider(config=_config(), client=_client(handler))
+    result = provider.complete_json(
+        messages=[{"role": "user", "content": "structured"}],
+        prompt_version="structured.v1",
+        response_model=_Answer,
+    )
+
+    assert result.parsed_output == {"answer": "ok", "score": 3}
+    assert len(calls) == 2
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+
+
 def test_complete_json_rejects_invalid_pydantic_output_without_echoing_input() -> None:
     client = _client(
         lambda _request: httpx.Response(

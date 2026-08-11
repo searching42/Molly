@@ -20,7 +20,11 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     OledSchemaEvidenceRef,
     OledSemanticMappingPacket,
 )
-from ai4s_agent.llm_provider import LLMProviderError, StubLLMProvider
+from ai4s_agent.llm_provider import (
+    LLMProviderError,
+    LLMResponseValidationError,
+    StubLLMProvider,
+)
 
 
 def _packet() -> OledSemanticMappingPacket:
@@ -462,6 +466,35 @@ def test_provider_error_is_reported_without_candidates() -> None:
     assert result.findings[0].code == "llm_provider_error"
     assert result.metadata["llm_call_attempted"] is True
     assert result.metadata["llm_response_received"] is False
+
+
+def test_invalid_first_mapping_response_is_retried_once_then_validated() -> None:
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+    valid_provider = StubLLMProvider(response=_valid_response())
+
+    class RetryProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.messages: list[list[dict[str, str]]] = []
+
+        def complete_json(self, *, messages, prompt_version, response_model=None, response_schema=None):
+            self.calls += 1
+            self.messages.append(messages)
+            if self.calls == 1:
+                raise LLMResponseValidationError("packet result binding mismatch")
+            return valid_provider.complete_json(
+                messages=messages,
+                prompt_version=prompt_version,
+                response_model=response_model,
+                response_schema=response_schema,
+            )
+
+    provider = RetryProvider()
+    result = run_oled_llm_context_mapping(request, provider=provider)
+
+    assert result.status == "ready_for_human_review"
+    assert provider.calls == 2
+    assert "validation" in provider.messages[1][-1]["content"].lower()
 
 
 def test_context_mapping_api_is_exported_from_domain_package() -> None:
