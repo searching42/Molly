@@ -1,5 +1,5 @@
 {
-  "acceptance_code_head": "d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94",
+  "acceptance_code_head": "d225b6315dd6ab221c73e5d80f80922ccb62e492",
   "l1_remote_adoption_crash_window": {
     "adopt_dispatch_occurred": false,
     "dispatch_after": 1,

@@ -1,5 +1,5 @@
 {
-  "acceptance_code_head": "d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94",
+  "acceptance_code_head": "d225b6315dd6ab221c73e5d80f80922ccb62e492",
   "scenario_roster_digest": "sha256:98b1c034266ac859dd6f880d74024a1776b5752fc62d256490341bf60a1e5a2c",
   "scenarios": [
     {
@@ -144,22 +144,32 @@
       "authority_preserved": true,
       "clock_boundary_effect": "blocked_before_effect",
       "clock_injected": true,
+      "controller_effect_call_count": 0,
+      "execution_agent_proposal_call_count": 0,
       "expected_boundary": "BOUNDARY",
       "observed_reason_codes": [
         "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED",
-        "AUTONOMY_L1_TASK_GRAPH_BOUNDARY",
-        "AUTONOMY_L1_RESOURCE_BOUNDARY"
+        "AUTONOMY_L1_EVIDENCE_UNAVAILABLE"
       ],
+      "provider_call_count": 0,
+      "resource_binding_changed": true,
+      "resource_boundary_effect": "fail_closed_before_effect",
       "resource_evidence_fail_closed": true,
-      "resource_expansion": false,
+      "resource_expansion": true,
+      "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
       "runtime_phase": "L1",
       "scenario_id": "AUT-A09",
       "status": "PASS",
-      "task_graph_identity_verified": true,
+      "task_graph_boundary_effect": "fail_closed_before_effect",
+      "task_graph_expansion_attempted": true,
+      "task_graph_identity_verified": false,
       "task_graph_mutation": false,
-      "test_adapter": "tests/test_scientific_agent_autonomy_l1.py::test_invalid_clock_or_dispatch_evidence_fails_closed",
-      "test_adapter_2": "tests/test_scientific_agent_autonomy_l1.py::test_task_graph_and_execution_digest_are_exactly_bound",
+      "test_adapter": "tests/test_autonomy_acceptance_runtime.py::test_l1_acceptance_wall_clock_budget_stops_before_effect",
+      "test_adapter_2": "tests/test_autonomy_acceptance_runtime.py::test_l1_acceptance_task_graph_expansion_fails_closed_before_effect",
+      "test_adapter_3": "tests/test_autonomy_acceptance_runtime.py::test_l1_acceptance_resource_binding_expansion_fails_closed_before_effect",
+      "test_adapter_4": "tests/test_scientific_agent_autonomy_l1.py::test_invalid_clock_or_dispatch_evidence_fails_closed",
       "title": "Wall-clock, task-graph, and resource boundaries",
+      "wall_clock_elapsed_seconds": 86400.0,
       "wall_clock_limit_seconds": 86400
     },
     {

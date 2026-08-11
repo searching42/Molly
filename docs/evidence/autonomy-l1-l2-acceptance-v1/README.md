@@ -25,9 +25,15 @@ The L1 budget scenarios enter the real conversation `tick()` path after
 preloading exact durable evidence and verify zero Controller/provider effects
 at the exhausted boundary. The L1→L2 handoff also enters a real B-side tick
 and verifies that its budget snapshot is rebuilt from Controller B evidence.
+The boundary scenario separately drives wall-clock exhaustion through `tick()`;
+task-graph expansion and resource-binding expansion are rejected through the
+same continuation entrypoint with the observed typed
+`AUTONOMY_L1_EVIDENCE_UNAVAILABLE` fail-closed result. The checked-in matrix
+records those observed results rather than projecting unused policy reason
+codes.
 
 The acceptance code was frozen at
-`d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94`; after that freeze, only this
+`d225b6315dd6ab221c73e5d80f80922ccb62e492`; after that freeze, only this
 evidence projection, its contract checks, and the roadmap were finalized. The
 final evidence commit is recorded in the pull request body.
 
