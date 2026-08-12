@@ -58,7 +58,11 @@ Molly requires Python 3.10 or newer.
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[dev,quickstart]"
+
+The `quickstart` extra installs the pinned MinerU 3.4.0 core runtime used by
+the `mineru-v1` pipeline worker. It intentionally does not install optional
+VLM acceleration backends such as vLLM or lmdeploy.
 
 PYTHONPATH=src .venv/bin/python -m flask \
   --app 'ai4s_agent.app:create_app' run --host 127.0.0.1 --port 8792
