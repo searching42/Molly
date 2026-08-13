@@ -637,8 +637,11 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     validate_oled_schema_candidates,
 )
 from ai4s_agent.domains.oled_llm_context_mapping import (
+    CONTEXT_PROJECTION_BUDGET_CHARS,
+    CONTEXT_PROJECTION_VERSION,
     OledLLMContextMappingFinding,
     OledLLMContextMappingResult,
+    OledContextProjectionError,
     OledLLMPacketMappingProposal,
     OledLLMPaperMappingRequest,
     OledLLMPaperMappingResponse,
@@ -647,6 +650,7 @@ from ai4s_agent.domains.oled_llm_context_mapping import (
     OledPaperContextElement,
     build_oled_llm_paper_mapping_request,
     build_oled_paper_context_elements,
+    project_oled_context_for_mapping,
     run_oled_llm_context_mapping,
 )
 from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
@@ -1369,6 +1373,10 @@ __all__ = [
     "run_oled_sklearn_baseline_on_training_rows",
     "run_oled_curated_gold_view_preflight",
     "run_oled_curated_gold_view_preflight_from_files",
+    "CONTEXT_PROJECTION_BUDGET_CHARS",
+    "CONTEXT_PROJECTION_VERSION",
+    "OledContextProjectionError",
+    "project_oled_context_for_mapping",
     "run_oled_llm_context_mapping",
     "BR2_CANDIDATE_DATASET_SCHEMA_VERSION",
     "BR2_DATASET_SCOPE",

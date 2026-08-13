@@ -156,6 +156,26 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 "candidate_count": len(mapping_result.schema_candidates),
                 "ontology_review_count": len(mapping_result.ontology_extension_proposals),
                 "ontology_mutated": False,
+                "context_projection_version": mapping_result.metadata.get(
+                    "context_projection_version", ""
+                ),
+                "source_context_chars": mapping_result.metadata.get(
+                    "source_document_character_count", 0
+                ),
+                "projected_context_chars": mapping_result.metadata.get(
+                    "projected_context_character_count", 0
+                ),
+                "projection_ratio": mapping_result.metadata.get(
+                    "context_projection_ratio", 0.0
+                ),
+                "source_element_count": mapping_result.metadata.get(
+                    "source_document_element_count", 0
+                ),
+                "projected_element_count": mapping_result.metadata.get(
+                    "projected_context_element_count", 0
+                ),
+                "table_count": mapping_result.metadata.get("table_count", 0),
+                "packet_count": mapping_result.metadata.get("packet_count", 0),
             },
         }
     except (LLMProviderError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:

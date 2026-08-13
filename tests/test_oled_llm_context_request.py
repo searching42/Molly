@@ -76,7 +76,7 @@ def test_prepare_request_artifact_runs_deterministic_mapping_without_calling_llm
     )
 
     assert artifact.paper_id == "paper-request"
-    assert artifact.artifact_version == "oled_llm_context_request.v5"
+    assert artifact.artifact_version == "oled_llm_context_request.v6"
     assert artifact.request_digest == artifact.request.request_digest
     assert artifact.metadata["packet_count"] == 1
     assert artifact.metadata["deterministic_schema_candidate_count"] == 2
@@ -106,7 +106,8 @@ def test_prepare_request_from_files_writes_content_bound_artifact(tmp_path) -> N
     assert written["request_digest"] == artifact.request_digest
     assert written["request_digest"] == artifact.request.request_digest
     assert written["metadata"]["external_service_called"] is False
-    assert written["request"]["metadata"]["full_context_supplied_without_automatic_truncation"] is True
+    assert written["request"]["metadata"]["context_projection_bounded"] is True
+    assert written["request"]["metadata"]["context_projection_version"] == "oled.context_projection.v1"
     assert written["request"]["metadata"]["reported_value_contract_required"] is True
     assert written["request"]["metadata"]["comparison_context_contract_required"] is True
 

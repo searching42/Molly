@@ -37,7 +37,9 @@ from ai4s_agent.llm_provider import (
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
-PROMPT_VERSION = "oled.contextual_semantic_mapping.v5"
+PROMPT_VERSION = "oled.contextual_semantic_mapping.v6"
+CONTEXT_PROJECTION_VERSION = "oled.context_projection.v1"
+CONTEXT_PROJECTION_BUDGET_CHARS = 80_000
 _MAX_MAPPING_VALIDATION_ATTEMPTS = 2
 
 OledLLMMappingAction = Literal[
@@ -77,6 +79,71 @@ _GENERIC_SOURCE_CHECK_MARKERS = (
     "verify against source at",
     "deterministic extraction",
 )
+
+_DATASET_CONTEXT_LAYERS = frozenset({"molecule", "interaction"})
+_ADMIN_SECTION_HEADINGS = frozenset(
+    {
+        "references",
+        "acknowledgements",
+        "acknowledgments",
+        "author contributions",
+        "competing interests",
+        "additional information",
+        "peer review information",
+        "reprints and permissions",
+        "publisher's note",
+        "open access",
+        "open access license",
+    }
+)
+_SCIENTIFIC_SECTION_HEADINGS = frozenset(
+    {
+        "abstract",
+        "introduction",
+        "results",
+        "discussion",
+        "conclusion",
+        "conclusions",
+        "methods",
+        "materials and methods",
+        "experimental",
+        "device fabrication and characterization",
+        "theoretical calculation",
+        "carrier mobility measurement",
+        "data availability",
+        "supplementary information",
+    }
+)
+_CONTEXT_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "also",
+        "been",
+        "being",
+        "between",
+        "from",
+        "into",
+        "more",
+        "such",
+        "than",
+        "that",
+        "their",
+        "these",
+        "this",
+        "those",
+        "using",
+        "were",
+        "which",
+        "with",
+    }
+)
+
+
+class OledContextProjectionError(ValueError):
+    """A deterministic LLM input projection could not satisfy its budget."""
+
+    code = "context_budget_exceeded"
 
 
 class OledPaperContextElement(BaseModel):
@@ -390,6 +457,281 @@ def build_oled_paper_context_elements(parsed_document: Mapping[str, Any] | BaseM
     return context
 
 
+def project_oled_context_for_mapping(
+    context: Iterable[OledPaperContextElement],
+    packets: Iterable[OledSemanticMappingPacket],
+    *,
+    deterministic_candidates: Iterable[OledSchemaCandidate] = (),
+    budget_chars: int = CONTEXT_PROJECTION_BUDGET_CHARS,
+) -> tuple[list[OledPaperContextElement], dict[str, Any]]:
+    """Select a bounded, packet-aware view of the full ParsedDocument context.
+
+    ``context`` remains the complete source context on the request and is used
+    by the existing binding verifier.  The returned list is only an LLM input
+    projection: it contains whole source elements selected by deterministic
+    priority, never a character slice or an LLM-generated summary.
+    """
+
+    if isinstance(budget_chars, bool) or int(budget_chars) <= 0:
+        raise ValueError("context projection budget must be positive")
+    source_context = list(context)
+    packet_list = list(packets)
+    source_candidates = list(deterministic_candidates)
+    if not source_context:
+        raise ValueError("full ParsedDocument context is required")
+
+    boilerplate_flags = _boilerplate_context_flags(source_context)
+    device_only_hashes = _device_only_source_hashes(source_candidates)
+    context_by_index = list(enumerate(source_context))
+    device_only_indices: set[int] = set()
+    p0_indices: set[int] = set()
+    p1_indices: set[int] = set()
+    p2_scores: dict[int, int] = {}
+
+    for packet in packet_list:
+        matches = _packet_context_matches(packet, source_context)
+        packet_is_device_only = _packet_is_device_only(packet, device_only_hashes)
+        if packet_is_device_only:
+            device_only_indices.update(matches)
+            continue
+        p0_indices.update(matches)
+        query_tokens = _packet_context_tokens(packet)
+        for index in matches:
+            element = source_context[index]
+            for neighbor in range(max(0, index - 2), min(len(source_context), index + 3)):
+                candidate = source_context[neighbor]
+                if candidate.page != element.page:
+                    continue
+                if boilerplate_flags[neighbor]:
+                    continue
+                score = _context_token_overlap(query_tokens, candidate.text)
+                if neighbor != index and score > 0:
+                    p1_indices.add(neighbor)
+                    p2_scores[neighbor] = max(p2_scores.get(neighbor, 0), score + 3)
+
+        for index, candidate in context_by_index:
+            if boilerplate_flags[index] or index in device_only_indices:
+                continue
+            score = _context_token_overlap(query_tokens, candidate.text)
+            if score <= 0:
+                continue
+            if _is_known_section_heading(candidate.text):
+                score += 4
+                p1_indices.add(index)
+            p2_scores[index] = max(p2_scores.get(index, 0), score)
+
+        for nearby_text in (packet.nearby_text_before, packet.nearby_text_after):
+            normalized_nearby = _normalized_context_text(nearby_text)
+            if not normalized_nearby:
+                continue
+            for index, candidate in context_by_index:
+                if normalized_nearby in _normalized_context_text(candidate.text):
+                    if not boilerplate_flags[index]:
+                        p1_indices.add(index)
+                        p2_scores[index] = max(p2_scores.get(index, 0), 100)
+
+    p0_indices.difference_update(device_only_indices)
+    p0_indices = {index for index in p0_indices if not boilerplate_flags[index]}
+    p0_chars = sum(len(source_context[index].text) for index in p0_indices)
+    if p0_chars > int(budget_chars):
+        raise OledContextProjectionError(
+            "context_budget_exceeded: exact packet evidence exceeds the deterministic context budget"
+        )
+
+    selected = set(p0_indices)
+    selected_chars = p0_chars
+    candidates_by_priority = [
+        index
+        for index in sorted(p1_indices)
+        if index not in selected and index not in device_only_indices and not boilerplate_flags[index]
+    ]
+    for index in candidates_by_priority:
+        element_chars = len(source_context[index].text)
+        if selected_chars + element_chars > int(budget_chars):
+            continue
+        selected.add(index)
+        selected_chars += element_chars
+
+    ranked_p2 = sorted(
+        (
+            (-score, index)
+            for index, score in p2_scores.items()
+            if index not in selected
+            and index not in device_only_indices
+            and not boilerplate_flags[index]
+        ),
+    )
+    for _negative_score, index in ranked_p2:
+        element_chars = len(source_context[index].text)
+        if selected_chars + element_chars > int(budget_chars):
+            continue
+        selected.add(index)
+        selected_chars += element_chars
+
+    projected = [source_context[index] for index in sorted(selected)]
+    source_chars = sum(len(element.text) for element in source_context)
+    projection_stats = {
+        "context_projection_version": CONTEXT_PROJECTION_VERSION,
+        "context_budget_chars": int(budget_chars),
+        "context_projection_bounded": True,
+        "source_document_element_count": len(source_context),
+        "projected_context_element_count": len(projected),
+        "source_document_character_count": source_chars,
+        "projected_context_character_count": selected_chars,
+        "context_projection_ratio": round(selected_chars / source_chars, 6) if source_chars else 0.0,
+        "boilerplate_elements_excluded": sum(
+            1 for index, excluded in enumerate(boilerplate_flags) if excluded and index not in selected
+        ),
+        "device_only_elements_excluded": sum(
+            1 for index in device_only_indices if index not in selected
+        ),
+        "table_projection_mode": "compact_headers_rows",
+        "packet_count": len(packet_list),
+        "table_count": sum(1 for element in source_context if element.element_type == "table"),
+    }
+    return projected, projection_stats
+
+
+def _packet_context_matches(
+    packet: OledSemanticMappingPacket,
+    context: list[OledPaperContextElement],
+) -> list[int]:
+    packet_type = packet.source_candidate_type.value
+    packet_page = _page_from_evidence_anchor(packet.source_evidence_anchor)
+    raw_text = _normalized_context_text(packet.raw_text)
+    caption = _normalized_context_text(packet.caption)
+    scored: list[tuple[int, int]] = []
+    for index, element in enumerate(context):
+        score = 0
+        if packet_page is not None and element.page == packet_page:
+            score += 8
+        if packet_type == "table" and element.element_type == "table":
+            score += 8
+        elif packet_type != "table" and element.element_type != "table":
+            score += 4
+        normalized_element = _normalized_context_text(element.text)
+        if packet_type == "table":
+            if caption and caption in normalized_element:
+                score += 100
+            for row in packet.table_rows[:2]:
+                if any(
+                    value and _normalized_context_text(value) in normalized_element
+                    for value in row.values()
+                ):
+                    score += 5
+        elif raw_text and (
+            raw_text == normalized_element
+            or raw_text in normalized_element
+            or normalized_element in raw_text
+        ):
+            score += 100
+        if score > 0:
+            scored.append((score, index))
+    if not scored:
+        return []
+    best_score = max(score for score, _index in scored)
+    matches = [index for score, index in scored if score == best_score]
+    if packet_type == "table":
+        return [index for index in matches if context[index].element_type == "table"] or matches[:1]
+    return matches[:1]
+
+
+def _packet_is_device_only(
+    packet: OledSemanticMappingPacket,
+    device_only_hashes: set[str],
+) -> bool:
+    if packet.source_candidate_hash in device_only_hashes:
+        return True
+    allowed_layers = {str(layer).strip().lower() for layer in packet.allowed_layers if str(layer).strip()}
+    return bool(allowed_layers) and not allowed_layers.intersection(_DATASET_CONTEXT_LAYERS)
+
+
+def _device_only_source_hashes(candidates: Iterable[OledSchemaCandidate]) -> set[str]:
+    grouped: dict[str, list[OledSchemaCandidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.source_candidate_hash, []).append(candidate)
+    device_only: set[str] = set()
+    for source_hash, source_candidates in grouped.items():
+        if any(
+            candidate.target_layer is not None
+            and candidate.target_layer.value not in _DATASET_CONTEXT_LAYERS
+            for candidate in source_candidates
+        ) and not any(
+            candidate.target_layer is not None
+            and candidate.target_layer.value in _DATASET_CONTEXT_LAYERS
+            for candidate in source_candidates
+        ):
+            device_only.add(source_hash)
+        if any(candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE for candidate in source_candidates):
+            device_only.add(source_hash)
+    return device_only
+
+
+def _boilerplate_context_flags(context: list[OledPaperContextElement]) -> list[bool]:
+    flags: list[bool] = []
+    administrative_section = False
+    for element in context:
+        normalized_type = str(element.element_type or "").strip().lower()
+        normalized_text = _normalize_heading_text(element.text)
+        is_admin_heading = normalized_text in _ADMIN_SECTION_HEADINGS
+        if normalized_text in _SCIENTIFIC_SECTION_HEADINGS:
+            administrative_section = False
+        if is_admin_heading:
+            administrative_section = True
+        immediate_boilerplate = normalized_type in {"header", "footer", "page_number", "page-number"}
+        # ParsedDocument currently stores tables separately and the normalized
+        # context builder appends them after text elements.  Do not let a
+        # trailing References section incorrectly mark those source tables as
+        # administrative merely because of container order.
+        flags.append(
+            immediate_boilerplate
+            or (administrative_section and normalized_type != "table")
+        )
+    return flags
+
+
+def _is_known_section_heading(text: str) -> bool:
+    normalized = _normalize_heading_text(text)
+    return normalized in _ADMIN_SECTION_HEADINGS or normalized in _SCIENTIFIC_SECTION_HEADINGS
+
+
+def _normalize_heading_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower()).strip(" .:;-")
+
+
+def _normalized_context_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _page_from_evidence_anchor(anchor: str) -> int | None:
+    match = re.search(r"(?:^|:)p(\d+)(?:[:]|$)", str(anchor or ""))
+    return int(match.group(1)) if match else None
+
+
+def _packet_context_tokens(packet: OledSemanticMappingPacket) -> set[str]:
+    values: list[str] = [
+        packet.raw_text or "",
+        packet.caption or "",
+        packet.nearby_text_before or "",
+        packet.nearby_text_after or "",
+        *packet.table_headers,
+        *(value for row in packet.table_rows for value in row.values()),
+    ]
+    tokens = {
+        token.lower()
+        for value in values
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", str(value))
+    }
+    return {token for token in tokens if token not in _CONTEXT_STOPWORDS}
+
+
+def _context_token_overlap(tokens: set[str], text: str) -> int:
+    if not tokens:
+        return 0
+    normalized = _normalized_context_text(text)
+    return sum(1 for token in tokens if token in normalized)
+
+
 def build_oled_llm_paper_mapping_request(
     packets: Iterable[OledSemanticMappingPacket],
     *,
@@ -400,19 +742,27 @@ def build_oled_llm_paper_mapping_request(
     if not packet_list:
         raise ValueError("at least one semantic mapping packet is required")
     context = build_oled_paper_context_elements(parsed_document)
+    deterministic_schema_candidates = (
+        deterministic_report.schema_candidates if deterministic_report else []
+    )
+    _projected_context, projection_stats = project_oled_context_for_mapping(
+        context,
+        packet_list,
+        deterministic_candidates=deterministic_schema_candidates,
+    )
     paper_id = packet_list[0].paper_id
     return OledLLMPaperMappingRequest(
         paper_id=paper_id,
         packets=packet_list,
         document_context=context,
         ontology=DEFAULT_OLED_PROPERTY_ONTOLOGY.list_properties(),
-        deterministic_schema_candidates=(deterministic_report.schema_candidates if deterministic_report else []),
+        deterministic_schema_candidates=deterministic_schema_candidates,
         deterministic_findings=(deterministic_report.findings if deterministic_report else []),
         instructions=list(_CONTEXT_MAPPING_INSTRUCTIONS),
         metadata={
+            **projection_stats,
             "document_context_element_count": len(context),
             "document_context_character_count": sum(len(element.text) for element in context),
-            "full_context_supplied_without_automatic_truncation": True,
             "reported_value_contract_required": True,
             "reported_value_contract_version": "preserve_reported_numeric_lexeme.v1",
             "comparison_context_contract_required": True,
@@ -433,7 +783,15 @@ def run_oled_llm_context_mapping(
 ) -> OledLLMContextMappingResult:
     request_digest = request.request_digest
     invocation: LLMInvocationRecord | None = None
-    messages = _mapping_messages(request)
+    try:
+        messages = _mapping_messages(request)
+    except OledContextProjectionError as exc:
+        return _failed_result(
+            request,
+            status="provider_error",
+            code=exc.code,
+            message=str(exc),
+        )
     response: OledLLMPaperMappingResponse | None = None
     schema_candidates: list[OledSchemaCandidate] = []
     for attempt in range(_MAX_MAPPING_VALIDATION_ATTEMPTS):
@@ -518,6 +876,7 @@ def run_oled_llm_context_mapping(
         packet_results=response.packet_results,
         llm_invocation=invocation,
         metadata={
+            **_projection_result_metadata(request),
             "llm_call_attempted": True,
             "llm_response_received": True,
             "llm_called": True,
@@ -867,12 +1226,65 @@ def _materialize_schema_candidates(
     return output
 
 
+def _packet_payload_for_llm(
+    packet: OledSemanticMappingPacket,
+    projected_context: list[OledPaperContextElement],
+) -> dict[str, Any]:
+    payload = packet.model_dump(
+        mode="json",
+        exclude={"instructions", "expected_output_schema"},
+    )
+    if packet.source_candidate_type.value == "table":
+        headers = list(packet.table_headers)
+        payload["table_rows"] = [
+            [str(row.get(header) or "") for header in headers]
+            for row in packet.table_rows
+        ]
+        payload["table_row_values_aligned_to_headers"] = True
+        payload["raw_text"] = ""
+    elif _packet_has_exact_context_match(packet, projected_context):
+        # The exact source text is already present as a P0 context element.
+        # Avoid sending it twice while keeping the packet's source hash and
+        # evidence anchor intact.
+        payload["raw_text"] = ""
+    return payload
+
+
+def _packet_has_exact_context_match(
+    packet: OledSemanticMappingPacket,
+    projected_context: list[OledPaperContextElement],
+) -> bool:
+    raw_text = _normalized_context_text(packet.raw_text)
+    if not raw_text:
+        return False
+    return any(
+        raw_text == normalized or raw_text in normalized or normalized in raw_text
+        for normalized in (_normalized_context_text(element.text) for element in projected_context)
+    )
+
+
 def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str]]:
+    projected_context, _projection_stats = project_oled_context_for_mapping(
+        request.document_context,
+        request.packets,
+        deterministic_candidates=request.deterministic_schema_candidates,
+    )
+    request_payload = request.model_dump(
+        mode="json",
+        exclude={"document_context", "packets"},
+    )
+    request_payload["document_context"] = [
+        element.model_dump(mode="json") for element in projected_context
+    ]
+    request_payload["packets"] = [
+        _packet_payload_for_llm(packet, projected_context)
+        for packet in request.packets
+    ]
     payload = {
-        "task": "Propose evidence-bound OLED schema mappings using the full supplied ParsedDocument context.",
+        "task": "Propose evidence-bound OLED schema mappings using the deterministic bounded context projection.",
         "response_schema": OledLLMPaperMappingResponse.model_json_schema(),
         "request_digest": request.request_digest,
-        "request": request.model_dump(mode="json"),
+        "request": request_payload,
     }
     return [
         {
@@ -881,6 +1293,10 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
                 "Return JSON only. You are a review-only OLED literature semantic mapper. "
                 "Never invent values, never execute or propose executable code, never create gold records, "
                 "and never admit device-only content into the molecular/property dataset. "
+                "The document_context supplied here is a deterministic bounded projection of a full "
+                "ParsedDocument. Treat packet hashes, anchors, row indices, column names, and cell values "
+                "as source references; Molly validates them against the full source-bound request after "
+                "your response. Do not infer that omitted context is absent from the paper. "
                 "Use an ontology_extension_proposal for an unsupported property instead of forcing a known "
                 "property_id. "
                 "Use needs_ontology_review when evidence is complete but the ontology lacks the property. "
@@ -981,6 +1397,7 @@ def _failed_result(
         findings=[OledLLMContextMappingFinding(code=code, message=message)],
         llm_invocation=invocation,
         metadata={
+            **_projection_result_metadata(request),
             "llm_call_attempted": True,
             "llm_response_received": invocation is not None,
             "llm_called": True,
@@ -994,7 +1411,28 @@ def _failed_result(
     )
 
 
+def _projection_result_metadata(request: OledLLMPaperMappingRequest) -> dict[str, Any]:
+    keys = (
+        "context_projection_version",
+        "context_budget_chars",
+        "context_projection_bounded",
+        "source_document_element_count",
+        "projected_context_element_count",
+        "source_document_character_count",
+        "projected_context_character_count",
+        "context_projection_ratio",
+        "boilerplate_elements_excluded",
+        "device_only_elements_excluded",
+        "table_projection_mode",
+        "packet_count",
+        "table_count",
+    )
+    return {key: request.metadata[key] for key in keys if key in request.metadata}
+
+
 def _element_text(element: Mapping[str, Any]) -> str:
+    if _is_table_element(element):
+        return _compact_table_text(element)
     pieces: list[str] = []
     for key in ("text", "markdown", "caption"):
         value = str(element.get(key) or "").strip()
@@ -1007,6 +1445,39 @@ def _element_text(element: Mapping[str, Any]) -> str:
             if rendered not in pieces:
                 pieces.append(rendered)
     return "\n\n".join(pieces)
+
+
+def _is_table_element(element: Mapping[str, Any]) -> bool:
+    element_type = str(element.get("type") or element.get("element_type") or "").strip().lower()
+    return element_type == "table" or any(
+        key in element for key in ("table_id", "table_headers", "table_rows")
+    )
+
+
+def _compact_table_text(element: Mapping[str, Any]) -> str:
+    headers_raw = element.get("headers") or element.get("table_headers") or []
+    headers = [str(header) for header in headers_raw] if isinstance(headers_raw, list) else []
+    rows_raw = element.get("rows") or element.get("table_rows") or []
+    rows: list[list[str]] = []
+    if isinstance(rows_raw, list):
+        if not headers and rows_raw and isinstance(rows_raw[0], Mapping):
+            headers = [str(key) for key in rows_raw[0].keys()]
+        for row in rows_raw:
+            if isinstance(row, Mapping):
+                rows.append([str(row.get(header) or "") for header in headers])
+            elif isinstance(row, (list, tuple)):
+                rows.append([str(value) for value in row])
+    footnotes_raw = element.get("footnotes") or element.get("table_footnotes") or []
+    footnotes = [str(footnote) for footnote in footnotes_raw] if isinstance(footnotes_raw, list) else []
+    compact = {
+        "table_id": str(element.get("table_id") or element.get("element_id") or ""),
+        "page": _page_number(element),
+        "caption": str(element.get("caption") or ""),
+        "headers": headers,
+        "rows": rows,
+        "footnotes": footnotes,
+    }
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
 
 
 def _page_number(value: Mapping[str, Any], *, fallback: int | None = None) -> int | None:
@@ -1053,7 +1524,7 @@ def _canonical_json_value(value: Any) -> Any:
 
 
 _CONTEXT_MAPPING_INSTRUCTIONS = (
-    "Read the entire supplied ParsedDocument context before mapping packets.",
+    "Read the supplied deterministic bounded context projection before mapping packets; omitted context is not evidence of absence.",
     "Use captions, headers, rows, footnotes, and nearby/full-text explanations together.",
     "Do not invent compound identities, values, units, conditions, or source references.",
     "Do not force unsupported properties into the existing ontology; propose an ontology extension instead.",
@@ -1095,7 +1566,10 @@ def _required_comparison_context_fields(definition: OledPropertyDefinition) -> l
 
 
 __all__ = [
+    "CONTEXT_PROJECTION_BUDGET_CHARS",
+    "CONTEXT_PROJECTION_VERSION",
     "PROMPT_VERSION",
+    "OledContextProjectionError",
     "OledLLMContextMappingFinding",
     "OledLLMContextMappingResult",
     "OledLLMPacketMappingProposal",
@@ -1106,5 +1580,6 @@ __all__ = [
     "OledPaperContextElement",
     "build_oled_llm_paper_mapping_request",
     "build_oled_paper_context_elements",
+    "project_oled_context_for_mapping",
     "run_oled_llm_context_mapping",
 ]

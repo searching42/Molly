@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
@@ -8,9 +10,11 @@ from ai4s_agent.domains import (
     run_oled_llm_context_mapping as package_run_oled_llm_context_mapping,
 )
 from ai4s_agent.domains.oled_llm_context_mapping import (
+    OledContextProjectionError,
     PROMPT_VERSION,
     build_oled_llm_paper_mapping_request,
     build_oled_paper_context_elements,
+    project_oled_context_for_mapping,
     run_oled_llm_context_mapping,
 )
 from ai4s_agent.domains.oled_mineru_candidates import OledMineruCandidateType
@@ -202,7 +206,11 @@ def test_build_context_request_preserves_full_document_elements_without_file_io(
     assert elements[2].page == 3
     assert request.paper_id == "paper-context"
     assert request.dataset_scope == "molecule_interaction_properties_only"
-    assert request.metadata["full_context_supplied_without_automatic_truncation"] is True
+    assert request.metadata["context_projection_version"] == "oled.context_projection.v1"
+    assert request.metadata["context_projection_bounded"] is True
+    assert request.metadata["source_document_element_count"] == len(request.document_context)
+    assert request.metadata["projected_context_element_count"] <= len(request.document_context)
+    assert "full_context_supplied_without_automatic_truncation" not in request.metadata
     assert request.metadata["external_llm_called"] is False
     assert request.request_digest == request.request_digest
     reloaded_request = type(request).model_validate_json(request.model_dump_json())
@@ -216,6 +224,210 @@ def test_context_request_rejects_a_document_without_text_bearing_elements() -> N
             [_packet()],
             parsed_document={"paper_id": "paper-context", "elements": []},
         )
+
+
+def test_table_context_projection_emits_headers_once_and_preserves_cells() -> None:
+    parsed = _parsed_document()
+    parsed["tables"][0]["rows"] = [
+        {"Emitter": "Molecule-A", "PLQY (%)": "82"},
+        {"Emitter": "Molecule-B", "PLQY (%)": "99"},
+    ]
+
+    table = next(
+        element
+        for element in build_oled_paper_context_elements(parsed)
+        if element.element_type == "table"
+    )
+    compact = json.loads(table.text)
+
+    assert compact["headers"] == ["Emitter", "PLQY (%)"]
+    assert compact["rows"] == [["Molecule-A", "82"], ["Molecule-B", "99"]]
+    assert "Measured in a 10 wt% doped film." in compact["footnotes"]
+    assert table.text.count("Emitter") == 1
+    assert table.text.count("PLQY (%)") == 1
+
+
+def test_context_projection_excludes_administrative_boilerplate() -> None:
+    parsed = _parsed_document()
+    parsed["elements"] = [
+        {
+            "element_id": "scientific",
+            "page": 1,
+            "type": "paragraph",
+            "text": "Molecule-A PLQY was measured in a doped film.",
+            "source_hash": "scientific-source",
+        },
+        {
+            "element_id": "header",
+            "page": 1,
+            "type": "header",
+            "text": "Article",
+            "source_hash": "header-source",
+        },
+        {
+            "element_id": "references-heading",
+            "page": 2,
+            "type": "paragraph",
+            "text": "References",
+            "source_hash": "references-heading-source",
+        },
+        {
+            "element_id": "reference-1",
+            "page": 2,
+            "type": "list",
+            "text": "1. An unrelated reference.",
+            "source_hash": "reference-source",
+        },
+        {
+            "element_id": "ack-heading",
+            "page": 3,
+            "type": "paragraph",
+            "text": "Acknowledgements",
+            "source_hash": "ack-heading-source",
+        },
+        {
+            "element_id": "ack-text",
+            "page": 3,
+            "type": "paragraph",
+            "text": "Funding information.",
+            "source_hash": "ack-source",
+        },
+    ]
+    projected, stats = project_oled_context_for_mapping(
+        build_oled_paper_context_elements(parsed),
+        [_packet()],
+    )
+    projected_text = "\n".join(element.text for element in projected)
+
+    assert "Article" not in projected_text
+    assert "unrelated reference" not in projected_text
+    assert "Funding information" not in projected_text
+    assert "Molecule-A PLQY" in projected_text
+    assert stats["boilerplate_elements_excluded"] >= 4
+
+
+def test_context_projection_preserves_relevant_evidence_and_full_source_binding() -> None:
+    parsed = _parsed_document()
+    parsed["tables"][0]["footnotes"] = [
+        "Measured in a 20 wt% DPEPO doped film under nitrogen."
+    ]
+    full_context = build_oled_paper_context_elements(parsed)
+    projected, _stats = project_oled_context_for_mapping(full_context, [_packet()])
+
+    full_refs = {
+        (element.source_hash, element.element_id, element.element_type)
+        for element in full_context
+    }
+    projected_refs = {
+        (element.source_hash, element.element_id, element.element_type)
+        for element in projected
+    }
+    projected_text = "\n".join(element.text for element in projected)
+
+    assert projected_refs.issubset(full_refs)
+    assert "20 wt% DPEPO doped film" in projected_text
+    assert "Molecule-A" in projected_text
+    assert "PLQY (%)" in projected_text
+
+
+def test_device_only_packet_context_is_not_added_to_projection() -> None:
+    parsed = {
+        "paper_id": "paper-context",
+        "elements": [
+            {
+                "element_id": "device-source",
+                "page": 4,
+                "type": "paragraph",
+                "text": "Device-only EQE was 20%.",
+                "source_hash": "device-source-hash",
+            }
+        ],
+    }
+    packet = _packet().model_copy(
+        update={
+            "packet_id": "packet:device",
+            "source_candidate_hash": "device-source-hash",
+            "source_evidence_anchor": "paper-context:p4:b0:text",
+            "source_candidate_type": OledMineruCandidateType.TEXT,
+            "raw_text": "Device-only EQE was 20%.",
+            "allowed_layers": ["device"],
+        }
+    )
+    projected, stats = project_oled_context_for_mapping(
+        build_oled_paper_context_elements(parsed),
+        [packet],
+    )
+
+    assert projected == []
+    assert stats["device_only_elements_excluded"] == 1
+
+
+def test_context_projection_is_deterministic_and_never_slices_p0_evidence() -> None:
+    parsed = _parsed_document()
+    context = build_oled_paper_context_elements(parsed)
+    first, first_stats = project_oled_context_for_mapping(context, [_packet()])
+    second, second_stats = project_oled_context_for_mapping(context, [_packet()])
+
+    assert [item.model_dump(mode="json") for item in first] == [
+        item.model_dump(mode="json") for item in second
+    ]
+    assert first_stats == second_stats
+    assert all(len(item.text) > 0 for item in first)
+
+    long_parsed = {
+        "paper_id": "paper-context",
+        "elements": [
+            {
+                "element_id": "long-source",
+                "page": 1,
+                "type": "paragraph",
+                "text": "x" * 200,
+                "source_hash": "long-source-hash",
+            }
+        ],
+    }
+    long_packet = _packet().model_copy(
+        update={
+            "source_candidate_hash": "long-source-hash",
+            "source_evidence_anchor": "paper-context:p1:b0:text",
+            "source_candidate_type": OledMineruCandidateType.TEXT,
+            "raw_text": "x" * 200,
+        }
+    )
+    with pytest.raises(OledContextProjectionError, match="context_budget_exceeded"):
+        project_oled_context_for_mapping(
+            build_oled_paper_context_elements(long_parsed),
+            [long_packet],
+            budget_chars=50,
+        )
+
+
+def test_llm_packet_source_text_is_retained_without_an_exact_projection_match() -> None:
+    parsed = {
+        "paper_id": "paper-context",
+        "elements": [
+            {
+                "element_id": "page-fallback",
+                "page": 1,
+                "type": "paragraph",
+                "text": "A different source paragraph.",
+                "source_hash": "different-source-hash",
+            }
+        ],
+    }
+    packet = _packet().model_copy(
+        update={
+            "source_evidence_anchor": "paper-context:p1:b0:text",
+            "source_candidate_type": OledMineruCandidateType.TEXT,
+            "raw_text": "The packet source is not this page fallback.",
+        }
+    )
+    request = build_oled_llm_paper_mapping_request([packet], parsed_document=parsed)
+
+    from ai4s_agent.domains.oled_llm_context_mapping import _mapping_messages
+
+    payload = json.loads(_mapping_messages(request)[1]["content"])
+    assert payload["request"]["packets"][0]["raw_text"] == packet.raw_text
 
 
 def test_valid_llm_mapping_is_materialized_as_review_only_needs_llm_candidate() -> None:
