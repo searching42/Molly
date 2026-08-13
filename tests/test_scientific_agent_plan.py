@@ -46,6 +46,8 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
     build_scientific_tool_catalog,
+    build_scientific_agent_plan_messages,
+    normalize_agent_execution_plan_response,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -296,6 +298,44 @@ def _response(tool_id: str = "render_report", **overrides: object) -> AgentExecu
     }
     payload.update(overrides)
     return AgentExecutionPlanLLMResponse.model_validate(payload)
+
+
+def test_planner_response_normalization_accepts_canonical_root_and_one_known_wrapper() -> None:
+    canonical = _response().model_dump(mode="json")
+
+    assert normalize_agent_execution_plan_response(canonical).model_dump(mode="json") == canonical
+    assert normalize_agent_execution_plan_response({"response": canonical}).model_dump(
+        mode="json"
+    ) == canonical
+
+
+def test_planner_response_normalization_rejects_incomplete_or_ambiguous_wrappers() -> None:
+    canonical = _response().model_dump(mode="json")
+    missing_required = dict(canonical)
+    missing_required.pop("requested_tool_ids")
+
+    with pytest.raises(ValidationError):
+        normalize_agent_execution_plan_response({"response": missing_required})
+
+    for payload in (
+        {"response": {"response": canonical}},
+        {"response": canonical, "metadata": {}},
+        {"plan": canonical},
+    ):
+        with pytest.raises(ValidationError):
+            normalize_agent_execution_plan_response(payload)
+
+
+def test_planner_prompt_requires_canonical_root_without_legacy_fields(tmp_path: Path) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    messages = build_scientific_agent_plan_messages(observation=_observation(storage))
+    system = messages[0]["content"]
+
+    assert "AgentExecutionPlanLLMResponse object directly at the JSON root" in system
+    assert "requested_tool_ids" in system
+    assert "selected_input_artifact_ids" in system
+    assert "Do not wrap it in plan, response, result, data, output" in system
+    assert "proposed_tasks" in system
 
 
 def _invocation(observation, response: AgentExecutionPlanLLMResponse) -> AgentLLMInvocationMetadata:

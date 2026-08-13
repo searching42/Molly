@@ -79,6 +79,7 @@ _PROPOSAL_DATA_FILES = (
     "verification.json",
 )
 _PROPOSAL_FILES = (*_PROPOSAL_DATA_FILES, "publication_manifest.json")
+_OBSERVED_PLANNER_WRAPPER_KEY = "response"
 
 
 class ScientificAgentPlanError(ValueError):
@@ -99,6 +100,30 @@ class ScientificAgentPlanRecoveryRequired(ScientificAgentPlanError):
     def __init__(self, state: str) -> None:
         self.state = state
         super().__init__(f"planning request requires typed recovery from state: {state}")
+
+
+def normalize_agent_execution_plan_response(
+    payload: Mapping[str, Any],
+) -> AgentExecutionPlanLLMResponse:
+    """Validate the canonical planner response or one known envelope.
+
+    The canonical response remains the only planning schema.  The envelope
+    branch exists solely for the observed provider serialization shape and is
+    deliberately one level deep; legacy planning objects are not translated.
+    """
+
+    try:
+        return AgentExecutionPlanLLMResponse.model_validate(payload)
+    except ValueError as direct_error:
+        if (
+            not isinstance(payload, Mapping)
+            or set(payload) != {_OBSERVED_PLANNER_WRAPPER_KEY}
+        ):
+            raise direct_error
+        wrapped = payload[_OBSERVED_PLANNER_WRAPPER_KEY]
+        if not isinstance(wrapped, Mapping):
+            raise direct_error
+        return AgentExecutionPlanLLMResponse.model_validate(wrapped)
 
 
 def _existing_project_dir(storage: Any, project_id: str) -> Path:
@@ -1732,7 +1757,16 @@ def build_scientific_agent_plan_messages(
                 "stop conditions, success criteria, concise rationales, assumptions, "
                 "and questions. Never return approval, execution, dispatch, status, "
                 "adapter, command, path, SSH, worker, or credential fields. The "
-                "proposal is review-only and will not start work."
+                "proposal is review-only and will not start work. Return the "
+                "AgentExecutionPlanLLMResponse object directly at the JSON root. "
+                "The root object must directly contain the canonical fields "
+                "requested_tool_ids, selected_input_artifact_ids, task_options, "
+                "selected_logical_profile_ids, limits, stop_conditions, "
+                "success_criteria, rationales, assumptions, and questions. Do "
+                "not wrap it in plan, response, result, data, output, or any "
+                "other object. Do not use legacy planning fields such as "
+                "selected_tool_id, proposed_tasks, logical_tools, or "
+                "logical_execution_profiles."
                 + br2_routing_instruction
             ),
         },
@@ -1861,7 +1895,9 @@ class ScientificAgentPlanService:
             latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
             self.proposal_store._fault("after_llm_response")
             try:
-                parsed = AgentExecutionPlanLLMResponse.model_validate(invocation_record.parsed_output)
+                parsed = normalize_agent_execution_plan_response(
+                    invocation_record.parsed_output
+                )
                 invocation = AgentLLMInvocationMetadata(
                     provider=invocation_record.provider,
                     model=invocation_record.model,
@@ -1925,7 +1961,6 @@ class ScientificAgentPlanService:
                             observation=observation
                         ),
                         prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
-                        response_model=AgentExecutionPlanLLMResponse,
                     )
                     llm_span.set_attribute(
                         "response_digest",
@@ -2889,6 +2924,7 @@ __all__ = [
     "AgentExecutionPlanCompiler",
     "PlannerOptionCompiler",
     "build_scientific_agent_plan_messages",
+    "normalize_agent_execution_plan_response",
     "ScientificAgentPlanService",
     "ScientificAgentPlanPublication",
     "ScientificAgentPlanProposalStore",
