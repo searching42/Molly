@@ -58,7 +58,9 @@ from ai4s_agent.schemas import (
 )
 
 
-SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION = "scientific-agent-long-horizon-plan.v1"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1 = "scientific-agent-long-horizon-plan.v1"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2 = "scientific-agent-long-horizon-plan.v2"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION = SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2
 PLANNER_OPTION_COMPILER_VERSION = "scientific-planner-option-compiler.v1"
 SOURCE_BINDING_SCHEMA_VERSION = "agent_plan_source_binding.v1"
 PROPOSAL_VERIFICATION_SCHEMA_VERSION = "agent_plan_proposal_verification.v1"
@@ -124,6 +126,59 @@ def normalize_agent_execution_plan_response(
         if not isinstance(wrapped, Mapping):
             raise direct_error
         return AgentExecutionPlanLLMResponse.model_validate(wrapped)
+
+
+_SCIENTIFIC_AGENT_PLAN_SYSTEM_PROMPT_V1 = (
+    "You are a scientific planning model. Return JSON only matching "
+    "agent_execution_plan_llm_response.v1. You may propose registered "
+    "logical tools, high-level typed options, logical profiles, limits, "
+    "stop conditions, success criteria, concise rationales, assumptions, "
+    "and questions. Never return approval, execution, dispatch, status, "
+    "adapter, command, path, SSH, worker, or credential fields. The "
+    "proposal is review-only and will not start work. Return the "
+    "AgentExecutionPlanLLMResponse object directly at the JSON root. "
+    "The root object must directly contain the canonical fields "
+    "requested_tool_ids, selected_input_artifact_ids, task_options, "
+    "selected_logical_profile_ids, limits, stop_conditions, "
+    "success_criteria, rationales, assumptions, and questions. Do "
+    "not wrap it in plan, response, result, data, output, or any "
+    "other object. Do not use legacy planning fields such as "
+    "selected_tool_id, proposed_tasks, logical_tools, or "
+    "logical_execution_profiles."
+)
+
+
+def _scientific_agent_plan_system_prompt(
+    prompt_version: str,
+    *,
+    is_br2_request: bool,
+) -> str:
+    if prompt_version not in {
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1,
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2,
+    }:
+        raise ValueError(f"unsupported Scientific Agent plan prompt version: {prompt_version}")
+    prompt = _SCIENTIFIC_AGENT_PLAN_SYSTEM_PROMPT_V1
+    if is_br2_request:
+        prompt += (
+            " This is a bounded OLED literature review request. Select exactly the registered "
+            "planner tool `prepare_oled_candidate_raw_dataset` when it is present in the catalog, "
+            "select the server-registered `pdf_corpus` input when it is available, and select "
+            "the available logical execution profile `mineru-v1` for the parser when it is present. The server "
+            "will expand that tool into parse_document -> extract_oled_evidence -> "
+            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. Do not select "
+            "training, generation, prediction, ranking, confirmation, or any other downstream task."
+        )
+        if prompt_version == SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2:
+            prompt += (
+                " For this bounded BR2 literature-review request, do not invent resource or budget "
+                "limits. Set `limits` to `{}` unless the user's explicit constraints contain a "
+                "concrete resource or budget limit. Execution resources are selected by the "
+                "server-owned Resource Authority, not by the Planner. Do not infer GPU count, "
+                "CPU count, walltime, GPU-hours, cost, steps, or record limits from profiles or "
+                "tools, and do not put Resource Authority values into the response."
+            )
+    return prompt
 
 
 def _existing_project_dir(storage: Any, project_id: str) -> Path:
@@ -1692,7 +1747,7 @@ class AgentExecutionPlanCompiler:
             goal=observation.goal_context,
             user_constraints=observation.explicit_constraints,
             planner_backend=invocation.provider,
-            prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
+            prompt_version=invocation.prompt_version,
             observation_id=observation.observation_id,
             observation_digest=observation.observation_digest,
             tool_catalog_digest=observation.tool_catalog.catalog_digest,
@@ -1727,8 +1782,15 @@ class AgentExecutionPlanCompiler:
 def build_scientific_agent_plan_messages(
     *,
     observation: AgentProjectObservation,
+    prompt_version: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the sole LLM input from validated, privacy-safe material."""
+
+    resolved_prompt_version = (
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION
+        if prompt_version is None
+        else prompt_version
+    )
 
     material = {
         "observation": observation.model_dump(mode="json"),
@@ -1736,38 +1798,14 @@ def build_scientific_agent_plan_messages(
         "explicit_constraints": observation.explicit_constraints,
         "tool_catalog": observation.tool_catalog.model_dump(mode="json"),
     }
-    br2_routing_instruction = ""
-    if ConversationAgent.is_br2_contextual_request(observation.goal_context):
-        br2_routing_instruction = (
-            " This is a bounded OLED literature review request. Select exactly the registered "
-            "planner tool `prepare_oled_candidate_raw_dataset` when it is present in the catalog, "
-            "select the server-registered `pdf_corpus` input when it is available, and select "
-            "the available logical execution profile `mineru-v1` for the parser when it is present. The server "
-            "will expand that tool into parse_document -> extract_oled_evidence -> "
-            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. Do not select "
-            "training, generation, prediction, ranking, confirmation, or any other downstream task."
-        )
     return [
         {
             "role": "system",
-            "content": (
-                "You are a scientific planning model. Return JSON only matching "
-                "agent_execution_plan_llm_response.v1. You may propose registered "
-                "logical tools, high-level typed options, logical profiles, limits, "
-                "stop conditions, success criteria, concise rationales, assumptions, "
-                "and questions. Never return approval, execution, dispatch, status, "
-                "adapter, command, path, SSH, worker, or credential fields. The "
-                "proposal is review-only and will not start work. Return the "
-                "AgentExecutionPlanLLMResponse object directly at the JSON root. "
-                "The root object must directly contain the canonical fields "
-                "requested_tool_ids, selected_input_artifact_ids, task_options, "
-                "selected_logical_profile_ids, limits, stop_conditions, "
-                "success_criteria, rationales, assumptions, and questions. Do "
-                "not wrap it in plan, response, result, data, output, or any "
-                "other object. Do not use legacy planning fields such as "
-                "selected_tool_id, proposed_tasks, logical_tools, or "
-                "logical_execution_profiles."
-                + br2_routing_instruction
+            "content": _scientific_agent_plan_system_prompt(
+                resolved_prompt_version,
+                is_br2_request=ConversationAgent.is_br2_contextual_request(
+                    observation.goal_context
+                ),
             ),
         },
         {
@@ -1958,7 +1996,8 @@ class ScientificAgentPlanService:
                 ) as llm_span:
                     invocation = provider.complete_json(
                         messages=build_scientific_agent_plan_messages(
-                            observation=observation
+                            observation=observation,
+                            prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
                         ),
                         prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
                     )
@@ -2912,6 +2951,8 @@ AgentPlanProposalStore = ScientificAgentPlanProposalStore
 
 
 __all__ = [
+    "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1",
+    "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2",
     "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION",
     "PLANNER_OPTION_COMPILER_VERSION",
     "ScientificAgentPlanError",

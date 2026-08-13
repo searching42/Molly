@@ -2021,7 +2021,10 @@ class AgentLLMInvocationMetadata(BaseModel):
 
     provider: str
     model: str = ""
-    prompt_version: Literal["scientific-agent-long-horizon-plan.v1"]
+    prompt_version: Literal[
+        "scientific-agent-long-horizon-plan.v1",
+        "scientific-agent-long-horizon-plan.v2",
+    ]
     response_id: str = ""
     observation_digest: str
     tool_catalog_digest: str
@@ -2146,7 +2149,10 @@ class AgentExecutionPlanProposal(BaseModel):
     goal: str
     user_constraints: list[str] = Field(default_factory=list)
     planner_backend: str
-    prompt_version: Literal["scientific-agent-long-horizon-plan.v1"]
+    prompt_version: Literal[
+        "scientific-agent-long-horizon-plan.v1",
+        "scientific-agent-long-horizon-plan.v2",
+    ]
     observation_id: str
     observation_digest: str
     tool_catalog_digest: str

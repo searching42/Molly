@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from pydantic import BaseModel, ConfigDict, model_validator
+
 from ai4s_agent._utils import now_iso
 from ai4s_agent.execution_agent_store import (
     ExecutionAgentProposalPublication,
@@ -255,6 +257,41 @@ class ExecutionAgentLLMResponseInvalid(ExecutionAgentLLMFailed):
 
 class ExecutionAgentLLMOutcomeUnknown(ExecutionAgentError):
     """A provider call may have completed but no safe checkpoint exists."""
+
+
+class _ExecutionAgentProviderResponseCompat(BaseModel):
+    """Strict transport shape for the one observed provider field alias.
+
+    ``AgentExecutionLLMResponse`` remains the canonical public response.  This
+    private model exists only because the configured provider has been observed
+    to occasionally emit the catalog field name (``tool_id``) as the response
+    field.  It accepts one top-level selector spelling, never both, and never
+    an envelope or extra payload.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    selected_tool_id: str | None = None
+    tool_id: str | None = None
+    decision_summary: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_transport_shape(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            raise ValueError("provider response must be a top-level object")
+        unexpected = set(value).difference(
+            {"selected_tool_id", "tool_id", "decision_summary"}
+        )
+        if unexpected:
+            raise ValueError("provider response contains unexpected fields")
+        return value
+
+    @model_validator(mode="after")
+    def validate_selector_value(self) -> "_ExecutionAgentProviderResponseCompat":
+        if (self.selected_tool_id is None) == (self.tool_id is None):
+            raise ValueError("provider response must contain one non-null selector")
+        return self
 
 
 @dataclass(frozen=True)
@@ -630,7 +667,7 @@ class ExecutionAgentService:
                                     prompt_version=prompt_version,
                                 ),
                                 prompt_version=prompt_version,
-                                response_model=AgentExecutionLLMResponse,
+                                response_model=_ExecutionAgentProviderResponseCompat,
                             )
                     except LLMResponseValidationError as exc:
                         self.store.write_marker(
@@ -1830,24 +1867,47 @@ class ExecutionAgentService:
         catalog: AgentExecutionToolCatalog,
     ) -> AgentExecutionLLMResponse:
         try:
-            parsed = AgentExecutionLLMResponse.model_validate(invocation.parsed_output)
+            parsed_transport = _ExecutionAgentProviderResponseCompat.model_validate(
+                invocation.parsed_output
+            )
+            raw_object = ExecutionAgentService._exact_raw_response_object(
+                invocation.raw_response
+            )
+            ExecutionAgentService._assert_exact_transport_selector_shape(raw_object)
+            raw_transport = _ExecutionAgentProviderResponseCompat.model_validate(
+                raw_object
+            )
         except ValueError as exc:
             raise ExecutionAgentLLMResponseInvalid(
                 "execution_agent_llm_response_invalid"
             ) from exc
-        raw_object = ExecutionAgentService._exact_raw_response_object(
-            invocation.raw_response
+
+        parsed_transport_material = ExecutionAgentService._transport_response_material(
+            parsed_transport
         )
-        try:
-            exact = AgentExecutionLLMResponse.model_validate(raw_object)
-        except ValueError as exc:
-            raise ExecutionAgentLLMResponseInvalid(
-                "execution_agent_llm_response_invalid"
-            ) from exc
-        if exact.model_dump(mode="json") != parsed.model_dump(mode="json"):
+        raw_transport_material = ExecutionAgentService._transport_response_material(
+            raw_transport
+        )
+        if parsed_transport_material != raw_transport_material:
             raise ExecutionAgentLLMResponseInvalid(
                 "execution_agent_llm_response_invalid"
             )
+        selected_tool_id = (
+            parsed_transport.selected_tool_id
+            if parsed_transport.selected_tool_id is not None
+            else parsed_transport.tool_id
+        )
+        try:
+            parsed = AgentExecutionLLMResponse.model_validate(
+                {
+                    "selected_tool_id": selected_tool_id,
+                    "decision_summary": parsed_transport.decision_summary,
+                }
+            )
+        except ValueError as exc:
+            raise ExecutionAgentLLMResponseInvalid(
+                "execution_agent_llm_response_invalid"
+            ) from exc
         if parsed.selected_tool_id not in {item.tool_id for item in catalog.tools}:
             raise ExecutionAgentLLMResponseInvalid(
                 "execution_agent_llm_response_invalid"
@@ -1857,6 +1917,42 @@ class ExecutionAgentService:
                 "execution_agent_llm_response_invalid"
             )
         return parsed
+
+    @staticmethod
+    def _transport_response_material(
+        response: _ExecutionAgentProviderResponseCompat,
+    ) -> dict[str, str]:
+        selected_tool_id = (
+            response.selected_tool_id
+            if response.selected_tool_id is not None
+            else response.tool_id
+        )
+        selector_field = (
+            "selected_tool_id"
+            if response.selected_tool_id is not None
+            else "tool_id"
+        )
+        if selected_tool_id is None:
+            raise ExecutionAgentLLMResponseInvalid(
+                "execution_agent_llm_response_invalid"
+            )
+        return {
+            "selector_field": selector_field,
+            "selected_tool_id": selected_tool_id,
+            "decision_summary": response.decision_summary,
+        }
+
+    @staticmethod
+    def _assert_exact_transport_selector_shape(payload: Mapping[str, Any]) -> None:
+        selector_fields = [
+            field
+            for field in ("selected_tool_id", "tool_id")
+            if field in payload
+        ]
+        if len(selector_fields) != 1:
+            raise ExecutionAgentLLMResponseInvalid(
+                "execution_agent_llm_response_invalid"
+            )
 
     @staticmethod
     def _exact_raw_response_object(raw: Any) -> dict[str, Any]:

@@ -651,7 +651,7 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
         "sha256:27c505c871e7a22b5ce0892d34ee7b8c8370c1e92081a932946f37fe17e82f9a"
     )
     assert decision.decision_digest == (
-        "sha256:f63cf9315870ee2bcca963ef1ccea8ca435c4c015c06b75c10c65d32b40ec9bd"
+        "sha256:4edf44be41708e8f946399b2c4c4b24335c5e15365f97f22cb909d799277be3d"
     )
 
 
@@ -714,7 +714,7 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
     )
     assert legacy_review.decision_digest == (
-        "sha256:949f874324cf3e873e62581f66c7fb58c51f8208069ffe5673bcb301d289bfb4"
+        "sha256:e59312c330c187474a40e3dacd6076ce010ad7461f1be3fed505c4c5d30b5c06"
     )
 
     request = _request(proposal, client_request_id="pr-bm-v1-authority")
@@ -765,10 +765,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
     service.control_store.publish_start_intent(start_intent)
 
     assert authorization.authorization_digest == (
-        "sha256:56e972a9857a41013647217e418269a8e302b5dff79355d525d2ed053dfb181c"
+        "sha256:302bbb5439a794051d0938f6c31fafc8c4e370dc02fe4d8bad04fe1d40d7a74b"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:89bbb6e97f02e10d7c63b9c95f644fa5c6f68bf0134c1b02556389b8d88faa73"
+        "sha256:ba0473cda6418d5aee871254c1bcbb79a44ffc84578ef87c43024825f2a15c8d"
     )
 
     def replacement_adapter(payload):

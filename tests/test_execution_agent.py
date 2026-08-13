@@ -430,8 +430,9 @@ def test_provider_metadata_rejection_is_checkpointed_and_never_recalled(
         ),
         CountingStubProvider(
             response={
-                "tool_id": "agent.pause_current.v1",
+                "selected_tool_id": "agent.pause_current.v1",
                 "decision_summary": "Pause this bounded turn.",
+                "tool_id": "agent.pause_current.v1",
             }
         ),
         CountingStubProvider(
@@ -499,6 +500,31 @@ def test_invalid_llm_output_never_publishes_proposal(tmp_path, provider) -> None
         )
     proposal_root = storage.project_dir("project-1") / "agent_execution_agent_proposals"
     assert not proposal_root.exists() or list(proposal_root.iterdir()) == []
+
+
+def test_observed_tool_id_transport_alias_normalizes_to_canonical_response(tmp_path) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="observed-tool-id-transport-alias",
+        ),
+        provider=CountingStubProvider(
+            response={
+                "tool_id": "agent.pause_current.v1",
+                "decision_summary": "Pause this bounded turn.",
+            }
+        ),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert result.publication.proposal.selected_tool_id == "agent.pause_current.v1"
+    assert result.publication.proposal.parsed_llm_response.selected_tool_id == (
+        "agent.pause_current.v1"
+    )
 
 
 def test_response_checkpoint_recovers_without_second_llm_call(tmp_path) -> None:
