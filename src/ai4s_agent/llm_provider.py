@@ -312,12 +312,14 @@ class OpenAICompatibleProvider:
             "model": self.config.model or "default",
             "messages": messages,
         }
-        if _endpoint_prefers_json_object(self.config.endpoint) and (
-            response_model is not None or response_schema is not None
-        ):
+        local_json_validation = (
+            self.config.capabilities.structured_output_mode
+            == "json_object_local_validation"
+        )
+        if local_json_validation and json_mode:
             payload["temperature"] = 0
         if response_model is not None:
-            if _endpoint_prefers_json_object(self.config.endpoint):
+            if local_json_validation:
                 payload["response_format"] = {"type": "json_object"}
             else:
                 payload["response_format"] = _json_schema_response_format(
@@ -325,7 +327,7 @@ class OpenAICompatibleProvider:
                     schema=response_model.model_json_schema(),
                 )
         elif response_schema is not None:
-            if _endpoint_prefers_json_object(self.config.endpoint):
+            if local_json_validation:
                 payload["response_format"] = {"type": "json_object"}
             else:
                 payload["response_format"] = _json_schema_response_format(
@@ -582,13 +584,6 @@ def _json_schema_response_format(*, name: str, schema: dict[str, Any]) -> dict[s
             "schema": schema,
         },
     }
-
-
-def _endpoint_prefers_json_object(endpoint: str) -> bool:
-    """Use the interoperable JSON mode for DeepSeek's OpenAI-compatible API."""
-
-    hostname = str(urlparse(endpoint).hostname or "").strip().lower()
-    return hostname == "api.deepseek.com" or hostname.endswith(".api.deepseek.com")
 
 
 def _response_format_is_unavailable(response: httpx.Response) -> bool:

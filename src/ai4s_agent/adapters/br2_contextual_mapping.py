@@ -30,11 +30,16 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     build_oled_semantic_mapping_packets,
     map_oled_mineru_candidates_to_schema_candidates,
 )
-from ai4s_agent.llm_provider import LLMProviderError, create_llm_provider
-from ai4s_agent.llm_settings import (
-    LLM_SETTINGS_AVAILABLE,
-    LLMSettingsStore,
+from ai4s_agent.llm_provider import (
+    LLMProviderError,
+    LLMProviderManager,
+    create_llm_provider,
 )
+from ai4s_agent.llm_provider_resolution import (
+    SCIENTIFIC_MAPPING_ROLE,
+    resolve_llm_provider_payload,
+)
+from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.schemas import ParsedDocument
 
 
@@ -105,18 +110,24 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 "external_llm_data_sharing_required",
                 "external LLM data-sharing consent is not enabled",
             )
-        status, config = settings.resolve()
-        if status != LLM_SETTINGS_AVAILABLE or config is None:
-            return _failed(
-                "llm_provider_unavailable",
-                f"LLM settings are not available: {status}",
-            )
-
-        provider = create_llm_provider(config)
+        providers = LLMProviderManager(provider_factory=create_llm_provider)
         try:
-            mapping_result = run_oled_llm_context_mapping(request, provider=provider)
+            resolution = resolve_llm_provider_payload(
+                {},
+                settings=settings,
+                providers=providers,
+                provider_factory=create_llm_provider,
+                role=SCIENTIFIC_MAPPING_ROLE,
+            )
+            with resolution.provider_context as provider:
+                if provider is None:
+                    return _failed(
+                        "llm_provider_unavailable",
+                        "scientific_mapping provider is unavailable",
+                    )
+                mapping_result = run_oled_llm_context_mapping(request, provider=provider)
         finally:
-            provider.close()
+            providers.close()
 
         if not mapping_result.is_valid:
             finding = mapping_result.findings[0] if mapping_result.findings else None

@@ -20,6 +20,8 @@ LLM_SETTINGS_TRULY_UNCONFIGURED = "truly_unconfigured"
 LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE = "configured_but_unavailable"
 LLM_SETTINGS_AVAILABLE = "available"
 EXTERNAL_LLM_DATA_SHARING_FIELD = "external_llm_data_sharing_enabled"
+LLM_ROLE_BINDINGS_SCHEMA_VERSION = "llm_role_bindings.v1"
+LLM_ROLE_BINDINGS_FILENAME = "llm_role_bindings.json"
 
 
 class LLMSettingsStore:
@@ -42,11 +44,14 @@ class LLMSettingsStore:
         )
         self.config_dir = Path(configured_root).expanduser().resolve()
         self.path = (self.config_dir / "llm_profiles.json").resolve()
+        self.role_bindings_path = (self.config_dir / LLM_ROLE_BINDINGS_FILENAME).resolve()
         self.secrets_dir = (self.config_dir / "secrets").resolve()
         self.legacy_path = (self.workspace_dir / ".ai4s" / "llm_provider.json").resolve()
         self._keyring = keyring_backend
-        if not self.path.is_relative_to(self.config_dir) or not self.secrets_dir.is_relative_to(
-            self.config_dir
+        if (
+            not self.path.is_relative_to(self.config_dir)
+            or not self.role_bindings_path.is_relative_to(self.config_dir)
+            or not self.secrets_dir.is_relative_to(self.config_dir)
         ):
             raise ValueError("LLM settings path escapes user config directory")
 
@@ -58,22 +63,80 @@ class LLMSettingsStore:
         """Resolve the active profile without conflating absence with failure."""
 
         document = self._read_document()
-        raw_profile = document.get("active_profile")
+        return self._resolve_profile(document.get("active_profile"))
+
+    @property
+    def server_role_bindings_configured(self) -> bool:
+        """Return whether the server has opted into role-owned provider routing."""
+
+        return self.role_bindings_path.exists()
+
+    def resolve_role(self, role: str) -> tuple[str, LLMProviderConfig | None]:
+        """Resolve one server-owned role without accepting request provider data."""
+
+        clean_role = str(role or "").strip()
+        if not clean_role:
+            raise ValueError("LLM role is required")
+        if not self.server_role_bindings_configured:
+            return self.resolve()
+        try:
+            bindings = self._read_role_bindings()
+            profile_id = bindings.get(clean_role)
+            if not isinstance(profile_id, str) or not profile_id.strip():
+                return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+            document = self._read_document()
+            profiles = document.get("profiles")
+            raw_profile = None
+            if isinstance(profiles, dict):
+                raw_profile = profiles.get(profile_id.strip())
+            active_profile = document.get("active_profile")
+            if raw_profile is None and isinstance(active_profile, dict):
+                if str(active_profile.get("profile_id") or "").strip() == profile_id.strip():
+                    raw_profile = active_profile
+            if raw_profile is None:
+                return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+            return self._resolve_profile(raw_profile)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+
+    def _resolve_profile(
+        self,
+        raw_profile: Any,
+    ) -> tuple[str, LLMProviderConfig | None]:
         if raw_profile is None:
             return LLM_SETTINGS_TRULY_UNCONFIGURED, None
+        if not isinstance(raw_profile, dict):
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
         try:
             profile = self._validated_profile(raw_profile)
+            resolved = dict(profile)
+            resolved_secret = self._resolve_secret(profile)
+            if not resolved_secret:
+                return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+            resolved["api_key"] = resolved_secret
+            return LLM_SETTINGS_AVAILABLE, self._validated_config(resolved)
         except (TypeError, ValueError):
             return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
-        resolved = dict(profile)
-        resolved_secret = self._resolve_secret(profile)
-        if not resolved_secret:
-            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
-        resolved["api_key"] = resolved_secret
-        try:
-            return LLM_SETTINGS_AVAILABLE, self._validated_config(resolved)
-        except ValueError:
-            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+
+    def _read_role_bindings(self) -> dict[str, str]:
+        loaded = json.loads(self.role_bindings_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("LLM role bindings must be an object")
+        if loaded.get("schema_version") != LLM_ROLE_BINDINGS_SCHEMA_VERSION:
+            raise ValueError("unsupported LLM role bindings schema")
+        raw_bindings = loaded.get("bindings")
+        if not isinstance(raw_bindings, dict):
+            raise ValueError("LLM role bindings must contain an object")
+        bindings: dict[str, str] = {}
+        for raw_role, raw_profile_id in raw_bindings.items():
+            role = str(raw_role or "").strip()
+            profile_id = str(raw_profile_id or "").strip()
+            if not role or not profile_id:
+                raise ValueError("LLM role bindings require non-empty role and profile IDs")
+            if not profile_id.replace("-", "").replace("_", "").isalnum():
+                raise ValueError("LLM role binding profile ID contains unsafe characters")
+            bindings[role] = profile_id
+        return bindings
 
     @property
     def external_llm_data_sharing_enabled(self) -> bool:
@@ -215,6 +278,7 @@ class LLMSettingsStore:
                 "total_timeout_sec": profile["total_timeout_sec"],
                 "max_connect_retries": profile["max_connect_retries"],
                 "retry_backoff_sec": profile["retry_backoff_sec"],
+                "capabilities": profile["capabilities"],
                 "api_key_source": profile["api_key_source"],
                 "resolved_api_key_source": resolved_source,
                 "api_key_ref": profile.get("api_key_ref", ""),
@@ -223,8 +287,8 @@ class LLMSettingsStore:
             },
         }
 
-    def _read_document(self) -> dict[str, Any]:
-        if not self.path.exists():
+    def _read_document(self, *, migrate: bool = True) -> dict[str, Any]:
+        if migrate and not self.path.exists():
             self._migrate_legacy_profile()
         if not self.path.exists():
             return {}
@@ -256,6 +320,10 @@ class LLMSettingsStore:
             "updated_at": now_iso(),
             "preferences": {EXTERNAL_LLM_DATA_SHARING_FIELD: bool(preference)},
         }
+        existing = self._read_document(migrate=False)
+        profiles = existing.get("profiles")
+        if isinstance(profiles, dict):
+            document["profiles"] = profiles
         if profile is not None:
             document["active_profile"] = profile
         write_json(
@@ -542,6 +610,7 @@ class LLMSettingsStore:
             "total_timeout_sec": config.total_timeout_sec,
             "max_connect_retries": config.max_connect_retries,
             "retry_backoff_sec": config.retry_backoff_sec,
+            "capabilities": config.capabilities.model_dump(mode="json"),
             "api_key_source": source,
             "api_key_ref": str(payload.get("api_key_ref") or profile_id).strip(),
             "api_key_env": str(payload.get("api_key_env") or "MOLLY_LLM_API_KEY").strip(),
@@ -583,6 +652,7 @@ class LLMSettingsStore:
             total_timeout_sec=payload.get("total_timeout_sec", 300.0),
             max_connect_retries=payload.get("max_connect_retries", 1),
             retry_backoff_sec=payload.get("retry_backoff_sec", 0.25),
+            capabilities=payload.get("capabilities", {}),
         )
 
 

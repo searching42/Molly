@@ -7,7 +7,10 @@ from pydantic import ValidationError
 
 from ai4s_agent.actor_identity import resolve_authenticated_actor
 from ai4s_agent.llm_provider import LLMProviderError, LLMProviderManager
-from ai4s_agent.llm_provider_resolution import resolve_llm_provider_payload
+from ai4s_agent.llm_provider_resolution import (
+    CONTROL_PLANE_ROLE,
+    resolve_llm_provider_payload,
+)
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.schemas import (
     AgentPlanFeedbackRequest,
@@ -125,6 +128,7 @@ def register_scientific_agent_replanner_routes(
                 payload,
                 settings=llm_settings,
                 providers=llm_providers,
+                role=CONTROL_PLANE_ROLE,
             )
             service_payload = {key: value for key, value in payload.items() if key != "llm_provider"}
             with resolution.provider_context as provider:
