@@ -22,6 +22,10 @@ LLM_SETTINGS_AVAILABLE = "available"
 EXTERNAL_LLM_DATA_SHARING_FIELD = "external_llm_data_sharing_enabled"
 LLM_ROLE_BINDINGS_SCHEMA_VERSION = "llm_role_bindings.v1"
 LLM_ROLE_BINDINGS_FILENAME = "llm_role_bindings.json"
+_LLM_ROLE_ELIGIBILITY_FIELDS = {
+    "control_plane": "control_plane_eligible",
+    "scientific_mapping": "scientific_mapping_eligible",
+}
 
 
 class LLMSettingsStore:
@@ -95,6 +99,8 @@ class LLMSettingsStore:
                     raw_profile = active_profile
             if raw_profile is None:
                 return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+            if not self._role_capabilities_are_explicit(raw_profile, clean_role):
+                return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
             return self._resolve_profile(raw_profile)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
@@ -137,6 +143,20 @@ class LLMSettingsStore:
                 raise ValueError("LLM role binding profile ID contains unsafe characters")
             bindings[role] = profile_id
         return bindings
+
+    @staticmethod
+    def _role_capabilities_are_explicit(
+        profile: dict[str, Any],
+        role: str,
+    ) -> bool:
+        capabilities = profile.get("capabilities")
+        eligibility_field = _LLM_ROLE_ELIGIBILITY_FIELDS.get(role)
+        return bool(
+            isinstance(capabilities, dict)
+            and "structured_output_mode" in capabilities
+            and eligibility_field in capabilities
+            and isinstance(capabilities[eligibility_field], bool)
+        )
 
     @property
     def external_llm_data_sharing_enabled(self) -> bool:

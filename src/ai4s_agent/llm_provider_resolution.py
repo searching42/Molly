@@ -97,7 +97,8 @@ def resolve_llm_provider_payload(
             role=clean_role,
             server_owned=server_owned,
         )
-    _require_role_eligibility(config, role=clean_role)
+    if server_owned:
+        _require_role_eligibility(config, role=clean_role)
     if is_external_llm_config(config):
         if temporary:
             # A request-injected provider is an arbitrary endpoint.  The

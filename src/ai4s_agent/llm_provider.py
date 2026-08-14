@@ -28,7 +28,7 @@ class LLMResponseValidationError(LLMProviderError):
 
 
 class _UnsupportedResponseFormatError(LLMProviderError):
-    """The endpoint rejected provider-side JSON Schema enforcement."""
+    """The endpoint rejected the requested structured response format."""
 
 
 ResponseModel = type[BaseModel]
@@ -184,24 +184,11 @@ class OpenAICompatibleProvider:
             response_model=response_model,
             response_schema=response_schema,
         )
-        try:
-            raw = self._request_raw(
-                payload,
-                deadline=deadline,
-                read_timeout_sec=self.config.total_timeout_sec,
-            )
-        except _UnsupportedResponseFormatError:
-            # Some OpenAI-compatible endpoints (including the configured
-            # DeepSeek endpoint) support JSON-object mode but reject the
-            # provider-side ``json_schema`` response format.  Keep the
-            # existing response_model/schema validation locally and retry
-            # only this explicit compatibility failure without the optional
-            # provider-side constraint.
-            raw = self._request_raw(
-                self._payload(messages=messages, json_mode=True),
-                deadline=deadline,
-                read_timeout_sec=self.config.total_timeout_sec,
-            )
+        raw = self._request_raw(
+            payload,
+            deadline=deadline,
+            read_timeout_sec=self.config.total_timeout_sec,
+        )
         parsed_output = _parse_chat_completion_json(raw)
         parsed_output = _validate_structured_output(
             parsed_output,
@@ -439,7 +426,8 @@ class OpenAICompatibleProvider:
             return
         if response.status_code == 400 and _response_format_is_unavailable(response):
             raise _UnsupportedResponseFormatError(
-                "OpenAI-compatible endpoint does not support JSON Schema response format"
+                "OpenAI-compatible endpoint does not support the requested structured "
+                "response format"
             )
         request_id = response.headers.get("x-request-id") or response.headers.get(
             "x-correlation-id"

@@ -4,6 +4,13 @@ Authoritative Agent calls use server-owned roles. The request body may carry a
 legacy `llm_provider` value for compatibility, but once
 `llm_role_bindings.json` exists it is ignored for role-routed calls.
 
+The role-binding file is also the acceptance boundary. If it is absent, Molly
+uses the legacy active-profile/request-provider resolution path for backward
+compatibility; that mode must not be described as accepted M3.5 control-plane
+routing. If the file exists, the bound profile must explicitly declare its
+structured-output mode and the eligibility flag for the selected role. Missing
+or malformed declarations fail closed as configured-but-unavailable.
+
 The supported roles are:
 
 | Call path | Role |
@@ -64,10 +71,12 @@ Each profile declares its structured-output and role capabilities explicitly:
 ```
 
 `structured_output_mode` is a transport contract, not provider-name logic:
-`native_json_schema` requests provider-side JSON Schema enforcement, while
+`native_json_schema` requests provider-side JSON Schema enforcement and fails
+if the provider rejects that format, while
 `json_object_local_validation` requests a JSON object and relies on the
-existing local Pydantic/JSON Schema validation. A profile that is not
-`control_plane_eligible` cannot back authoritative orchestration.
+existing local Pydantic/JSON Schema validation. There is no native-schema to
+JSON-object downgrade. A profile that is not `control_plane_eligible` cannot
+back authoritative orchestration.
 
 Control-plane acceptance is intentionally a hard gate: replay the same full
 Planner payload 10 times and the same full Execution Agent payload 20 times;

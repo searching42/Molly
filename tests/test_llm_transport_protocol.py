@@ -116,10 +116,10 @@ def test_complete_json_validates_pydantic_model_and_sends_generated_schema() -> 
 
 
 def test_complete_json_uses_explicit_json_object_capability() -> None:
-    captured_payload: dict = {}
+    calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured_payload.update(json.loads(request.content))
+        calls.append(json.loads(request.content))
         return httpx.Response(200, json=_completion('{"answer":"ok","score":3}'))
 
     provider = OpenAICompatibleProvider(
@@ -137,8 +137,9 @@ def test_complete_json_uses_explicit_json_object_capability() -> None:
     )
 
     assert result.parsed_output == {"answer": "ok", "score": 3}
-    assert captured_payload["response_format"] == {"type": "json_object"}
-    assert captured_payload["temperature"] == 0
+    assert len(calls) == 1
+    assert calls[0]["response_format"] == {"type": "json_object"}
+    assert calls[0]["temperature"] == 0
 
 
 def test_provider_hostname_does_not_override_explicit_native_capability() -> None:
@@ -165,7 +166,7 @@ def test_provider_hostname_does_not_override_explicit_native_capability() -> Non
     assert "temperature" not in captured_payload
 
 
-def test_complete_json_falls_back_to_json_object_when_schema_format_is_unavailable() -> None:
+def test_complete_json_fails_when_native_schema_format_is_unavailable() -> None:
     calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -182,17 +183,19 @@ def test_complete_json_falls_back_to_json_object_when_schema_format_is_unavailab
             )
         return httpx.Response(200, json=_completion('{"answer":"ok","score":3}'))
 
-    provider = OpenAICompatibleProvider(config=_config(), client=_client(handler))
-    result = provider.complete_json(
-        messages=[{"role": "user", "content": "structured"}],
-        prompt_version="structured.v1",
-        response_model=_Answer,
+    provider = OpenAICompatibleProvider(
+        config=_config(capabilities={"structured_output_mode": "native_json_schema"}),
+        client=_client(handler),
     )
+    with pytest.raises(LLMProviderError, match="requested structured response format"):
+        provider.complete_json(
+            messages=[{"role": "user", "content": "structured"}],
+            prompt_version="structured.v1",
+            response_model=_Answer,
+        )
 
-    assert result.parsed_output == {"answer": "ok", "score": 3}
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0]["response_format"]["type"] == "json_schema"
-    assert calls[1]["response_format"] == {"type": "json_object"}
 
 
 def test_complete_json_rejects_invalid_pydantic_output_without_echoing_input() -> None:

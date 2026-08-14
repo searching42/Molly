@@ -24,7 +24,7 @@ def _profile(
     api_key_env: str,
     capabilities: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    profile: dict[str, object] = {
         "profile_id": profile_id,
         "provider": "openai_compatible",
         "endpoint": "http://127.0.0.1:8000/v1",
@@ -33,8 +33,10 @@ def _profile(
         "api_key_source": "environment",
         "api_key_ref": profile_id,
         "api_key_env": api_key_env,
-        "capabilities": capabilities or {},
     }
+    if capabilities is not None:
+        profile["capabilities"] = capabilities
+    return profile
 
 
 def _settings(tmp_path: Path, *, control_plane_eligible: bool = True) -> LLMSettingsStore:
@@ -45,7 +47,10 @@ def _settings(tmp_path: Path, *, control_plane_eligible: bool = True) -> LLMSett
             "control-plane",
             model="authoritative-model",
             api_key_env="CONTROL_PLANE_KEY",
-            capabilities={"control_plane_eligible": control_plane_eligible},
+            capabilities={
+                "structured_output_mode": "native_json_schema",
+                "control_plane_eligible": control_plane_eligible,
+            },
         ),
         "deepseek": _profile(
             "deepseek",
@@ -160,6 +165,51 @@ def test_ineligible_control_plane_profile_fails_closed(tmp_path: Path) -> None:
     providers.close()
 
 
+def test_role_bound_profile_missing_capabilities_fails_closed(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    document = json.loads(settings.path.read_text(encoding="utf-8"))
+    del document["profiles"]["control-plane"]["capabilities"]
+    settings.path.write_text(json.dumps(document), encoding="utf-8")
+    providers = LLMProviderManager(
+        provider_factory=lambda _config: StubLLMProvider(response={"ok": True})
+    )
+
+    status, config = settings.resolve_role(CONTROL_PLANE_ROLE)
+    assert status == LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE
+    assert config is None
+    with pytest.raises(ValueError, match="configured LLM settings are unavailable"):
+        resolve_llm_provider_payload(
+            {},
+            settings=settings,
+            providers=providers,
+            role=CONTROL_PLANE_ROLE,
+        )
+    providers.close()
+
+
+def test_role_bound_profile_missing_explicit_eligibility_fails_closed(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    document = json.loads(settings.path.read_text(encoding="utf-8"))
+    document["profiles"]["control-plane"]["capabilities"] = {
+        "structured_output_mode": "native_json_schema",
+    }
+    settings.path.write_text(json.dumps(document), encoding="utf-8")
+    providers = LLMProviderManager(
+        provider_factory=lambda _config: StubLLMProvider(response={"ok": True})
+    )
+
+    with pytest.raises(ValueError, match="configured LLM settings are unavailable"):
+        resolve_llm_provider_payload(
+            {},
+            settings=settings,
+            providers=providers,
+            role=CONTROL_PLANE_ROLE,
+        )
+    providers.close()
+
+
 def test_missing_bound_profile_is_configured_but_unavailable(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.role_bindings_path.write_text(
@@ -200,7 +250,13 @@ def test_role_argument_keeps_legacy_request_resolution_without_role_file(
     )
 
     resolution = resolve_llm_provider_payload(
-        {"llm_provider": {"provider": "stub", "model": "request-model"}},
+        {
+            "llm_provider": {
+                "provider": "stub",
+                "model": "request-model",
+                "capabilities": {"control_plane_eligible": False},
+            }
+        },
         settings=settings,
         providers=providers,
         role=CONTROL_PLANE_ROLE,
@@ -210,4 +266,5 @@ def test_role_argument_keeps_legacy_request_resolution_without_role_file(
     assert resolution.config is not None
     assert resolution.config.provider == "stub"
     assert resolution.config.model == "request-model"
+    assert resolution.config.capabilities.control_plane_eligible is False
     providers.close()
