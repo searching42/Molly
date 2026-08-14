@@ -1,4 +1,32 @@
 {
+  "$defs": {
+    "LLMProviderCapabilities": {
+      "description": "Explicit server-owned capabilities for one configured LLM profile.",
+      "properties": {
+        "structured_output_mode": {
+          "default": "native_json_schema",
+          "enum": [
+            "native_json_schema",
+            "json_object_local_validation"
+          ],
+          "title": "Structured Output Mode",
+          "type": "string"
+        },
+        "control_plane_eligible": {
+          "default": true,
+          "title": "Control Plane Eligible",
+          "type": "boolean"
+        },
+        "scientific_mapping_eligible": {
+          "default": true,
+          "title": "Scientific Mapping Eligible",
+          "type": "boolean"
+        }
+      },
+      "title": "LLMProviderCapabilities",
+      "type": "object"
+    }
+  },
   "properties": {
     "provider": {
       "default": "stub",
@@ -59,6 +87,9 @@
       "additionalProperties": true,
       "title": "Stub Response",
       "type": "object"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/LLMProviderCapabilities"
     }
   },
   "title": "LLMProviderConfig",

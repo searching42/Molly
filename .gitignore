@@ -20,6 +20,7 @@ tmp/
 **/remote_workers.json
 **/environments.json
 **/llm_profiles.json
+**/llm_role_bindings.json
 **/llm_provider.json
 **/capability_probes.json
 **/legacy_transport_profiles.json

@@ -11,7 +11,10 @@ from flask import Flask, Response, after_this_request, jsonify, request, stream_
 
 from ai4s_agent.actor_identity import resolve_authenticated_actor
 from ai4s_agent.llm_provider import LLMProviderError, LLMProviderManager
-from ai4s_agent.llm_provider_resolution import resolve_llm_provider_payload
+from ai4s_agent.llm_provider_resolution import (
+    CONTROL_PLANE_ROLE,
+    resolve_llm_provider_payload,
+)
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationAuthorizationRequired,
@@ -186,6 +189,7 @@ def register_scientific_agent_conversation_routes(
                     {"llm_provider": None},
                     settings=llm_settings,
                     providers=llm_providers,
+                    role=CONTROL_PLANE_ROLE,
                 )
             else:
                 try:
@@ -193,6 +197,7 @@ def register_scientific_agent_conversation_routes(
                         payload,
                         settings=llm_settings,
                         providers=llm_providers,
+                        role=CONTROL_PLANE_ROLE,
                     )
                 except (LLMProviderError, ValueError) as exc:
                     if turn_mode not in _AUTHORITY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
@@ -201,6 +206,7 @@ def register_scientific_agent_conversation_routes(
                         {"llm_provider": None},
                         settings=llm_settings,
                         providers=llm_providers,
+                        role=CONTROL_PLANE_ROLE,
                     )
             actor = resolve_authenticated_actor(
                 request,
@@ -228,6 +234,7 @@ def register_scientific_agent_conversation_routes(
                     {"llm_provider": None},
                     settings=llm_settings,
                     providers=llm_providers,
+                    role=CONTROL_PLANE_ROLE,
                 )
                 result = run_turn(fallback)
             return jsonify({"ok": True, **result.as_dict()})
@@ -308,6 +315,7 @@ def register_scientific_agent_conversation_routes(
                     payload,
                     settings=llm_settings,
                     providers=llm_providers,
+                    role=CONTROL_PLANE_ROLE,
                 )
             except (LLMProviderError, ValueError) as exc:
                 # Remote observation and adoption are deterministic Controller
@@ -320,6 +328,7 @@ def register_scientific_agent_conversation_routes(
                     {"llm_provider": None},
                     settings=llm_settings,
                     providers=llm_providers,
+                    role=CONTROL_PLANE_ROLE,
                 )
             with resolution.provider_context as provider:
                 result = service.tick(
@@ -388,6 +397,7 @@ def register_scientific_agent_conversation_routes(
                 payload,
                 settings=llm_settings,
                 providers=llm_providers,
+                role=CONTROL_PLANE_ROLE,
             )
             actor = resolve_authenticated_actor(request, required=True)
             with resolution.provider_context as provider:

@@ -21,11 +21,18 @@ from ai4s_agent.llm_settings import (
 from ai4s_agent.schemas import LLMProviderConfig, _agent_digest
 
 
+CONTROL_PLANE_ROLE = "control_plane"
+SCIENTIFIC_MAPPING_ROLE = "scientific_mapping"
+LLM_PROVIDER_ROLES = frozenset({CONTROL_PLANE_ROLE, SCIENTIFIC_MAPPING_ROLE})
+
+
 @dataclass(frozen=True)
 class LLMProviderResolution:
     provider_context: AbstractContextManager[LLMProvider | None]
     config: LLMProviderConfig | None
     provider_binding_digest: str
+    role: str | None = None
+    server_owned: bool = False
 
 
 def resolve_llm_provider_payload(
@@ -34,8 +41,18 @@ def resolve_llm_provider_payload(
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
     provider_factory: Callable[[LLMProviderConfig], LLMProvider] = create_llm_provider,
+    role: str | None = None,
 ) -> LLMProviderResolution:
-    if "llm_provider" in payload:
+    clean_role = str(role or "").strip() or None
+    if clean_role is not None and clean_role not in LLM_PROVIDER_ROLES:
+        raise ValueError(f"unsupported LLM role: {clean_role}")
+    server_owned = clean_role is not None and bool(
+        getattr(settings, "server_role_bindings_configured", False)
+    )
+    if server_owned:
+        settings_status, config = settings.resolve_role(clean_role or "")
+        temporary = False
+    elif "llm_provider" in payload:
         raw = payload.get("llm_provider")
         if raw in (None, "", False):
             return LLMProviderResolution(
@@ -44,6 +61,7 @@ def resolve_llm_provider_payload(
                 provider_binding_digest=_agent_digest(
                     {"provider_status": "not_configured"}
                 ),
+                role=clean_role,
             )
         if not isinstance(raw, dict):
             raise ValueError("llm_provider must be an object when provided")
@@ -60,8 +78,27 @@ def resolve_llm_provider_payload(
                 provider_binding_digest=_agent_digest(
                     {"provider_status": "not_configured"}
                 ),
+                role=clean_role,
             )
         temporary = False
+    if config is None:
+        if settings_status == LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE:
+            raise ValueError("configured LLM settings are unavailable")
+        return LLMProviderResolution(
+            provider_context=nullcontext(None),
+            config=None,
+            provider_binding_digest=_agent_digest(
+                {
+                    "provider_status": "not_configured",
+                    "role": clean_role,
+                    "server_owned": server_owned,
+                }
+            ),
+            role=clean_role,
+            server_owned=server_owned,
+        )
+    if server_owned:
+        _require_role_eligibility(config, role=clean_role)
     if is_external_llm_config(config):
         if temporary:
             # A request-injected provider is an arbitrary endpoint.  The
@@ -86,6 +123,8 @@ def resolve_llm_provider_payload(
     binding_digest = _agent_digest(
         {
             "schema_version": "llm_provider_resolution_binding.v1",
+            "role": clean_role,
+            "server_owned": server_owned,
             "config": material,
         }
     )
@@ -97,6 +136,8 @@ def resolve_llm_provider_payload(
         ),
         config=config,
         provider_binding_digest=binding_digest,
+        role=clean_role,
+        server_owned=server_owned,
     )
 
 
@@ -106,6 +147,7 @@ def llm_provider_from_payload(
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
     provider_factory: Callable[[LLMProviderConfig], LLMProvider] = create_llm_provider,
+    role: str | None = None,
 ) -> AbstractContextManager[LLMProvider | None]:
     """Compatibility projection used by existing planning/conversation routes."""
 
@@ -114,7 +156,23 @@ def llm_provider_from_payload(
         settings=settings,
         providers=providers,
         provider_factory=provider_factory,
+        role=role,
     ).provider_context
+
+
+def _require_role_eligibility(
+    config: LLMProviderConfig,
+    *,
+    role: str | None,
+) -> None:
+    if role is None:
+        return
+    eligible = {
+        CONTROL_PLANE_ROLE: config.capabilities.control_plane_eligible,
+        SCIENTIFIC_MAPPING_ROLE: config.capabilities.scientific_mapping_eligible,
+    }[role]
+    if not eligible:
+        raise ValueError(f"configured provider is not eligible for {role}")
 
 
 def is_external_llm_config(config: LLMProviderConfig) -> bool:
@@ -144,6 +202,9 @@ def temporary_provider(
 
 __all__ = [
     "LLMProviderResolution",
+    "CONTROL_PLANE_ROLE",
+    "LLM_PROVIDER_ROLES",
+    "SCIENTIFIC_MAPPING_ROLE",
     "is_external_llm_config",
     "llm_provider_from_payload",
     "resolve_llm_provider_payload",

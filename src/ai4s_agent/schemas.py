@@ -6160,6 +6160,7 @@ class AgentToolCallProposalRequest(BaseModel):
             "max_connect_retries",
             "retry_backoff_sec",
             "stub_response",
+            "capabilities",
         }
         if set(value).difference(allowed):
             raise ValueError("llm_provider contains unsupported fields")
@@ -7681,6 +7682,17 @@ class PlannerLLMResponse(BaseModel):
     tool_calls: list[AgentToolCall] = Field(default_factory=list)
 
 
+class LLMProviderCapabilities(BaseModel):
+    """Explicit server-owned capabilities for one configured LLM profile."""
+
+    structured_output_mode: Literal[
+        "native_json_schema",
+        "json_object_local_validation",
+    ] = "native_json_schema"
+    control_plane_eligible: bool = True
+    scientific_mapping_eligible: bool = True
+
+
 class LLMProviderConfig(BaseModel):
     provider: str = "stub"
     endpoint: str = ""
@@ -7694,6 +7706,7 @@ class LLMProviderConfig(BaseModel):
     max_connect_retries: int = 1
     retry_backoff_sec: float = 0.25
     stub_response: dict[str, Any] = Field(default_factory=dict)
+    capabilities: LLMProviderCapabilities = Field(default_factory=LLMProviderCapabilities)
 
     @field_validator(
         "timeout_sec",

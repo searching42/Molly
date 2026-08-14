@@ -21,7 +21,10 @@ from ai4s_agent.llm_provider import (
     LLMProviderManager,
     create_llm_provider,
 )
-from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
+from ai4s_agent.llm_provider_resolution import (
+    CONTROL_PLANE_ROLE,
+    llm_provider_from_payload,
+)
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.routes.run_plans import run_plan_from_payload
@@ -820,12 +823,14 @@ def _llm_provider_from_payload(
     *,
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
+    role: str = CONTROL_PLANE_ROLE,
 ) -> AbstractContextManager[LLMProvider | None]:
     return llm_provider_from_payload(
         payload,
         settings=settings,
         providers=providers,
         provider_factory=create_llm_provider,
+        role=role,
     )
 
 

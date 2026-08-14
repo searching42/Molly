@@ -163,8 +163,8 @@ def test_non_failed_l2_trigger_matrix_rejects_before_provider_or_successor(
             )
             provider = _CountingProvider()
 
-            def resolve(_payload, *, settings, providers):
-                del settings, providers
+            def resolve(_payload, *, settings, providers, role=None):
+                del settings, providers, role
                 return SimpleNamespace(
                     provider_context=nullcontext(provider),
                     provider_binding_digest=_agent_digest({"case": label, "index": index}),
@@ -811,8 +811,8 @@ def test_l2_concurrent_material_replan_publishes_one_successor(
     )
     provider = _CountingRevisionProvider()
 
-    def resolve(_payload, *, settings, providers):
-        del settings, providers
+    def resolve(_payload, *, settings, providers, role=None):
+        del settings, providers, role
         return SimpleNamespace(
             provider_context=nullcontext(provider),
             provider_binding_digest=_agent_digest(
