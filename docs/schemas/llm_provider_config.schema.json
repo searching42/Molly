@@ -83,6 +83,15 @@
       "title": "Retry Backoff Sec",
       "type": "number"
     },
+    "structured_output_transport": {
+      "default": "buffered",
+      "enum": [
+        "buffered",
+        "sse_stream"
+      ],
+      "title": "Structured Output Transport",
+      "type": "string"
+    },
     "stub_response": {
       "additionalProperties": true,
       "title": "Stub Response",

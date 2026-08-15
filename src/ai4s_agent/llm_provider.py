@@ -7,7 +7,7 @@ import threading
 import time
 from contextlib import contextmanager
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -177,6 +177,13 @@ class OpenAICompatibleProvider:
         response_schema: dict[str, Any] | None = None,
     ) -> LLMInvocationRecord:
         _validate_schema_arguments(response_model=response_model, response_schema=response_schema)
+        if self.config.structured_output_transport == "sse_stream":
+            return self._complete_json_sse(
+                messages=messages,
+                prompt_version=prompt_version,
+                response_model=response_model,
+                response_schema=response_schema,
+            )
         deadline = self._clock() + float(self.config.total_timeout_sec)
         payload = self._payload(
             messages=messages,
@@ -204,6 +211,116 @@ class OpenAICompatibleProvider:
             raw_response=_json_safe_raw(raw, self.config.api_key),
             parsed_output=parsed_output,
         )
+
+    def _complete_json_sse(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        response_model: ResponseModel | None,
+        response_schema: dict[str, Any] | None,
+    ) -> LLMInvocationRecord:
+        self._ensure_open()
+        if self.transport is not None:
+            raise LLMProviderError(
+                "structured SSE transport is unavailable with buffered injected transport"
+            )
+        if self._client is None:
+            raise LLMProviderError("OpenAI-compatible HTTP client is unavailable")
+
+        payload = self._payload(
+            messages=messages,
+            json_mode=True,
+            response_model=response_model,
+            response_schema=response_schema,
+        )
+        payload["stream"] = True
+        deadline = self._clock() + float(self.config.total_timeout_sec)
+        attempts = 0
+        while True:
+            stream_established = False
+            accumulator = _StructuredSSEAccumulator()
+            try:
+                timeout = self._httpx_timeout(
+                    deadline,
+                    read_timeout_sec=self.config.total_timeout_sec,
+                )
+                with self._client.stream(
+                    "POST",
+                    self._url,
+                    json=payload,
+                    headers=self._stream_headers,
+                    timeout=timeout,
+                ) as response:
+                    stream_established = True
+                    self._raise_for_status(response)
+                    for line in response.iter_lines():
+                        self._check_deadline(deadline)
+                        _consume_structured_sse_line(line, accumulator)
+                        if accumulator.saw_done:
+                            break
+                if not accumulator.saw_done:
+                    raise LLMProviderError(
+                        "OpenAI-compatible structured stream ended before [DONE]"
+                    )
+                if accumulator.finish_reason != "stop":
+                    raise LLMProviderError(
+                        "OpenAI-compatible structured stream did not finish with stop"
+                    )
+                content = accumulator.content()
+                if not content:
+                    raise LLMProviderError(
+                        "OpenAI-compatible structured stream returned empty content"
+                    )
+                try:
+                    decoded = json.loads(content)
+                except json.JSONDecodeError as exc:
+                    raise LLMProviderError(
+                        "OpenAI-compatible structured stream content is not valid JSON"
+                    ) from exc
+                if not isinstance(decoded, dict):
+                    raise LLMProviderError(
+                        "OpenAI-compatible structured stream content must be a JSON object"
+                    )
+                parsed_output = _validate_structured_output(
+                    decoded,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                )
+                self._check_deadline(deadline)
+                raw = {
+                    "id": _sanitize_text(accumulator.response_id, self.config.api_key),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": content,
+                            },
+                        }
+                    ],
+                }
+                return LLMInvocationRecord(
+                    provider="openai_compatible",
+                    model=self.config.model,
+                    prompt_version=prompt_version,
+                    response_id=_sanitize_text(
+                        accumulator.response_id,
+                        self.config.api_key,
+                    ),
+                    raw_response=_json_safe_raw(raw, self.config.api_key),
+                    parsed_output=parsed_output,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+                if stream_established or attempts >= self.config.max_connect_retries:
+                    raise self._request_error(exc) from exc
+                self._retry_pause(attempts=attempts, deadline=deadline)
+                attempts += 1
+            except LLMProviderError:
+                raise
+            except httpx.HTTPError as exc:
+                raise self._request_error(exc) from exc
 
     def stream_text(
         self,
@@ -732,6 +849,105 @@ def _decode_json_object(text: str) -> dict[str, Any]:
 
 
 _SSE_DONE = object()
+
+
+@dataclass
+class _StructuredSSEAccumulator:
+    content_chunks: list[str] = field(default_factory=list)
+    response_id: str = ""
+    finish_reason: str | None = None
+    saw_done: bool = False
+
+    def content(self) -> str:
+        return "".join(self.content_chunks)
+
+
+def _consume_structured_sse_line(
+    line: str,
+    accumulator: _StructuredSSEAccumulator,
+) -> None:
+    clean = str(line or "").strip()
+    if not clean or clean.startswith(":"):
+        return
+    if clean.startswith("data:"):
+        clean = clean[5:].lstrip()
+    elif not clean.startswith("{"):
+        return
+    if clean == "[DONE]":
+        accumulator.saw_done = True
+        return
+    try:
+        event = json.loads(clean)
+    except json.JSONDecodeError as exc:
+        raise LLMProviderError(
+            "OpenAI-compatible structured stream emitted invalid JSON"
+        ) from exc
+    if not isinstance(event, dict):
+        raise LLMProviderError(
+            "OpenAI-compatible structured stream event must be a JSON object"
+        )
+
+    event_id = event.get("id")
+    if event_id:
+        safe_event_id = str(event_id)
+        if accumulator.response_id and accumulator.response_id != safe_event_id:
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream emitted conflicting response IDs"
+            )
+        accumulator.response_id = safe_event_id
+
+    choices = event.get("choices")
+    if choices is None:
+        return
+    if not isinstance(choices, list):
+        raise LLMProviderError(
+            "OpenAI-compatible structured stream choices must be a list"
+        )
+
+    content_choice_seen = False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream choice must be an object"
+            )
+        index = choice.get("index", 0)
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream choice index must be an integer"
+            )
+        delta = choice.get("delta")
+        if delta is not None and not isinstance(delta, dict):
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream delta must be an object"
+            )
+        content = _content_to_text(delta.get("content")) if isinstance(delta, dict) else ""
+        if content:
+            if content_choice_seen or index != 0:
+                raise LLMProviderError(
+                    "OpenAI-compatible structured stream emitted multiple content choices"
+                )
+            content_choice_seen = True
+            accumulator.content_chunks.append(content)
+
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is None:
+            continue
+        if not isinstance(finish_reason, str):
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream finish reason must be a string"
+            )
+        if (
+            accumulator.finish_reason is not None
+            and accumulator.finish_reason != finish_reason
+        ):
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream emitted conflicting finish reasons"
+            )
+        accumulator.finish_reason = finish_reason
+        if finish_reason != "stop":
+            raise LLMProviderError(
+                "OpenAI-compatible structured stream did not finish with stop"
+            )
 
 
 def _parse_sse_text_delta(line: str) -> str | None | object:

@@ -181,7 +181,32 @@ def test_legacy_saved_llm_profiles_document_remains_readable_with_false_default(
     assert resolved is not None
     assert resolved.model == "legacy-model"
     assert resolved.api_key == "legacy-secret"
+    assert resolved.structured_output_transport == "buffered"
     assert store.external_llm_data_sharing_enabled is False
+
+
+def test_structured_output_transport_round_trips_through_private_settings(tmp_path: Path) -> None:
+    store = LLMSettingsStore(
+        workspace_dir=tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+        environ={"MOLLY_LLM_API_KEY": "settings-secret"},
+    )
+    saved = store.patch(
+        {
+            "endpoint": "https://llm.example.test/v1",
+            "model": "scientific-model",
+            "api_key_source": "environment",
+            "structured_output_transport": "sse_stream",
+        }
+    )
+
+    assert saved is not None
+    assert saved.structured_output_transport == "sse_stream"
+    assert store.read() is not None
+    assert store.read().structured_output_transport == "sse_stream"
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    assert document["active_profile"]["structured_output_transport"] == "sse_stream"
+    assert store.public_state()["config"]["structured_output_transport"] == "sse_stream"
 
 
 def test_preference_update_rejects_non_boolean_values(tmp_path: Path) -> None:

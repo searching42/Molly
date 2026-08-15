@@ -7705,6 +7705,7 @@ class LLMProviderConfig(BaseModel):
     total_timeout_sec: float = 300.0
     max_connect_retries: int = 1
     retry_backoff_sec: float = 0.25
+    structured_output_transport: Literal["buffered", "sse_stream"] = "buffered"
     stub_response: dict[str, Any] = Field(default_factory=dict)
     capabilities: LLMProviderCapabilities = Field(default_factory=LLMProviderCapabilities)
 
