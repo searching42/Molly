@@ -17,6 +17,7 @@ from ai4s_agent.llm_provider import (
     LLMResponseValidationError,
     OpenAICompatibleProvider,
     StubLLMProvider,
+    _config_fingerprint,
 )
 from ai4s_agent.schemas import LLMProviderConfig
 
@@ -45,6 +46,59 @@ def _completion(content, *, extra_message: dict | None = None) -> dict:
 
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+class _ChunkedSSEStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes], *, error_factory=None, request=None) -> None:
+        self.chunks = chunks
+        self.error_factory = error_factory
+        self.request = request
+
+    def __iter__(self):
+        yield from self.chunks
+        if self.error_factory is not None:
+            raise self.error_factory(self.request)
+
+    def close(self) -> None:
+        return None
+
+
+def _sse_body(
+    events: list[dict],
+    *,
+    include_done: bool = True,
+    split_at: int | None = None,
+) -> list[bytes]:
+    parts = [b": keep-alive\n\n\n"]
+    parts.extend(
+        f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
+        for event in events
+    )
+    if include_done:
+        parts.append(b"data: [DONE]\n\n")
+    body = b"".join(parts)
+    if split_at is None or split_at <= 0:
+        return [body]
+    return [body[index : index + split_at] for index in range(0, len(body), split_at)]
+
+
+def _structured_sse_response(
+    request: httpx.Request,
+    events: list[dict],
+    *,
+    include_done: bool = True,
+    split_at: int | None = None,
+    error_factory=None,
+) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        stream=_ChunkedSSEStream(
+            _sse_body(events, include_done=include_done, split_at=split_at),
+            error_factory=error_factory,
+            request=request,
+        ),
+    )
 
 
 def test_complete_text_reuses_persistent_client_and_supports_content_blocks() -> None:
@@ -140,6 +194,435 @@ def test_complete_json_uses_explicit_json_object_capability() -> None:
     assert len(calls) == 1
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[0]["temperature"] == 0
+
+
+def test_structured_output_transport_defaults_to_buffered_and_preserves_payload() -> None:
+    captured_payload: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_payload.update(json.loads(request.content))
+        return httpx.Response(200, json=_completion('{"answer":"ok","score":3}'))
+
+    config = _config(capabilities={"structured_output_mode": "json_object_local_validation"})
+    assert config.structured_output_transport == "buffered"
+    provider = OpenAICompatibleProvider(config=config, client=_client(handler))
+    provider.complete_json(
+        messages=[{"role": "user", "content": "structured"}],
+        prompt_version="structured.v1",
+        response_model=_Answer,
+    )
+
+    assert "stream" not in captured_payload
+    assert captured_payload["response_format"] == {"type": "json_object"}
+    assert captured_payload["temperature"] == 0
+
+
+def test_complete_json_sse_reconstructs_content_and_discards_reasoning() -> None:
+    captured: dict[str, object] = {}
+    final_content = '{"answer":"ok","score":3}'
+    events = [
+        {
+            "id": "stream-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_content": "private reasoning marker"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "stream-1",
+            "choices": [{"index": 0, "delta": {"content": '{"answer":'}}],
+        },
+        {
+            "id": "stream-1",
+            "choices": [{"index": 0, "delta": {"content": '"ok","score":'}}],
+        },
+        {
+            "id": "stream-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "3}"},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return _structured_sse_response(request, events, split_at=5)
+
+    provider = OpenAICompatibleProvider(
+        config=_config(
+            capabilities={"structured_output_mode": "json_object_local_validation"},
+            structured_output_transport="sse_stream",
+        ),
+        client=_client(handler),
+    )
+    result = provider.complete_json(
+        messages=[{"role": "user", "content": "structured"}],
+        prompt_version="structured.sse.v1",
+        response_model=_Answer,
+    )
+
+    request = captured["request"]
+    assert isinstance(request, httpx.Request)
+    payload = json.loads(request.content)
+    assert request.headers["accept"] == "text/event-stream"
+    assert payload["stream"] is True
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["temperature"] == 0
+    assert result.parsed_output == {"answer": "ok", "score": 3}
+    assert result.response_id == "stream-1"
+    assert result.raw_response["choices"][0]["message"]["content"] == final_content
+    serialized = json.dumps(result.raw_response)
+    assert "private reasoning marker" not in serialized
+
+
+def test_complete_json_sse_preserves_native_schema_and_response_schema_validation() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    captured_payload: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_payload.update(json.loads(request.content))
+        return _structured_sse_response(
+            request,
+            [
+                {
+                    "id": "schema-stream",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": '{"answer":"ok"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    provider = OpenAICompatibleProvider(
+        config=_config(
+            capabilities={"structured_output_mode": "native_json_schema"},
+            structured_output_transport="sse_stream",
+        ),
+        client=_client(handler),
+    )
+    result = provider.complete_json(
+        messages=[],
+        prompt_version="schema.sse.v1",
+        response_schema=schema,
+    )
+
+    assert result.parsed_output == {"answer": "ok"}
+    assert captured_payload["stream"] is True
+    assert captured_payload["response_format"]["type"] == "json_schema"
+    assert captured_payload["response_format"]["json_schema"]["strict"] is True
+
+
+def test_structured_output_transport_is_fingerprinted_and_injected_transport_fails_closed() -> None:
+    buffered = _config(structured_output_transport="buffered")
+    sse = _config(structured_output_transport="sse_stream")
+    assert _config_fingerprint(buffered) == _config_fingerprint(
+        _config(structured_output_transport="buffered")
+    )
+    assert _config_fingerprint(buffered) != _config_fingerprint(sse)
+
+    calls = 0
+
+    def transport(*_args) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return _completion('{"answer":"ok","score":3}')
+
+    provider = OpenAICompatibleProvider(config=sse, transport=transport)
+    with pytest.raises(
+        LLMProviderError,
+        match="structured SSE transport is unavailable with buffered injected transport",
+    ):
+        provider.complete_json(messages=[], prompt_version="sse.v1", response_model=_Answer)
+    assert calls == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_message"),
+    [
+        ("missing_done", r"before \[DONE\]"),
+        ("done_without_stop", "did not finish with stop"),
+        ("length", "did not finish with stop"),
+        ("content_filter", "did not finish with stop"),
+        ("empty", "empty content"),
+        ("invalid_json", "not valid JSON"),
+        ("malformed_event", "emitted invalid JSON"),
+    ],
+)
+def test_complete_json_sse_fails_closed_for_incomplete_or_invalid_stream(
+    case: str,
+    expected_message: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if case == "malformed_event":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_ChunkedSSEStream([b"data: {not-json}\n\n"], request=request),
+            )
+        if case == "missing_done":
+            events = [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": '{"answer":"ok","score":3}'},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ]
+            return _structured_sse_response(request, events, include_done=False)
+        if case == "done_without_stop":
+            events = [{"choices": [{"index": 0, "delta": {"content": "{}"}}]}]
+        elif case in {"length", "content_filter"}:
+            events = [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "{}"},
+                            "finish_reason": case,
+                        }
+                    ]
+                }
+            ]
+        elif case == "empty":
+            events = [
+                {
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "stop"}
+                    ]
+                }
+            ]
+        else:
+            events = [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "not-json"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ]
+        return _structured_sse_response(request, events)
+
+    provider = OpenAICompatibleProvider(
+        config=_config(structured_output_transport="sse_stream"),
+        client=_client(handler),
+    )
+    with pytest.raises(LLMProviderError, match=expected_message):
+        provider.complete_json(messages=[], prompt_version="sse.failure.v1")
+
+
+@pytest.mark.parametrize("error_type", [httpx.RemoteProtocolError, httpx.ReadError])
+def test_complete_json_sse_does_not_retry_after_stream_material(
+    error_type: type[httpx.HTTPError],
+) -> None:
+    calls = 0
+    reasoning_marker = "private reasoning must not escape"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedSSEStream(
+                [
+                    (
+                        'data: '
+                        + json.dumps(
+                            {
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "reasoning_content": reasoning_marker,
+                                            "content": "{",
+                                        },
+                                    }
+                                ]
+                            }
+                        )
+                        + "\n\n"
+                    ).encode()
+                ],
+                error_factory=lambda request: error_type("stream interrupted", request=request),
+                request=request,
+            ),
+        )
+
+    provider = OpenAICompatibleProvider(
+        config=_config(
+            max_connect_retries=1,
+            structured_output_transport="sse_stream",
+        ),
+        client=_client(handler),
+    )
+    with pytest.raises(LLMProviderError, match="stream interrupted") as exc_info:
+        provider.complete_json(messages=[], prompt_version="sse.midstream.v1")
+    assert calls == 1
+    assert reasoning_marker not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout])
+def test_complete_json_sse_retries_pre_stream_connect_failures(
+    error_type: type[httpx.HTTPError],
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise error_type("before stream response", request=request)
+        return _structured_sse_response(
+            request,
+            [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": '{"answer":"ok","score":3}'},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ],
+        )
+
+    provider = OpenAICompatibleProvider(
+        config=_config(
+            max_connect_retries=1,
+            structured_output_transport="sse_stream",
+        ),
+        client=_client(handler),
+    )
+    result = provider.complete_json(
+        messages=[],
+        prompt_version="sse.retry.v1",
+        response_model=_Answer,
+    )
+    assert result.parsed_output == {"answer": "ok", "score": 3}
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_message"),
+    [
+        (
+            [
+                {
+                    "choices": [
+                        {"index": 0, "delta": {"content": "{}"}},
+                        {"index": 1, "delta": {"content": "{}"}},
+                    ]
+                }
+            ],
+            "multiple content choices",
+        ),
+        (
+            [
+                {"id": "one", "choices": []},
+                {"id": "two", "choices": []},
+            ],
+            "conflicting response IDs",
+        ),
+    ],
+)
+def test_complete_json_sse_rejects_ambiguous_stream_metadata(
+    events: list[dict],
+    expected_message: str,
+) -> None:
+    provider = OpenAICompatibleProvider(
+        config=_config(structured_output_transport="sse_stream"),
+        client=_client(lambda request: _structured_sse_response(request, events)),
+    )
+    with pytest.raises(LLMProviderError, match=expected_message):
+        provider.complete_json(messages=[], prompt_version="sse.metadata.v1")
+
+
+def test_complete_json_sse_reuses_existing_pydantic_validation_without_echoing_content() -> None:
+    sensitive = "sensitive-output"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _structured_sse_response(
+            request,
+            [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "content": json.dumps(
+                                    {"answer": sensitive, "score": "not-an-integer"}
+                                )
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ],
+        )
+
+    provider = OpenAICompatibleProvider(
+        config=_config(structured_output_transport="sse_stream"),
+        client=_client(handler),
+    )
+    with pytest.raises(LLMResponseValidationError) as exc_info:
+        provider.complete_json(
+            messages=[],
+            prompt_version="sse.validation.v1",
+            response_model=_Answer,
+        )
+    assert sensitive not in str(exc_info.value)
+
+
+def test_complete_json_sse_enforces_total_deadline_during_stream() -> None:
+    clock_values = iter([0.0, 0.0, 6.0])
+    provider = OpenAICompatibleProvider(
+        config=_config(
+            total_timeout_sec=5,
+            structured_output_transport="sse_stream",
+        ),
+        client=_client(
+            lambda request: _structured_sse_response(
+                request,
+                [
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": "{}"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+                ],
+            )
+        ),
+        clock=lambda: next(clock_values),
+    )
+    with pytest.raises(LLMProviderError, match="total deadline"):
+        provider.complete_json(messages=[], prompt_version="sse.deadline.v1")
 
 
 def test_provider_hostname_does_not_override_explicit_native_capability() -> None:

@@ -298,6 +298,7 @@ class LLMSettingsStore:
                 "total_timeout_sec": profile["total_timeout_sec"],
                 "max_connect_retries": profile["max_connect_retries"],
                 "retry_backoff_sec": profile["retry_backoff_sec"],
+                "structured_output_transport": profile["structured_output_transport"],
                 "capabilities": profile["capabilities"],
                 "api_key_source": profile["api_key_source"],
                 "resolved_api_key_source": resolved_source,
@@ -630,6 +631,7 @@ class LLMSettingsStore:
             "total_timeout_sec": config.total_timeout_sec,
             "max_connect_retries": config.max_connect_retries,
             "retry_backoff_sec": config.retry_backoff_sec,
+            "structured_output_transport": config.structured_output_transport,
             "capabilities": config.capabilities.model_dump(mode="json"),
             "api_key_source": source,
             "api_key_ref": str(payload.get("api_key_ref") or profile_id).strip(),
@@ -672,6 +674,7 @@ class LLMSettingsStore:
             total_timeout_sec=payload.get("total_timeout_sec", 300.0),
             max_connect_retries=payload.get("max_connect_retries", 1),
             retry_backoff_sec=payload.get("retry_backoff_sec", 0.25),
+            structured_output_transport=payload.get("structured_output_transport", "buffered"),
             capabilities=payload.get("capabilities", {}),
         )
 
