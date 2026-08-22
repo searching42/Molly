@@ -11,7 +11,11 @@ from ai4s_agent.domains import (
 )
 from ai4s_agent.domains.oled_llm_context_mapping import (
     OledContextProjectionError,
+    OledLLMPaperMappingResponse,
     PROMPT_VERSION,
+    ResponseBindingError,
+    _stable_hash,
+    _validate_response_binding,
     build_oled_llm_paper_mapping_request,
     build_oled_paper_context_elements,
     project_oled_context_for_mapping,
@@ -130,6 +134,21 @@ def _valid_response() -> dict:
     }
 
 
+def _request_with_packet_count(count: int):
+    packets = [_packet()]
+    for index in range(1, count):
+        packets.append(
+            packets[0].model_copy(
+                update={
+                    "packet_id": f"packet:paper-context:table-{index + 1}",
+                    "source_candidate_hash": f"source-table-hash-{index + 1}",
+                    "source_evidence_anchor": f"paper-context:p3:table-{index + 1}",
+                }
+            )
+        )
+    return build_oled_llm_paper_mapping_request(packets, parsed_document=_parsed_document())
+
+
 def _photophysical_packet() -> OledSemanticMappingPacket:
     return _packet().model_copy(
         update={
@@ -216,6 +235,123 @@ def test_build_context_request_preserves_full_document_elements_without_file_io(
     reloaded_request = type(request).model_validate_json(request.model_dump_json())
     assert reloaded_request.request_digest == request.request_digest
     assert len(request.ontology) > 10
+
+
+def test_response_binding_failure_exposes_safe_paper_identity_diagnostic() -> None:
+    response = _valid_response()
+    response["paper_id"] = "paper-context-other"
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+
+    assert result.status == "invalid_response"
+    report = result.metadata["response_binding_failure"]
+    assert report["binding_stage"] == "identity_binding"
+    assert report["binding_error_code"] == "PAPER_ID_MISMATCH"
+    assert report["safe_details"] == {
+        "expected_paper_id": "paper-context",
+        "returned_paper_id": "paper-context-other",
+    }
+    assert result.metadata["validation_stages"] == {
+        "structured_validation": "passed",
+        "identity_binding": "failed",
+        "deterministic_binding": "not_reached",
+        "evidence_binding": "not_reached",
+        "ontology_binding": "not_reached",
+        "response_binding": "failed",
+        "semantic_validation": "not_reached",
+        "candidate_assembly": "not_executed",
+    }
+
+
+def test_packet_namespace_report_preserves_missing_unknown_and_duplicate_information() -> None:
+    request = _request_with_packet_count(3)
+    response = _valid_response()
+    response["packet_results"] = [response["packet_results"][0]]
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+
+    report = result.metadata["response_binding_failure"]
+    details = report["safe_details"]
+    assert report["binding_error_code"] == "PACKET_NAMESPACE_MISMATCH"
+    assert details["expected_count"] == 3
+    assert details["returned_count"] == 1
+    assert details["missing_count"] == 2
+    assert details["unknown_count"] == 0
+    assert details["duplicate_count"] == 0
+    assert details["missing_ids"] == [
+        "packet:paper-context:table-2",
+        "packet:paper-context:table-3",
+    ]
+    assert len(details["expected_namespace_digest"]) == 64
+    assert len(details["returned_namespace_digest"]) == 64
+
+
+def test_packet_namespace_report_preserves_unknown_packet_ids() -> None:
+    response = _valid_response()
+    response["packet_results"][0]["packet_id"] = "packet:paper-context:unknown"
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+
+    details = result.metadata["response_binding_failure"]["safe_details"]
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "PACKET_NAMESPACE_MISMATCH"
+    )
+    assert details["unknown_ids"] == ["packet:paper-context:unknown"]
+    assert details["missing_ids"] == ["packet:paper-context:table-1"]
+
+
+def test_packet_namespace_validator_reports_duplicates_without_set_loss() -> None:
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+    parsed_response = OledLLMPaperMappingResponse.model_validate(_valid_response())
+    duplicated_response = parsed_response.model_copy(
+        update={"packet_results": [parsed_response.packet_results[0], parsed_response.packet_results[0]]}
+    )
+
+    with pytest.raises(ResponseBindingError) as raised:
+        _validate_response_binding(request, duplicated_response)
+
+    assert raised.value.code == "PACKET_NAMESPACE_MISMATCH"
+    assert raised.value.details["duplicate_ids"] == ["packet:paper-context:table-1"]
+    assert raised.value.details["duplicate_occurrence_count"] == 1
+
+
+def test_response_binding_failure_report_is_deterministic_and_excludes_free_text() -> None:
+    response = _valid_response()
+    secret_text = "PRIVATE_DOCUMENT_CONTENT_SHOULD_NOT_BE_PERSISTED"
+    response["response_notes"] = [secret_text]
+    response["packet_results"][0]["rationale_summary"] = secret_text
+    response["packet_results"][0]["candidate_proposals"][0]["rationale"] = secret_text
+    response["paper_id"] = "wrong-paper"
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    first = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+    second = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+    first_report = first.metadata["response_binding_failure"]
+    second_report = second.metadata["response_binding_failure"]
+    serialized = json.dumps(first_report, ensure_ascii=False, sort_keys=True)
+
+    assert first_report == second_report
+    assert _stable_hash(first_report) == _stable_hash(second_report)
+    assert secret_text not in serialized
+    assert "rationale" not in serialized
+    assert "response_projection" in first_report
 
 
 def test_context_request_rejects_a_document_without_text_bearing_elements() -> None:
@@ -533,6 +669,9 @@ def test_unknown_property_must_be_an_ontology_extension_not_a_schema_candidate()
     assert result.schema_candidates == []
     assert result.findings[0].code == "invalid_llm_mapping_response"
     assert "ontology_extension_proposals" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "PROPERTY_ID_BINDING_INVALID"
+    )
 
 
 def test_v4_numeric_candidate_requires_reported_source_lexeme() -> None:
@@ -588,6 +727,9 @@ def test_known_property_cannot_be_mapped_to_a_layer_outside_the_ontology() -> No
 
     assert result.status == "invalid_response"
     assert "outside the property ontology" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "TARGET_LAYER_ONTOLOGY_INVALID"
+    )
 
 
 def test_ontology_extension_is_preserved_but_not_applied_or_materialized() -> None:
@@ -662,6 +804,9 @@ def test_response_evidence_outside_packet_and_document_context_fails_closed() ->
     assert result.status == "invalid_response"
     assert result.schema_candidates == []
     assert "outside request" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "EVIDENCE_REF_OUTSIDE_REQUEST"
+    )
 
 
 def test_provider_error_is_reported_without_candidates() -> None:
@@ -747,6 +892,9 @@ def test_property_bearing_keep_requires_molecule_or_interaction_property() -> No
 
     assert result.status == "invalid_response"
     assert "without a molecule/interaction property" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "PROPERTY_SCOPE_BINDING_INVALID"
+    )
 
 
 def test_replace_binds_superseded_candidates_and_preserves_unrelated_candidates() -> None:
@@ -803,6 +951,9 @@ def test_replace_rejects_unknown_superseded_candidate_id() -> None:
 
     assert result.status == "invalid_response"
     assert "unknown deterministic candidate ids" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "DETERMINISTIC_CANDIDATE_UNKNOWN_SUPERSEDE"
+    )
 
 
 def test_table_candidate_requires_exact_row_evidence() -> None:
@@ -814,6 +965,28 @@ def test_table_candidate_requires_exact_row_evidence() -> None:
 
     assert result.status == "invalid_response"
     assert "lacks row_index evidence" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "TABLE_ROW_EVIDENCE_MISSING"
+    )
+
+
+def test_table_candidate_rejects_cell_value_mismatch_with_safe_digests() -> None:
+    response = _valid_response()
+    response["packet_results"][0]["candidate_proposals"][0]["evidence_refs"][0]["cell_value"] = "81"
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=response),
+    )
+
+    assert result.status == "invalid_response"
+    report = result.metadata["response_binding_failure"]
+    assert report["binding_error_code"] == "TABLE_CELL_VALUE_MISMATCH"
+    details = report["safe_details"]
+    assert details["expected_cell_length"] == 2
+    assert details["returned_cell_length"] == 2
+    assert details["expected_cell_digest"] != details["returned_cell_digest"]
 
 
 def test_device_only_ontology_extension_is_outside_current_dataset_scope() -> None:
@@ -826,6 +999,9 @@ def test_device_only_ontology_extension_is_outside_current_dataset_scope() -> No
 
     assert result.status == "invalid_response"
     assert "without a molecule/interaction property" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "PROPERTY_SCOPE_BINDING_INVALID"
+    )
 
 
 def test_duplicate_ontology_extension_property_ids_fail_closed() -> None:
@@ -838,6 +1014,9 @@ def test_duplicate_ontology_extension_property_ids_fail_closed() -> None:
 
     assert result.status == "invalid_response"
     assert "duplicate ontology extension" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "ONTOLOGY_EXTENSION_DUPLICATE"
+    )
 
 
 def test_generic_source_check_against_supplied_pdf_context_fails_closed() -> None:
@@ -851,6 +1030,9 @@ def test_generic_source_check_against_supplied_pdf_context_fails_closed() -> Non
 
     assert result.status == "invalid_response"
     assert "generic source-check" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "GENERIC_SOURCE_CHECK_WITH_FULL_CONTEXT"
+    )
 
 
 def test_supplement_can_include_known_candidates_and_ontology_extensions() -> None:
@@ -877,6 +1059,9 @@ def test_explicit_ev_property_signals_require_structured_exclusion_reason() -> N
     assert "explicit property signals" in result.findings[0].message
     assert "homo_ev" in result.findings[0].message
     assert "lumo_ev" in result.findings[0].message
+    assert result.metadata["response_binding_failure"]["binding_error_code"] == (
+        "EXPLICIT_PROPERTY_SIGNAL_EXCLUSION_MISSING"
+    )
 
 
 def test_explicit_ev_property_signals_can_be_audited_as_external_background() -> None:

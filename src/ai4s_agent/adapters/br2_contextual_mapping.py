@@ -131,10 +131,19 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
 
         if not mapping_result.is_valid:
             finding = mapping_result.findings[0] if mapping_result.findings else None
-            return _failed(
+            failure = _failed(
                 str(finding.code if finding else "llm_mapping_failed"),
                 str(finding.message if finding else mapping_result.status),
             )
+            response_binding_failure = mapping_result.metadata.get("response_binding_failure")
+            if isinstance(response_binding_failure, dict):
+                failure_path = _persist_response_binding_failure(payload, mapping_result)
+                failure["outputs"] = {"response_binding_failure": str(failure_path)}
+                failure["summary"] = {
+                    "validation_stages": mapping_result.metadata.get("validation_stages", {}),
+                    "response_binding_failure": response_binding_failure,
+                }
+            return failure
 
         output_path = write_json(
             _output_root(payload) / "contextual_mapping_result.json",
@@ -374,6 +383,21 @@ def _failed(code: str, message: str) -> dict[str, Any]:
         "adapter": _ADAPTER_PREFIX,
         "error": {"code": str(code), "message": str(message)},
     }
+
+
+def _persist_response_binding_failure(
+    payload: dict[str, Any],
+    mapping_result: OledLLMContextMappingResult,
+) -> Path:
+    """Persist only the validator's safe, structured failure projection."""
+
+    failure = mapping_result.metadata.get("response_binding_failure")
+    if not isinstance(failure, dict):
+        raise ValueError("response binding failure report is missing")
+    return write_json(
+        _output_root(payload) / "response_binding_failure.json",
+        failure,
+    )
 
 
 __all__ = [

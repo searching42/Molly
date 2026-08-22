@@ -146,6 +146,31 @@ class OledContextProjectionError(ValueError):
     code = "context_budget_exceeded"
 
 
+class ResponseBindingError(ValueError):
+    """A structured, privacy-safe failure from the response binding boundary.
+
+    The exception deliberately carries only allowlisted scalar/list/dict data
+    assembled by the binding validator.  It must never be initialized from a
+    raw response, prompt, or arbitrary object representation.
+    """
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        stage: str,
+        safe_message: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not all(isinstance(value, str) for value in (code, stage, safe_message)):
+            raise TypeError("response binding error fields must be strings")
+        self.code = code
+        self.stage = stage
+        self.safe_message = safe_message
+        self.details = _copy_json_safe(details or {})
+        super().__init__(self.safe_message)
+
+
 class OledPaperContextElement(BaseModel):
     element_id: str
     page: int | None = Field(default=None, ge=0)
@@ -783,6 +808,7 @@ def run_oled_llm_context_mapping(
 ) -> OledLLMContextMappingResult:
     request_digest = request.request_digest
     invocation: LLMInvocationRecord | None = None
+    validation_stages = _initial_validation_stages()
     try:
         messages = _mapping_messages(request)
     except OledContextProjectionError as exc:
@@ -791,11 +817,14 @@ def run_oled_llm_context_mapping(
             status="provider_error",
             code=exc.code,
             message=str(exc),
+            validation_stages=validation_stages,
         )
     response: OledLLMPaperMappingResponse | None = None
     schema_candidates: list[OledSchemaCandidate] = []
     for attempt in range(_MAX_MAPPING_VALIDATION_ATTEMPTS):
+        validation_stages = _initial_validation_stages()
         invocation = None
+        response = None
         try:
             invocation = provider.complete_json(
                 messages=messages,
@@ -803,6 +832,7 @@ def run_oled_llm_context_mapping(
                 response_model=OledLLMPaperMappingResponse,
             )
         except LLMResponseValidationError as exc:
+            validation_stages["structured_validation"] = "failed"
             if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
                 messages = _mapping_retry_messages(messages, error=str(exc))
                 continue
@@ -811,6 +841,7 @@ def run_oled_llm_context_mapping(
                 status="provider_error",
                 code="llm_provider_error",
                 message=str(exc),
+                validation_stages=validation_stages,
             )
         except (LLMProviderError, OSError, TypeError) as exc:
             return _failed_result(
@@ -818,6 +849,7 @@ def run_oled_llm_context_mapping(
                 status="provider_error",
                 code="llm_provider_error",
                 message=str(exc),
+                validation_stages=validation_stages,
             )
 
         try:
@@ -829,13 +861,35 @@ def run_oled_llm_context_mapping(
             response = OledLLMPaperMappingResponse.model_validate(
                 _invocation_structured_payload(invocation)
             )
+            validation_stages["structured_validation"] = "passed"
             _validate_response_binding(request, response)
+            _mark_binding_stages_passed(validation_stages)
+            validation_stages["response_binding"] = "passed"
             schema_candidates = _materialize_schema_candidates(request, response)
             semantic_validation = validate_oled_schema_candidates(schema_candidates)
             if not semantic_validation.is_valid:
+                validation_stages["semantic_validation"] = "failed"
                 error_codes = sorted(set(semantic_validation.error_codes))
                 raise ValueError(f"materialized schema candidate validation failed: {error_codes}")
-        except (ValidationError, ValueError) as exc:
+            validation_stages["semantic_validation"] = "passed"
+        except ResponseBindingError as exc:
+            _mark_binding_stage_failure(validation_stages, exc.stage)
+            validation_stages["response_binding"] = "failed"
+            if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
+                messages = _mapping_retry_messages(messages, error=exc.safe_message)
+                continue
+            return _failed_result(
+                request,
+                status="invalid_response",
+                code="invalid_llm_mapping_response",
+                message=exc.safe_message,
+                invocation=invocation,
+                response=response,
+                binding_error=exc,
+                validation_stages=validation_stages,
+            )
+        except ValidationError as exc:
+            validation_stages["structured_validation"] = "failed"
             if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
                 messages = _mapping_retry_messages(messages, error=str(exc))
                 continue
@@ -845,6 +899,21 @@ def run_oled_llm_context_mapping(
                 code="invalid_llm_mapping_response",
                 message=str(exc),
                 invocation=invocation,
+                validation_stages=validation_stages,
+            )
+        except ValueError as exc:
+            validation_stages["semantic_validation"] = "failed"
+            if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
+                messages = _mapping_retry_messages(messages, error=str(exc))
+                continue
+            return _failed_result(
+                request,
+                status="invalid_response",
+                code="invalid_llm_mapping_response",
+                message=str(exc),
+                invocation=invocation,
+                response=response,
+                validation_stages=validation_stages,
             )
         break
 
@@ -854,6 +923,7 @@ def run_oled_llm_context_mapping(
             status="provider_error",
             code="llm_provider_error",
             message="contextual mapping did not produce a validated response",
+            validation_stages=validation_stages,
         )
 
     extensions = [
@@ -887,6 +957,7 @@ def run_oled_llm_context_mapping(
             "device_only_admitted": False,
             "gold_records_created": False,
             "dataset_written": False,
+            "validation_stages": dict(validation_stages),
         },
     )
 
@@ -896,13 +967,31 @@ def _validate_response_binding(
     response: OledLLMPaperMappingResponse,
 ) -> None:
     if response.paper_id != request.paper_id:
-        raise ValueError("response paper_id does not match request")
+        raise ResponseBindingError(
+            code="PAPER_ID_MISMATCH",
+            stage="identity_binding",
+            safe_message="response paper_id does not match request",
+            details={
+                "expected_paper_id": request.paper_id,
+                "returned_paper_id": response.paper_id,
+            },
+        )
     packets_by_id = {packet.packet_id: packet for packet in request.packets}
-    response_ids = {result.packet_id for result in response.packet_results}
-    if response_ids != set(packets_by_id):
-        missing = sorted(set(packets_by_id) - response_ids)
-        unknown = sorted(response_ids - set(packets_by_id))
-        raise ValueError(f"packet result binding mismatch: missing={missing}, unknown={unknown}")
+    packet_namespace = _namespace_diff(
+        expected_ids=list(packets_by_id),
+        returned_ids=[result.packet_id for result in response.packet_results],
+    )
+    if (
+        packet_namespace["missing_ids"]
+        or packet_namespace["unknown_ids"]
+        or packet_namespace["duplicate_ids"]
+    ):
+        raise ResponseBindingError(
+            code="PACKET_NAMESPACE_MISMATCH",
+            stage="identity_binding",
+            safe_message="packet result binding mismatch",
+            details=packet_namespace,
+        )
 
     context_refs = {
         (element.source_hash, element.element_id, element.element_type)
@@ -944,24 +1033,70 @@ def _validate_response_binding(
                     or proposal.reported_decimal_places is None
                 )
             ):
-                raise ValueError(
-                    f"packet {packet.packet_id} candidate {index} lacks required reported value fields"
+                raise ResponseBindingError(
+                    code="REPORTED_VALUE_FIELDS_MISSING",
+                    stage="deterministic_binding",
+                    safe_message=(
+                        f"packet {packet.packet_id} candidate {index} lacks required reported value fields"
+                    ),
+                    details={
+                        "packet_id": packet.packet_id,
+                        "candidate_index": index,
+                        "value_type": type(proposal.value).__name__,
+                        "reported_value_text_present": proposal.reported_value_text is not None,
+                        "reported_decimal_places_present": proposal.reported_decimal_places is not None,
+                    },
                 )
             if proposal.property_id and (
                 proposal.property_id not in packet.allowed_property_ids
                 or proposal.property_id not in ontology_by_id
             ):
-                raise ValueError(
-                    f"packet {packet.packet_id} candidate {index} uses unknown property_id {proposal.property_id}; "
-                    "use ontology_extension_proposals instead"
+                raise ResponseBindingError(
+                    code="PROPERTY_ID_BINDING_INVALID",
+                    stage="deterministic_binding",
+                    safe_message=(
+                        f"packet {packet.packet_id} candidate {index} uses unknown property_id "
+                        f"{proposal.property_id}; use ontology_extension_proposals instead"
+                    ),
+                    details={
+                        "packet_id": packet.packet_id,
+                        "candidate_index": index,
+                        "property_id": proposal.property_id,
+                        "packet_allowed_property_ids": sorted(packet.allowed_property_ids),
+                        "ontology_property_id_count": len(ontology_ids),
+                        "ontology_property_id_digest": _stable_hash(sorted(ontology_ids)),
+                    },
                 )
             if proposal.target_layer and proposal.target_layer.value not in packet.allowed_layers:
-                raise ValueError(f"packet {packet.packet_id} candidate {index} uses disallowed target layer")
+                raise ResponseBindingError(
+                    code="TARGET_LAYER_PACKET_INVALID",
+                    stage="deterministic_binding",
+                    safe_message=f"packet {packet.packet_id} candidate {index} uses disallowed target layer",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "candidate_index": index,
+                        "target_layer": proposal.target_layer.value,
+                        "packet_allowed_layers": sorted(packet.allowed_layers),
+                    },
+                )
             if proposal.property_id and proposal.target_layer:
                 definition = ontology_by_id[proposal.property_id]
                 if proposal.target_layer not in definition.allowed_layers:
-                    raise ValueError(
-                        f"packet {packet.packet_id} candidate {index} uses a layer outside the property ontology"
+                    raise ResponseBindingError(
+                        code="TARGET_LAYER_ONTOLOGY_INVALID",
+                        stage="deterministic_binding",
+                        safe_message=(
+                            f"packet {packet.packet_id} candidate {index} uses a layer outside the property ontology"
+                        ),
+                        details={
+                            "packet_id": packet.packet_id,
+                            "candidate_index": index,
+                            "property_id": proposal.property_id,
+                            "target_layer": proposal.target_layer.value,
+                            "ontology_allowed_layers": sorted(
+                                layer.value for layer in definition.allowed_layers
+                            ),
+                        },
                     )
                 required_context_fields = _required_comparison_context_fields(definition)
                 if (
@@ -969,49 +1104,167 @@ def _validate_response_binding(
                     and required_context_fields
                 ):
                     if proposal.comparison_context is None:
-                        raise ValueError(
-                            f"packet {packet.packet_id} candidate {index} lacks required comparison_context"
+                        raise ResponseBindingError(
+                            code="COMPARISON_CONTEXT_MISSING",
+                            stage="deterministic_binding",
+                            safe_message=(
+                                f"packet {packet.packet_id} candidate {index} lacks required comparison_context"
+                            ),
+                            details={
+                                "packet_id": packet.packet_id,
+                                "candidate_index": index,
+                                "property_id": proposal.property_id,
+                                "required_fields": sorted(required_context_fields),
+                            },
                         )
                     omitted_fields = sorted(
                         set(required_context_fields)
                         - proposal.comparison_context.model_fields_set
                     )
                     if omitted_fields:
-                        raise ValueError(
-                            f"packet {packet.packet_id} candidate {index} omits required comparison_context "
-                            f"fields: {omitted_fields}; use explicit null for unreported context"
+                        raise ResponseBindingError(
+                            code="COMPARISON_CONTEXT_FIELDS_MISSING",
+                            stage="deterministic_binding",
+                            safe_message=(
+                                f"packet {packet.packet_id} candidate {index} omits required comparison_context "
+                                f"fields: {omitted_fields}; use explicit null for unreported context"
+                            ),
+                            details={
+                                "packet_id": packet.packet_id,
+                                "candidate_index": index,
+                                "property_id": proposal.property_id,
+                                "required_fields": sorted(required_context_fields),
+                                "omitted_fields": omitted_fields,
+                                "returned_fields": sorted(proposal.comparison_context.model_fields_set),
+                            },
                         )
             evidence_keys = {
                 (ref.source_candidate_hash, ref.source_evidence_anchor, ref.source_candidate_type)
                 for ref in proposal.evidence_refs
             }
             if packet_ref not in evidence_keys:
-                raise ValueError(f"packet {packet.packet_id} candidate {index} lacks source packet evidence binding")
+                raise ResponseBindingError(
+                    code="EVIDENCE_PACKET_BINDING_MISSING",
+                    stage="evidence_binding",
+                    safe_message=(
+                        f"packet {packet.packet_id} candidate {index} lacks source packet evidence binding"
+                    ),
+                    details={
+                        "packet_id": packet.packet_id,
+                        "candidate_index": index,
+                        "expected_packet_ref": _safe_evidence_key(packet_ref),
+                        "returned_evidence_refs": [
+                            _safe_evidence_ref(ref) for ref in proposal.evidence_refs
+                        ],
+                    },
+                )
             if not evidence_keys.issubset(allowed_refs):
-                raise ValueError(f"packet {packet.packet_id} candidate {index} cites evidence outside request")
+                raise ResponseBindingError(
+                    code="EVIDENCE_REF_OUTSIDE_REQUEST",
+                    stage="evidence_binding",
+                    safe_message=f"packet {packet.packet_id} candidate {index} cites evidence outside request",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "candidate_index": index,
+                        "unknown_evidence_refs": [
+                            _safe_evidence_key(ref)
+                            for ref in sorted(evidence_keys - allowed_refs)
+                        ],
+                        "allowed_context_ref_count": len(context_refs),
+                        "allowed_context_ref_digest": _stable_hash(
+                            sorted(
+                                (_safe_evidence_key(ref) for ref in context_refs),
+                                key=lambda item: json.dumps(
+                                    item,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                            )
+                        ),
+                    },
+                )
             _validate_table_row_evidence(packet, proposal, candidate_index=index)
         for extension in packet_result.ontology_extension_proposals:
             if extension.source_packet_id != packet.packet_id:
-                raise ValueError("ontology extension source_packet_id does not match containing packet")
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_SOURCE_INVALID",
+                    stage="ontology_binding",
+                    safe_message="ontology extension source_packet_id does not match containing packet",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "returned_source_packet_id": extension.source_packet_id,
+                    },
+                )
             if extension.proposed_property_id in ontology_ids:
-                raise ValueError("ontology extension duplicates an existing property_id")
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_PROPERTY_DUPLICATE",
+                    stage="ontology_binding",
+                    safe_message="ontology extension duplicates an existing property_id",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "proposed_property_id": extension.proposed_property_id,
+                    },
+                )
             if extension.proposed_property_id in proposed_extension_ids:
-                raise ValueError(
-                    f"duplicate ontology extension proposal for {extension.proposed_property_id}"
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_DUPLICATE",
+                    stage="ontology_binding",
+                    safe_message=f"duplicate ontology extension proposal for {extension.proposed_property_id}",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "proposed_property_id": extension.proposed_property_id,
+                    },
                 )
             proposed_extension_ids.add(extension.proposed_property_id)
             if any(layer.value not in packet.allowed_layers for layer in extension.allowed_layers):
-                raise ValueError("ontology extension proposes a layer outside the request packet")
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_LAYER_INVALID",
+                    stage="ontology_binding",
+                    safe_message="ontology extension proposes a layer outside the request packet",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "proposed_property_id": extension.proposed_property_id,
+                        "returned_layers": [layer.value for layer in extension.allowed_layers],
+                        "packet_allowed_layers": sorted(packet.allowed_layers),
+                    },
+                )
             if not set(extension.allowed_layers).intersection(_DATASET_PROPERTY_LAYERS):
-                raise ValueError(
-                    "ontology extension is device/measurement-only and outside the current dataset scope"
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_DATASET_SCOPE_INVALID",
+                    stage="ontology_binding",
+                    safe_message=(
+                        "ontology extension is device/measurement-only and outside the current dataset scope"
+                    ),
+                    details={
+                        "packet_id": packet.packet_id,
+                        "proposed_property_id": extension.proposed_property_id,
+                        "returned_layers": [layer.value for layer in extension.allowed_layers],
+                        "dataset_scope": request.dataset_scope,
+                    },
                 )
             evidence_keys = {
                 (ref.source_candidate_hash, ref.source_evidence_anchor, ref.source_candidate_type)
                 for ref in extension.evidence_refs
             }
             if packet_ref not in evidence_keys or not evidence_keys.issubset(allowed_refs):
-                raise ValueError("ontology extension evidence is not bound to the request packet/context")
+                raise ResponseBindingError(
+                    code="ONTOLOGY_EXTENSION_EVIDENCE_INVALID",
+                    stage="ontology_binding",
+                    safe_message="ontology extension evidence is not bound to the request packet/context",
+                    details={
+                        "packet_id": packet.packet_id,
+                        "proposed_property_id": extension.proposed_property_id,
+                        "expected_packet_ref": _safe_evidence_key(packet_ref),
+                        "returned_evidence_refs": [
+                            _safe_evidence_ref(ref) for ref in extension.evidence_refs
+                        ],
+                        "unknown_evidence_refs": [
+                            _safe_evidence_key(ref)
+                            for ref in sorted(evidence_keys - allowed_refs)
+                        ],
+                    },
+                )
 
 
 def _validate_action_and_scope_binding(
@@ -1022,14 +1275,34 @@ def _validate_action_and_scope_binding(
 ) -> None:
     deterministic_by_id = {candidate.candidate_id: candidate for candidate in deterministic_candidates}
     if packet_result.action == "keep_deterministic" and not deterministic_candidates:
-        raise ValueError(f"packet {packet.packet_id} cannot keep missing deterministic candidates")
+        raise ResponseBindingError(
+            code="DETERMINISTIC_CANDIDATE_MISSING_FOR_KEEP",
+            stage="deterministic_binding",
+            safe_message=f"packet {packet.packet_id} cannot keep missing deterministic candidates",
+            details={
+                "packet_id": packet.packet_id,
+                "action": packet_result.action,
+                "expected_deterministic_candidate_count": 0,
+                "expected_deterministic_candidate_digest": _stable_hash([]),
+            },
+        )
 
     superseded_ids = set(packet_result.superseded_deterministic_candidate_ids)
     if packet_result.action == "replace":
         unknown_ids = sorted(superseded_ids - set(deterministic_by_id))
         if unknown_ids:
-            raise ValueError(
-                f"packet {packet.packet_id} replaces unknown deterministic candidate ids: {unknown_ids}"
+            raise ResponseBindingError(
+                code="DETERMINISTIC_CANDIDATE_UNKNOWN_SUPERSEDE",
+                stage="deterministic_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} replaces unknown deterministic candidate ids: {unknown_ids}"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "action": packet_result.action,
+                    "unknown_candidate_ids": unknown_ids,
+                    "expected_candidate_ids": sorted(deterministic_by_id),
+                },
             )
 
     preserved_deterministic = [
@@ -1054,20 +1327,55 @@ def _validate_action_and_scope_binding(
         if not has_eligible_property and not (
             unresolved_property_action and has_eligible_extension
         ) and packet_result.action != "needs_source_check":
-            raise ValueError(
-                f"packet {packet.packet_id} is property_bearing without a molecule/interaction property"
+            raise ResponseBindingError(
+                code="PROPERTY_SCOPE_BINDING_INVALID",
+                stage="deterministic_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} is property_bearing without a molecule/interaction property"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "action": packet_result.action,
+                    "scope_classification": packet_result.scope_classification,
+                    "eligible_property_count": 0,
+                    "eligible_extension_count": int(has_eligible_extension),
+                },
             )
     elif has_eligible_property:
-        raise ValueError(
-            f"packet {packet.packet_id} contains a molecule/interaction property but is classified "
-            f"as {packet_result.scope_classification}"
+        raise ResponseBindingError(
+            code="PROPERTY_SCOPE_BINDING_INVALID",
+            stage="deterministic_binding",
+            safe_message=(
+                f"packet {packet.packet_id} contains a molecule/interaction property but is classified "
+                f"as {packet_result.scope_classification}"
+            ),
+            details={
+                "packet_id": packet.packet_id,
+                "action": packet_result.action,
+                "scope_classification": packet_result.scope_classification,
+                "eligible_property_count": 1,
+                "eligible_extension_count": int(has_eligible_extension),
+            },
         )
 
     if packet_result.action == "no_eligible_property" and any(
         _is_dataset_property_candidate(candidate) for candidate in deterministic_candidates
     ):
-        raise ValueError(
-            f"packet {packet.packet_id} cannot discard deterministic molecule/interaction properties as ineligible"
+        raise ResponseBindingError(
+            code="DETERMINISTIC_PROPERTY_DISCARDED",
+            stage="deterministic_binding",
+            safe_message=(
+                f"packet {packet.packet_id} cannot discard deterministic molecule/interaction properties as ineligible"
+            ),
+            details={
+                "packet_id": packet.packet_id,
+                "action": packet_result.action,
+                "discarded_candidate_ids": sorted(
+                    candidate.candidate_id
+                    for candidate in deterministic_candidates
+                    if _is_dataset_property_candidate(candidate)
+                ),
+            },
         )
 
     explicit_signals = _explicit_property_signal_labels(packet)
@@ -1076,16 +1384,39 @@ def _validate_action_and_scope_binding(
         and explicit_signals
         and packet_result.explicit_property_exclusion_reason is None
     ):
-        raise ValueError(
-            f"packet {packet.packet_id} excludes explicit property signals {explicit_signals} "
-            "without explicit_property_exclusion_reason"
+        raise ResponseBindingError(
+            code="EXPLICIT_PROPERTY_SIGNAL_EXCLUSION_MISSING",
+            stage="deterministic_binding",
+            safe_message=(
+                f"packet {packet.packet_id} excludes explicit property signals {explicit_signals} "
+                "without explicit_property_exclusion_reason"
+            ),
+            details={
+                "packet_id": packet.packet_id,
+                "action": packet_result.action,
+                "explicit_property_signals": explicit_signals,
+                "explicit_property_exclusion_reason": None,
+            },
         )
 
     if packet_result.action == "needs_source_check":
         combined_questions = " ".join(packet_result.source_check_questions).lower()
-        if any(marker in combined_questions for marker in _GENERIC_SOURCE_CHECK_MARKERS):
-            raise ValueError(
-                f"packet {packet.packet_id} uses a generic source-check request despite supplied full text"
+        matched_markers = sorted(
+            marker for marker in _GENERIC_SOURCE_CHECK_MARKERS if marker in combined_questions
+        )
+        if matched_markers:
+            raise ResponseBindingError(
+                code="GENERIC_SOURCE_CHECK_WITH_FULL_CONTEXT",
+                stage="deterministic_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} uses a generic source-check request despite supplied full text"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "action": packet_result.action,
+                    "matched_markers": matched_markers,
+                    "question_count": len(packet_result.source_check_questions),
+                },
             )
 
 
@@ -1106,27 +1437,72 @@ def _validate_table_row_evidence(
     ]
     row_refs = [ref for ref in packet_refs if ref.row_index is not None]
     if not row_refs:
-        raise ValueError(
-            f"packet {packet.packet_id} candidate {candidate_index} lacks row_index evidence"
+        raise ResponseBindingError(
+            code="TABLE_ROW_EVIDENCE_MISSING",
+            stage="evidence_binding",
+            safe_message=f"packet {packet.packet_id} candidate {candidate_index} lacks row_index evidence",
+            details={
+                "packet_id": packet.packet_id,
+                "candidate_index": candidate_index,
+                "table_ref": _safe_evidence_key(
+                    (packet.source_candidate_hash, packet.source_evidence_anchor, packet.source_candidate_type.value)
+                ),
+            },
         )
     for ref in row_refs:
         row_index = int(ref.row_index)
         if row_index < 0 or row_index >= len(packet.table_rows):
-            raise ValueError(
-                f"packet {packet.packet_id} candidate {candidate_index} has out-of-range row_index"
+            raise ResponseBindingError(
+                code="TABLE_ROW_INDEX_INVALID",
+                stage="evidence_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} candidate {candidate_index} has out-of-range row_index"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "candidate_index": candidate_index,
+                    "row_index": row_index,
+                    "table_row_count": len(packet.table_rows),
+                },
             )
         if not ref.column_name:
             continue
         row = packet.table_rows[row_index]
         if ref.column_name not in row:
-            raise ValueError(
-                f"packet {packet.packet_id} candidate {candidate_index} cites an unknown table column"
+            raise ResponseBindingError(
+                code="TABLE_COLUMN_INVALID",
+                stage="evidence_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} candidate {candidate_index} cites an unknown table column"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "candidate_index": candidate_index,
+                    "row_index": row_index,
+                    "returned_column_name": ref.column_name,
+                    "available_column_count": len(row),
+                    "available_column_digest": _stable_hash(sorted(str(name) for name in row)),
+                },
             )
         expected_cell = str(row.get(ref.column_name) or "").strip()
         actual_cell = str(ref.cell_value or "").strip()
         if actual_cell != expected_cell:
-            raise ValueError(
-                f"packet {packet.packet_id} candidate {candidate_index} cell_value does not match row evidence"
+            raise ResponseBindingError(
+                code="TABLE_CELL_VALUE_MISMATCH",
+                stage="evidence_binding",
+                safe_message=(
+                    f"packet {packet.packet_id} candidate {candidate_index} cell_value does not match row evidence"
+                ),
+                details={
+                    "packet_id": packet.packet_id,
+                    "candidate_index": candidate_index,
+                    "row_index": row_index,
+                    "column_name": ref.column_name,
+                    "expected_cell_length": len(expected_cell),
+                    "expected_cell_digest": _stable_hash(expected_cell),
+                    "returned_cell_length": len(actual_cell),
+                    "returned_cell_digest": _stable_hash(actual_cell),
+                },
             )
 
 
@@ -1165,6 +1541,190 @@ def _explicit_property_signal_labels(packet: OledSemanticMappingPacket) -> list[
     ):
         signals.append("delta_e_st_ev")
     return sorted(set(signals))
+
+
+def _initial_validation_stages() -> dict[str, str]:
+    return {
+        "structured_validation": "not_reached",
+        "identity_binding": "not_reached",
+        "deterministic_binding": "not_reached",
+        "evidence_binding": "not_reached",
+        "ontology_binding": "not_reached",
+        "response_binding": "not_reached",
+        "semantic_validation": "not_reached",
+        "candidate_assembly": "not_executed",
+    }
+
+
+_BINDING_STAGE_ORDER = (
+    "identity_binding",
+    "deterministic_binding",
+    "evidence_binding",
+    "ontology_binding",
+)
+
+
+def _mark_binding_stages_passed(stages: dict[str, str]) -> None:
+    for stage in _BINDING_STAGE_ORDER:
+        stages[stage] = "passed"
+
+
+def _mark_binding_stage_failure(stages: dict[str, str], failed_stage: str) -> None:
+    if failed_stage not in _BINDING_STAGE_ORDER:
+        return
+    for stage in _BINDING_STAGE_ORDER:
+        if stage == failed_stage:
+            stages[stage] = "failed"
+            return
+        stages[stage] = "passed"
+
+
+def _namespace_diff(*, expected_ids: list[str], returned_ids: list[str]) -> dict[str, Any]:
+    expected_unique = sorted(set(expected_ids))
+    returned_unique = sorted(set(returned_ids))
+    returned_counts: dict[str, int] = {}
+    for identifier in returned_ids:
+        returned_counts[identifier] = returned_counts.get(identifier, 0) + 1
+    duplicate_ids = sorted(
+        identifier for identifier, count in returned_counts.items() if count > 1
+    )
+    return {
+        "expected_count": len(expected_ids),
+        "returned_count": len(returned_ids),
+        "missing_count": len(set(expected_unique) - set(returned_unique)),
+        "unknown_count": len(set(returned_unique) - set(expected_unique)),
+        "duplicate_count": len(duplicate_ids),
+        "duplicate_occurrence_count": sum(
+            max(returned_counts[identifier] - 1, 0) for identifier in duplicate_ids
+        ),
+        "missing_ids": sorted(set(expected_unique) - set(returned_unique)),
+        "unknown_ids": sorted(set(returned_unique) - set(expected_unique)),
+        "duplicate_ids": duplicate_ids,
+        "expected_namespace_digest": _stable_hash(expected_unique),
+        "returned_namespace_digest": _stable_hash(sorted(returned_ids)),
+    }
+
+
+def _safe_evidence_key(
+    value: tuple[str, str, str],
+) -> dict[str, str]:
+    source_candidate_hash, source_evidence_anchor, source_candidate_type = value
+    return {
+        "source_candidate_hash": source_candidate_hash,
+        "source_evidence_anchor": source_evidence_anchor,
+        "source_candidate_type": source_candidate_type,
+    }
+
+
+def _safe_evidence_ref(ref: OledSchemaEvidenceRef) -> dict[str, Any]:
+    payload = _safe_evidence_key(
+        (ref.source_candidate_hash, ref.source_evidence_anchor, ref.source_candidate_type)
+    )
+    if ref.row_index is not None:
+        payload["row_index"] = ref.row_index
+    if ref.column_name is not None:
+        payload["column_name"] = ref.column_name
+    if ref.cell_value is not None:
+        cell_value = str(ref.cell_value)
+        payload["cell_value_length"] = len(cell_value)
+        payload["cell_value_digest"] = _stable_hash(cell_value)
+    return payload
+
+
+def _safe_response_binding_projection(
+    response: OledLLMPaperMappingResponse,
+) -> dict[str, Any]:
+    """Project only fields consumed by response binding into safe evidence."""
+
+    packet_results: list[dict[str, Any]] = []
+    for packet_result in response.packet_results:
+        candidates: list[dict[str, Any]] = []
+        for index, proposal in enumerate(packet_result.candidate_proposals):
+            candidates.append(
+                {
+                    "candidate_index": index,
+                    "candidate_type": proposal.candidate_type.value,
+                    "property_id": proposal.property_id,
+                    "target_layer": (
+                        proposal.target_layer.value if proposal.target_layer is not None else None
+                    ),
+                    "value_type": type(proposal.value).__name__,
+                    "reported_value_text_present": proposal.reported_value_text is not None,
+                    "reported_decimal_places_present": proposal.reported_decimal_places is not None,
+                    "comparison_context_fields": (
+                        sorted(proposal.comparison_context.model_fields_set)
+                        if proposal.comparison_context is not None
+                        else None
+                    ),
+                    "evidence_refs": [_safe_evidence_ref(ref) for ref in proposal.evidence_refs],
+                }
+            )
+        extensions = [
+            {
+                "source_packet_id": extension.source_packet_id,
+                "proposed_property_id": extension.proposed_property_id,
+                "allowed_layers": [layer.value for layer in extension.allowed_layers],
+                "evidence_refs": [_safe_evidence_ref(ref) for ref in extension.evidence_refs],
+            }
+            for extension in packet_result.ontology_extension_proposals
+        ]
+        packet_results.append(
+            {
+                "packet_id": packet_result.packet_id,
+                "action": packet_result.action,
+                "scope_classification": packet_result.scope_classification,
+                "candidate_proposals": candidates,
+                "ontology_extension_proposals": extensions,
+                "superseded_deterministic_candidate_ids": list(
+                    packet_result.superseded_deterministic_candidate_ids
+                ),
+                "source_check_missing_evidence": list(packet_result.source_check_missing_evidence),
+                "explicit_property_exclusion_reason": packet_result.explicit_property_exclusion_reason,
+            }
+        )
+    return {
+        "paper_id": response.paper_id,
+        "packet_result_count": len(response.packet_results),
+        "response_notes_count": len(response.response_notes),
+        "packet_results": packet_results,
+    }
+
+
+def _build_response_binding_failure_report(
+    *,
+    error: ResponseBindingError,
+    response: OledLLMPaperMappingResponse | None,
+    validation_stages: Mapping[str, str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "oled_response_binding_failure.v1",
+        "exception_class": type(error).__name__,
+        "binding_stage": error.stage,
+        "binding_error_code": error.code,
+        "safe_message": error.safe_message,
+        "safe_details": dict(error.details),
+        "validation_stages": dict(validation_stages),
+        "response_projection": (
+            _safe_response_binding_projection(response) if response is not None else None
+        ),
+    }
+
+
+def _copy_json_safe(value: Any) -> Any:
+    """Copy an allowlisted JSON-safe value and reject arbitrary objects."""
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_copy_json_safe(item) for item in value]
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("response binding detail keys must be strings")
+        return {
+            key: _copy_json_safe(item)
+            for key, item in value.items()
+        }
+    raise TypeError("response binding details must contain JSON-safe values")
 
 
 def _materialize_schema_candidates(
@@ -1389,25 +1949,36 @@ def _failed_result(
     code: str,
     message: str,
     invocation: LLMInvocationRecord | None = None,
+    response: OledLLMPaperMappingResponse | None = None,
+    binding_error: ResponseBindingError | None = None,
+    validation_stages: Mapping[str, str] | None = None,
 ) -> OledLLMContextMappingResult:
+    metadata = {
+        **_projection_result_metadata(request),
+        "llm_call_attempted": True,
+        "llm_response_received": invocation is not None,
+        "llm_called": True,
+        "human_review_required": True,
+        "automatic_candidate_merge": False,
+        "ontology_extensions_applied": False,
+        "device_only_admitted": False,
+        "gold_records_created": False,
+        "dataset_written": False,
+        "validation_stages": dict(validation_stages or _initial_validation_stages()),
+    }
+    if binding_error is not None:
+        metadata["response_binding_failure"] = _build_response_binding_failure_report(
+            error=binding_error,
+            response=response,
+            validation_stages=metadata["validation_stages"],
+        )
     return OledLLMContextMappingResult(
         paper_id=request.paper_id,
         status=status,
         request_digest=request.request_digest,
         findings=[OledLLMContextMappingFinding(code=code, message=message)],
         llm_invocation=invocation,
-        metadata={
-            **_projection_result_metadata(request),
-            "llm_call_attempted": True,
-            "llm_response_received": invocation is not None,
-            "llm_called": True,
-            "human_review_required": True,
-            "automatic_candidate_merge": False,
-            "ontology_extensions_applied": False,
-            "device_only_admitted": False,
-            "gold_records_created": False,
-            "dataset_written": False,
-        },
+        metadata=metadata,
     )
 
 
@@ -1570,6 +2141,7 @@ __all__ = [
     "CONTEXT_PROJECTION_VERSION",
     "PROMPT_VERSION",
     "OledContextProjectionError",
+    "ResponseBindingError",
     "OledLLMContextMappingFinding",
     "OledLLMContextMappingResult",
     "OledLLMPacketMappingProposal",
