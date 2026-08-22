@@ -22,7 +22,7 @@ from ai4s_agent.schemas import ParsedDocument
 
 
 class OledLLMContextRequestArtifact(BaseModel):
-    artifact_version: str = "oled_llm_context_request.v5"
+    artifact_version: str = "oled_llm_context_request.v6"
     run_id: str
     paper_id: str
     generated_at: str
@@ -65,6 +65,18 @@ def prepare_oled_llm_context_request_artifact(
             "document_context_element_count": len(request.document_context),
             "deterministic_schema_candidate_count": len(request.deterministic_schema_candidates),
             "deterministic_finding_count": len(request.deterministic_findings),
+            "context_projection_version": request.metadata.get("context_projection_version", ""),
+            "projected_context_element_count": request.metadata.get(
+                "projected_context_element_count", 0
+            ),
+            "source_document_character_count": request.metadata.get(
+                "source_document_character_count", 0
+            ),
+            "projected_context_character_count": request.metadata.get(
+                "projected_context_character_count", 0
+            ),
+            "context_projection_ratio": request.metadata.get("context_projection_ratio", 0.0),
+            "context_budget_chars": request.metadata.get("context_budget_chars", 0),
             "llm_called": False,
             "external_service_called": False,
             "human_review_required": True,
@@ -107,7 +119,7 @@ def main(
     stderr: TextIO | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
-        description="Build a review-only OLED full-context LLM mapping request without calling an LLM."
+        description="Build a review-only OLED bounded-context LLM mapping request without calling an LLM."
     )
     parser.add_argument("--parsed-document", required=True)
     parser.add_argument("--oled-candidates", required=True)

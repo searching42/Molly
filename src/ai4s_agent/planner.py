@@ -1328,11 +1328,22 @@ def private_structured_dataset_task_registry_v2() -> AtomicTaskRegistry:
 def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
     """Add the BR2 mapping projection to the existing task catalog.
 
-    The document parser remains the default ``parse_document`` task and is
-    deliberately not overridden here.  These three local tasks only consume
-    its verified output, build the existing deterministic OLED evidence, call
-    the configured contextual mapper, and publish a review-only package.
+    The document parser remains the existing ``parse_document`` task.  This
+    registry only opts that operational parsing Gate into the existing frozen
+    plan preauthorization contract; the final scientific confirmation remains
+    a conversation boundary after the review-only package is verified.  The
+    three local tasks consume the parser output, build the existing
+    deterministic OLED evidence, call the configured contextual mapper, and
+    publish a review-only package.
     """
+
+    parse_document = next(
+        task for task in DEFAULT_ATOMIC_TASKS if task.task_id == "parse_document"
+    ).model_copy(update={"supports_plan_preapproval": True})
+    retained_tasks = [
+        parse_document if task.task_id == "parse_document" else task
+        for task in DEFAULT_ATOMIC_TASKS
+    ]
 
     trust = {
         "parsed_document": ["registered_intermediate", "verified_output"],
@@ -1451,7 +1462,7 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         planner_visible=True,
     )
     return AtomicTaskRegistry(
-        [*DEFAULT_ATOMIC_TASKS, extract_evidence, contextual_mapping, candidate_dataset]
+        [*retained_tasks, extract_evidence, contextual_mapping, candidate_dataset]
     )
 
 

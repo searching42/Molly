@@ -14,6 +14,7 @@ import math
 import os
 import re
 import threading
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,7 @@ from ai4s_agent.scientific_agent_harness_controller import (
 from ai4s_agent.scientific_agent_review_projection import (
     ScientificAgentReviewProjectionError,
     project_current_dataset_review,
+    project_current_oled_candidate_review,
     validate_review_projection,
 )
 from ai4s_agent.scientific_agent_result_projection import (
@@ -1288,6 +1290,203 @@ class ScientificAgentConversationSessionService:
             if message.content.strip()
         ]
 
+    def _resolve_br2_pdf_input(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        last_user_content: str,
+        allow_prior_attachment_selection: bool = False,
+    ) -> tuple[str, ...]:
+        """Bind one attached PDF to the existing ``pdf_corpus`` artifact.
+
+        Conversation attachments are immutable, content-addressed inputs.  The
+        planner and Controller deliberately observe only the run artifact
+        registry, so this small server-side seam copies the selected attachment
+        into the run and registers the existing logical artifact ID.  No path,
+        attachment bytes, or attachment metadata is sent to the planner LLM.
+
+        The return value contains safe original names only when the user must
+        choose between multiple PDFs.  An empty tuple means that no attachment
+        was present on the current BR2 request and the normal planner artifact
+        observation should decide whether an already-registered input exists.
+        """
+
+        messages, _recovered_tail = self.conversations.list_messages(
+            project_id,
+            conversation_id,
+        )
+        attached_message = next(
+            (
+                message
+                for message in reversed(messages)
+                if message.role == "user" and message.attachments
+            ),
+            None,
+        )
+        if attached_message is None:
+            return ()
+        latest_user_message = next(
+            (
+                message
+                for message in reversed(messages)
+                if message.role == "user"
+            ),
+            None,
+        )
+        if (
+            latest_user_message is None
+            or not latest_user_message.attachments
+        ) and not allow_prior_attachment_selection:
+            return ()
+        pdfs = [
+            attachment
+            for attachment in attached_message.attachments
+            if attachment.media_type in {"application/pdf", "application/x-pdf"}
+            or attachment.original_name.lower().endswith(".pdf")
+        ]
+        is_br2_request = ConversationAgent.is_br2_contextual_request(last_user_content)
+        if not is_br2_request:
+            prior_br2_request = any(
+                message.role == "user"
+                and ConversationAgent.is_br2_contextual_request(message.content)
+                for message in messages
+            )
+            if not prior_br2_request:
+                return ()
+            normalized_selection = str(last_user_content or "").strip().lower()
+            selected_pdfs = [
+                attachment
+                for attachment in pdfs
+                if str(attachment.original_name).strip().lower()
+                and str(attachment.original_name).strip().lower()
+                in normalized_selection
+            ]
+            if len(selected_pdfs) != 1:
+                return tuple(
+                    sorted(
+                        str(item.original_name).strip() or "uploaded PDF"
+                        for item in pdfs
+                    )
+                )
+            pdfs = selected_pdfs
+        if len(pdfs) != 1:
+            return tuple(
+                sorted(
+                    str(item.original_name).strip() or "uploaded PDF"
+                    for item in pdfs
+                )
+            )
+
+        attachment = pdfs[0]
+        source_path = self.conversations.resolve_attachment_path(
+            project_id,
+            attachment.artifact_id,
+        )
+        run_dir = self.projects.run_dir(project_id, run_id)
+        registry = self.projects.read_artifact_registry(project_id, run_id)
+        relative_path = registry.get("pdf_corpus") or "conversation_input/pdf_corpus.pdf"
+        if (
+            not relative_path
+            or Path(relative_path).is_absolute()
+            or "\\" in relative_path
+            or any(part in {"", ".", ".."} for part in Path(relative_path).parts)
+        ):
+            raise ScientificAgentConversationSessionError(
+                "the registered BR2 PDF input path is unsafe"
+            )
+        target = (run_dir / relative_path).resolve()
+        run_root = run_dir.resolve()
+        if not target.is_relative_to(run_root):
+            raise ScientificAgentConversationSessionError(
+                "the registered BR2 PDF input escapes the run scope"
+            )
+        current = run_dir
+        for part in Path(relative_path).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ScientificAgentConversationSessionError(
+                    "the registered BR2 PDF input contains a symbolic link"
+                )
+
+        def file_digest(path: Path) -> tuple[str, int]:
+            digest = hashlib.sha256()
+            size = 0
+            try:
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                        size += len(chunk)
+            except OSError as exc:
+                raise ScientificAgentConversationSessionError(
+                    "the registered BR2 PDF input is unavailable"
+                ) from exc
+            return digest.hexdigest(), size
+
+        if target.exists():
+            observed_digest, observed_size = file_digest(target)
+            if observed_digest != attachment.sha256 or observed_size != attachment.size_bytes:
+                raise ScientificAgentConversationSessionError(
+                    "the registered BR2 PDF input does not match the conversation attachment"
+                )
+        else:
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=".pdf_corpus-",
+                suffix=".tmp",
+                dir=target.parent,
+            )
+            temporary_path = Path(temporary_name)
+            digest = hashlib.sha256()
+            size = 0
+            try:
+                with os.fdopen(fd, "wb") as output, source_path.open("rb") as source:
+                    prefix = source.read(5)
+                    if prefix != b"%PDF-":
+                        raise ScientificAgentConversationSessionError(
+                            "the conversation attachment is not a PDF"
+                        )
+                    output.write(prefix)
+                    digest.update(prefix)
+                    size += len(prefix)
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                if digest.hexdigest() != attachment.sha256 or size != attachment.size_bytes:
+                    raise ScientificAgentConversationSessionError(
+                        "the conversation attachment changed while binding the BR2 PDF input"
+                    )
+                os.chmod(temporary_path, 0o600)
+                try:
+                    os.link(temporary_path, target)
+                except FileExistsError:
+                    observed_digest, observed_size = file_digest(target)
+                    if (
+                        observed_digest != attachment.sha256
+                        or observed_size != attachment.size_bytes
+                    ):
+                        raise ScientificAgentConversationSessionError(
+                            "the registered BR2 PDF input conflicts with the conversation attachment"
+                        )
+            finally:
+                temporary_path.unlink(missing_ok=True)
+
+        if registry.get("pdf_corpus") != relative_path:
+            self.projects.register_artifact_path(
+                project_id,
+                run_id,
+                "pdf_corpus",
+                relative_path,
+            )
+        return ()
+
     def classify_turn(self, *, project_id: str, conversation_id: str) -> str:
         """Classify a turn before resolving any LLM provider.
 
@@ -1521,6 +1720,51 @@ class ScientificAgentConversationSessionService:
             ),
             "",
         )
+        br2_pdf_choices = self._resolve_br2_pdf_input(
+            project_id=clean_project,
+            conversation_id=clean_conversation,
+            run_id=clean_run,
+            last_user_content=last_user,
+            allow_prior_attachment_selection=(
+                state.get("reason_code") == "BR2_PDF_SELECTION_REQUIRED"
+            ),
+        )
+        if br2_pdf_choices:
+            digest = _conversation_digest(messages)
+            message = (
+                "检测到多篇可用 PDF，请明确选择一篇后再开始 BR2："
+                + "、".join(br2_pdf_choices)
+                + "。"
+            )
+            state = self._transition(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                status="needs_input",
+                reason_code="BR2_PDF_SELECTION_REQUIRED",
+                updates={
+                    "run_id": clean_run,
+                    "conversation_digest": digest,
+                    "proposal_id": "",
+                    "proposal_digest": "",
+                    "authorization_id": "",
+                    "authorization_digest": "",
+                    "start_intent_id": "",
+                    "start_intent_digest": "",
+                    "controller_execution_id": "",
+                    "controller_execution_digest": "",
+                    "controller_status": "",
+                    "current_task_id": "",
+                },
+                event_type="input.selection_required",
+                message=message,
+            )
+            return ScientificAgentConversationTurnResult(
+                decision=decision_payload,
+                assistant_message=message,
+                assistant_source="scientific_agent_session",
+                llm_used=provider is not None,
+                session=self.session_projection(state),
+            )
 
         if state.get("proposal_id") and state.get("status") in {
             "approval_required",
@@ -1881,6 +2125,47 @@ class ScientificAgentConversationSessionService:
             updates["review_projection"] = projection
         return updates
 
+    @staticmethod
+    def _is_br2_mapping_proposal(publication: ScientificAgentPlanPublication) -> bool:
+        """Identify the registered BR2 mapping chain without adding a workflow type."""
+
+        return any(
+            task.task_id == "prepare_oled_candidate_raw_dataset"
+            for task in publication.proposal.run_plan.tasks
+        )
+
+    def _br2_preauthorized_gates(
+        self, proposal: Any
+    ) -> list[str]:
+        """Use only existing registry-declared operational preapproval support."""
+
+        gates: set[str] = set()
+        for task in proposal.run_plan.tasks:
+            spec = self.plan_service.registry.get(task.task_id)
+            if spec.effect_class in {
+                "scientific_confirm",
+                "change_objective",
+                "publish_or_promote",
+            }:
+                continue
+            if not spec.supports_plan_preapproval:
+                continue
+            gates.update(spec.gates)
+        return sorted(gates.intersection(proposal.required_gates))
+
+    def _project_br2_candidate_review(
+        self,
+        *,
+        project_id: str,
+        controller_result: ControllerAdvanceResult,
+    ) -> dict[str, Any]:
+        return project_current_oled_candidate_review(
+            storage=self.projects,
+            project_id=project_id,
+            run_id=controller_result.execution.run_id,
+            current_task_id="prepare_oled_candidate_raw_dataset",
+        )
+
     def _approve_current_authority(
         self,
         *,
@@ -2061,14 +2346,23 @@ class ScientificAgentConversationSessionService:
             conversation_id,
             proposal.proposal_digest,
         )
+        br2_mapping = self._is_br2_mapping_proposal(publication)
+        authorization_mode = (
+            AgentAuthorizationMode.FROZEN_PLAN
+            if br2_mapping
+            else AgentAuthorizationMode.STEPWISE
+        )
+        requested_preauthorized_gates = (
+            self._br2_preauthorized_gates(proposal) if br2_mapping else []
+        )
         try:
             approved: ApproveAndStartResult = self.authorization_service.approve_and_start(
                 project_id=project_id,
                 proposal_id=proposal.proposal_id,
                 request=AgentPlanAuthorizationRequest(
                     expected_proposal_digest=proposal.proposal_digest,
-                    authorization_mode=AgentAuthorizationMode.STEPWISE,
-                    requested_preauthorized_gate_ids=[],
+                    authorization_mode=authorization_mode,
+                    requested_preauthorized_gate_ids=requested_preauthorized_gates,
                     confirmed=True,
                     client_request_id=approval_request_id,
                     note="Explicit conversational approval of the current scientific Agent plan.",
@@ -3223,6 +3517,82 @@ class ScientificAgentConversationSessionService:
                     status="eligible",
                 )
             if status == AgentHarnessControllerStatus.SUCCEEDED:
+                try:
+                    active_publication = self._read_active_publication(state, project_id)
+                except (ScientificAgentConversationStaleAuthority, FileNotFoundError):
+                    active_publication = None
+                if active_publication is not None and self._is_br2_mapping_proposal(
+                    active_publication
+                ):
+                    try:
+                        review_projection = self._project_br2_candidate_review(
+                            project_id=project_id,
+                            controller_result=controller_result,
+                        )
+                    except (
+                        ScientificAgentReviewProjectionError,
+                        ScientificAgentHarnessControllerError,
+                        FileNotFoundError,
+                        OSError,
+                        ValueError,
+                    ):
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="unknown",
+                            reason_code="BR2_REVIEW_PROJECTION_UNAVAILABLE",
+                            updates={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                **terminal_l1_updates,
+                            },
+                            event_type="br2.confirmation.unavailable",
+                            message=(
+                                "候选数据已完成，但经验证的 BR2 review projection 不可用；"
+                                "未向对话展示未经验证的结果。"
+                            ),
+                            event_data={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "phase": "br2_confirmation_boundary",
+                            },
+                        )
+                        return controller_result, state, "br2_review_projection"
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="waiting_gate",
+                        reason_code="BR2_CANDIDATE_CONFIRMATION_REQUIRED",
+                        updates={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            "authority_kind": "",
+                            "gate_id": "",
+                            "snapshot_id": "",
+                            "snapshot_digest": "",
+                            "remote_request_sha256": "",
+                            "review_projection": review_projection,
+                            "result_projections": [],
+                            "scientific_result_status": "",
+                            "scientific_result_reason_code": "",
+                            **self._l1_projection_updates(
+                                decision=terminal_decision,
+                                snapshot=None,
+                                status="human_boundary",
+                                stop_reason="BR2_CANDIDATE_CONFIRMATION_REQUIRED",
+                            ),
+                        },
+                        event_type="br2.confirmation.waiting",
+                        message=(
+                            "候选数据整理已完成，等待人类科学确认；Molly 不会自动确认或继续下游任务。"
+                        ),
+                        event_data={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            "phase": "br2_confirmation_boundary",
+                        },
+                    )
+                    return controller_result, state, "br2_confirmation"
                 result_projections: tuple[dict[str, Any], ...] = ()
                 result_projection_reason_code = ""
                 try:
@@ -3737,7 +4107,12 @@ class ScientificAgentConversationSessionService:
             return _static_status_message(status, task_id=str(state.get("current_task_id") or ""))
         return {
             "running": "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。",
-            "waiting_gate": "当前运行正在等待独立 Gate authority；普通对话不会批准或改写当前计划。",
+            "waiting_gate": (
+                "BR2 候选数据已生成，正在等待人类科学确认；确认前不会创建 Confirmed Dataset "
+                "或继续下游任务。"
+                if state.get("reason_code") == "BR2_CANDIDATE_CONFIRMATION_REQUIRED"
+                else "当前运行正在等待独立 Gate authority；普通对话不会批准或改写当前计划。"
+            ),
             "waiting_remote_approval": "当前运行正在等待独立远程资源批准；普通对话不会批准或改写当前计划。",
             "recovery_required": "当前运行需要显式恢复 authority；普通对话不会重试或改写当前计划。",
             "unknown": "当前运行结果未知；需要显式恢复或重新规划，普通对话不会改写当前 Controller 绑定。",
@@ -3764,7 +4139,11 @@ class ScientificAgentConversationSessionService:
             "modeling_plan_payload": {},
             "questions": [],
             "pending_cited_target_evidence": [],
-            "next_actions": ["use_the_separate_current_authority_operation"],
+            "next_actions": (
+                ["wait_for_human_scientific_confirmation"]
+                if state.get("reason_code") == "BR2_CANDIDATE_CONFIRMATION_REQUIRED"
+                else ["use_the_separate_current_authority_operation"]
+            ),
             "blocked_reasons": [str(state.get("reason_code") or "ACTIVE_SESSION")],
             "requires_user_response": True,
             "executable": False,

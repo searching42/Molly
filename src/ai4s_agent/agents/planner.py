@@ -320,6 +320,31 @@ class PlannerAgent:
             term in normalized for term in screening_terms
         ):
             return ["execute_oled_registry_candidate_screening"]
+        br2_review_terms = [
+            "candidate raw",
+            "candidate dataset",
+            "review-only",
+            "review only",
+            "evidence-bound",
+            "evidence bound",
+            "让我确认",
+            "整理后确认",
+            "整理后让我确认",
+            "整理",
+            "提取",
+            "解析",
+            "提取并整理",
+            "解析并提取",
+        ]
+        br2_source_terms = ["literature", "paper", "papers", "pdf", "论文", "文献"]
+        br2_domain_terms = ["oled", "有机发光", "tadf"]
+        if (
+            any(term in normalized for term in br2_domain_terms)
+            and any(term in normalized for term in br2_source_terms)
+            and any(term in normalized for term in br2_review_terms)
+            and not any(term in normalized for term in ["confirmed training", "confirmed dataset", "确认数据集"])
+        ):
+            return ["prepare_oled_candidate_raw_dataset"]
         if any(term in normalized for term in ["literature", "paper", "papers", "doi", "pdf", "mine", "论文", "文献", "挖掘"]):
             return ["literature_to_dataset_workflow"]
         if any(
@@ -389,6 +414,10 @@ class PlannerAgent:
                 "execution, dataset snapshot, and Registry snapshot bindings before a gated shortlist run."
             ),
             "literature_to_dataset_workflow": "The goal asks for literature mining or evidence-derived data, so use the audited literature-to-dataset workflow.",
+            "prepare_oled_candidate_raw_dataset": (
+                "The goal asks for a review-only OLED evidence package, so use the registered "
+                "deterministic extraction, contextual mapping, and candidate compilation chain."
+            ),
             "render_report": "The goal asks for a complete modeling/screening outcome, so plan through final report generation.",
             "train_model": "The goal asks for model training, so select the training task and its dependencies.",
             "run_baseline": "The goal is data/model readiness oriented, so produce baseline and backend recommendation artifacts.",

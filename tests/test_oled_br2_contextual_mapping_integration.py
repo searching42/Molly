@@ -11,6 +11,7 @@ from ai4s_agent.domains.oled_mineru_candidates import (
     OledMineruCandidate,
     OledMineruCandidateType,
 )
+from ai4s_agent.domains.oled_llm_context_mapping import OledLLMContextMappingResult
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import br2_contextual_mapping_task_registry_v1, expand_run_plan
 from ai4s_agent.schemas import (
@@ -133,6 +134,50 @@ def _provider_response(evidence_path: Path) -> dict:
             }
         )
     return {"paper_id": evidence["paper_id"], "packet_results": results, "response_notes": []}
+
+
+def test_response_binding_failure_artifact_writer_persists_only_structured_report(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schema_version": "oled_response_binding_failure.v1",
+        "exception_class": "ResponseBindingError",
+        "binding_stage": "identity_binding",
+        "binding_error_code": "PACKET_NAMESPACE_MISMATCH",
+        "safe_message": "packet result binding mismatch",
+        "safe_details": {
+            "expected_count": 2,
+            "returned_count": 1,
+            "missing_count": 1,
+            "unknown_count": 0,
+            "duplicate_count": 0,
+            "missing_ids": ["packet-2"],
+            "unknown_ids": [],
+            "duplicate_ids": [],
+            "expected_namespace_digest": "e" * 64,
+            "returned_namespace_digest": "r" * 64,
+        },
+        "response_projection": {
+            "paper_id": "paper",
+            "packet_result_count": 1,
+            "response_notes_count": 0,
+            "packet_results": [],
+        },
+    }
+    result = OledLLMContextMappingResult(
+        paper_id="paper",
+        status="invalid_response",
+        request_digest="request-digest",
+        metadata={"response_binding_failure": report},
+    )
+
+    path = br2_adapter._persist_response_binding_failure(
+        {"output_root": str(tmp_path)},
+        result,
+    )
+
+    assert path.name == "response_binding_failure.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == report
 
 
 def test_controller_executor_mapping_chain_uses_existing_artifact_contracts(

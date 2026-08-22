@@ -131,10 +131,19 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
 
         if not mapping_result.is_valid:
             finding = mapping_result.findings[0] if mapping_result.findings else None
-            return _failed(
+            failure = _failed(
                 str(finding.code if finding else "llm_mapping_failed"),
                 str(finding.message if finding else mapping_result.status),
             )
+            response_binding_failure = mapping_result.metadata.get("response_binding_failure")
+            if isinstance(response_binding_failure, dict):
+                failure_path = _persist_response_binding_failure(payload, mapping_result)
+                failure["outputs"] = {"response_binding_failure": str(failure_path)}
+                failure["summary"] = {
+                    "validation_stages": mapping_result.metadata.get("validation_stages", {}),
+                    "response_binding_failure": response_binding_failure,
+                }
+            return failure
 
         output_path = write_json(
             _output_root(payload) / "contextual_mapping_result.json",
@@ -156,6 +165,26 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 "candidate_count": len(mapping_result.schema_candidates),
                 "ontology_review_count": len(mapping_result.ontology_extension_proposals),
                 "ontology_mutated": False,
+                "context_projection_version": mapping_result.metadata.get(
+                    "context_projection_version", ""
+                ),
+                "source_context_chars": mapping_result.metadata.get(
+                    "source_document_character_count", 0
+                ),
+                "projected_context_chars": mapping_result.metadata.get(
+                    "projected_context_character_count", 0
+                ),
+                "projection_ratio": mapping_result.metadata.get(
+                    "context_projection_ratio", 0.0
+                ),
+                "source_element_count": mapping_result.metadata.get(
+                    "source_document_element_count", 0
+                ),
+                "projected_element_count": mapping_result.metadata.get(
+                    "projected_context_element_count", 0
+                ),
+                "table_count": mapping_result.metadata.get("table_count", 0),
+                "packet_count": mapping_result.metadata.get("packet_count", 0),
             },
         }
     except (LLMProviderError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -354,6 +383,21 @@ def _failed(code: str, message: str) -> dict[str, Any]:
         "adapter": _ADAPTER_PREFIX,
         "error": {"code": str(code), "message": str(message)},
     }
+
+
+def _persist_response_binding_failure(
+    payload: dict[str, Any],
+    mapping_result: OledLLMContextMappingResult,
+) -> Path:
+    """Persist only the validator's safe, structured failure projection."""
+
+    failure = mapping_result.metadata.get("response_binding_failure")
+    if not isinstance(failure, dict):
+        raise ValueError("response binding failure report is missing")
+    return write_json(
+        _output_root(payload) / "response_binding_failure.json",
+        failure,
+    )
 
 
 __all__ = [
