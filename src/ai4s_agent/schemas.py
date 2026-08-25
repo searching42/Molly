@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from jsonschema import Draft202012Validator
 from pydantic import (
@@ -2133,6 +2133,8 @@ AGENT_EXECUTION_PLAN_PROPOSAL_V1 = "agent_execution_plan_proposal.v1"
 AGENT_EXECUTION_PLAN_PROPOSAL_V2 = "agent_execution_plan_proposal.v2"
 AGENT_PLAN_AUTHORIZATION_V1 = "agent_plan_authorization.v1"
 AGENT_PLAN_AUTHORIZATION_V2 = "agent_plan_authorization.v2"
+AUTONOMY_GRANT_V1 = "autonomy_grant.v1"
+AUTHORITY_EVALUATION_V1 = "authority_evaluation.v1"
 
 
 class AgentExecutionPlanProposal(BaseModel):
@@ -2440,6 +2442,28 @@ class AgentPermissionPhase(str, Enum):
 class AgentAuthorizationMode(str, Enum):
     STEPWISE = "stepwise"
     FROZEN_PLAN = "frozen_plan"
+
+
+class AuthorityRelation(str, Enum):
+    """Relationship between a proposed authority scope and an existing grant."""
+
+    SUBSET = "SUBSET"
+    EQUIVALENT = "EQUIVALENT"
+    EXPANSION = "EXPANSION"
+    INCOMPARABLE = "INCOMPARABLE"
+
+
+class SemanticBoundary(str, Enum):
+    """Human scientific boundaries independent of resource authority."""
+
+    NONE = "NONE"
+    SCIENTIFIC_CONFIRMATION = "SCIENTIFIC_CONFIRMATION"
+    GOAL_CHANGE = "GOAL_CHANGE"
+    DATASET_CHANGE = "DATASET_CHANGE"
+    EXTERNAL_SHARING_CHANGE = "EXTERNAL_SHARING_CHANGE"
+    PUBLICATION = "PUBLICATION"
+    PROMOTION = "PROMOTION"
+    IRREVERSIBLE_EFFECT = "IRREVERSIBLE_EFFECT"
 
 
 class AgentPermissionShadowAlignment(str, Enum):
@@ -3453,6 +3477,375 @@ class AgentAuthorizationGateBinding(BaseModel):
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(value, field=info.field_name)
+
+
+class AutonomyParameterBound(BaseModel):
+    """One closed numeric or enumerated parameter interval in an autonomy grant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    minimum: float | None = None
+    maximum: float | None = None
+    allowed_values: list[Any] = Field(default_factory=list)
+
+    @field_validator("minimum", "maximum", mode="before")
+    @classmethod
+    def validate_bound_number(cls, value: Any, info: Any) -> float | None:
+        if value is None:
+            return None
+        parsed = _parse_float_field(
+            value,
+            message=f"{info.field_name} must be a finite number",
+        )
+        if not math.isfinite(parsed):
+            raise ValueError(f"{info.field_name} must be a finite number")
+        return parsed
+
+    @field_validator("allowed_values")
+    @classmethod
+    def validate_allowed_values(cls, value: list[Any]) -> list[Any]:
+        if len(value) > 1024:
+            raise ValueError("allowed_values contains too many entries")
+        normalized = [_agent_safe_value(item, "allowed_values") for item in value]
+        keys = [_agent_canonical_bytes(item) for item in normalized]
+        if len(keys) != len(set(keys)):
+            raise ValueError("allowed_values must not contain duplicates")
+        return [
+            item
+            for _key, item in sorted(
+                zip(keys, normalized, strict=True), key=lambda pair: pair[0]
+            )
+        ]
+
+    @model_validator(mode="after")
+    def validate_bound(self) -> "AutonomyParameterBound":
+        if self.minimum is None and self.maximum is None and not self.allowed_values:
+            raise ValueError("parameter bound must constrain a value")
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum > self.maximum
+        ):
+            raise ValueError("parameter minimum must not exceed maximum")
+        if self.allowed_values:
+            for item in self.allowed_values:
+                if not self._contains_numeric_range(item):
+                    raise ValueError("allowed_values must lie within the numeric bounds")
+        return self
+
+    def _contains_numeric_range(self, value: Any) -> bool:
+        if self.minimum is None and self.maximum is None:
+            return True
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return False
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return False
+        return (
+            (self.minimum is None or numeric >= self.minimum)
+            and (self.maximum is None or numeric <= self.maximum)
+        )
+
+    def contains(self, value: Any) -> bool:
+        if self.allowed_values:
+            if _agent_canonical_bytes(value) not in {
+                _agent_canonical_bytes(item) for item in self.allowed_values
+            }:
+                return False
+        return self._contains_numeric_range(value)
+
+    def is_subset_of(self, other: "AutonomyParameterBound") -> bool:
+        """Return whether every value allowed by this bound is allowed by other."""
+
+        if self.allowed_values:
+            return all(other.contains(item) for item in self.allowed_values)
+        if other.allowed_values:
+            if (
+                self.minimum is None
+                or self.maximum is None
+                or self.minimum != self.maximum
+            ):
+                return False
+            return other.contains(self.minimum)
+        return (
+            (other.minimum is None or (self.minimum is not None and self.minimum >= other.minimum))
+            and (other.maximum is None or (self.maximum is not None and self.maximum <= other.maximum))
+        )
+
+
+class AutonomyGrant(BaseModel):
+    """Immutable user authority envelope for bounded autonomous work.
+
+    The grant is an authority description only.  It is not an execution
+    request, a tool call, or permission to bypass the existing Controller.
+    ``AutonomyGrant`` instances can be compared as scopes by the phase-2
+    authority policy without consulting an LLM.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AUTONOMY_GRANT_V1] = AUTONOMY_GRANT_V1
+    grant_id: str = ""
+    grant_digest: str = ""
+    project_id: str
+    allowed_tasks: list[str] = Field(default_factory=list)
+    allowed_effect_classes: list[ScientificEffectClass] = Field(default_factory=list)
+    parameter_bounds: dict[str, AutonomyParameterBound] = Field(default_factory=dict)
+    resource_profiles: list[str] = Field(default_factory=list)
+    external_io_scopes: list[str] = Field(default_factory=list)
+    aggregate_budget: dict[str, float] = Field(default_factory=dict)
+    per_task_budget: dict[str, dict[str, float]] = Field(default_factory=dict)
+    max_retries: int = 0
+    max_replans: int = 0
+    valid_from: str = ""
+    valid_until: str
+    created_at: str = ""
+
+    @field_validator("grant_id")
+    @classmethod
+    def validate_grant_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="grant_id", allow_empty=True)
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_project_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="project_id")
+
+    @field_validator("grant_digest")
+    @classmethod
+    def validate_grant_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="grant_digest", allow_empty=True)
+
+    @field_validator("allowed_tasks", "resource_profiles")
+    @classmethod
+    def validate_scope_ids(cls, value: list[str], info: Any) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field=info.field_name,
+            sort_values=True,
+            max_items=1024,
+        )
+        for item in cleaned:
+            _agent_identifier(item, field=f"{info.field_name} item")
+        return cleaned
+
+    @field_validator("allowed_effect_classes")
+    @classmethod
+    def validate_effect_classes(cls, value: list[ScientificEffectClass]) -> list[ScientificEffectClass]:
+        values = _agent_string_list(
+            [str(item) for item in value],
+            field="allowed_effect_classes",
+            sort_values=True,
+            max_items=64,
+        )
+        recognized = set(get_args(ScientificEffectClass))
+        if set(values).difference(recognized):
+            raise ValueError("allowed_effect_classes contains an unknown effect class")
+        return values
+
+    @field_validator("external_io_scopes")
+    @classmethod
+    def validate_external_io_scopes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="external_io_scopes",
+            sort_values=True,
+            max_items=1024,
+        )
+        if any(
+            re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{0,127}", item) is None
+            or ".." in item
+            for item in cleaned
+        ):
+            raise ValueError("external_io_scopes must use canonical scope tokens")
+        return cleaned
+
+    @field_validator("parameter_bounds")
+    @classmethod
+    def validate_parameter_bounds(
+        cls, value: dict[str, AutonomyParameterBound]
+    ) -> dict[str, AutonomyParameterBound]:
+        normalized: dict[str, AutonomyParameterBound] = {}
+        for key, bound in value.items():
+            clean = str(key).strip().lower()
+            if (
+                str(key) != clean
+                or re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{0,127}", clean) is None
+                or ".." in clean
+            ):
+                raise ValueError("parameter_bounds keys must be canonical parameter paths")
+            normalized[clean] = bound
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("aggregate_budget")
+    @classmethod
+    def validate_aggregate_budget(cls, value: dict[str, float]) -> dict[str, float]:
+        return cls._normalize_budget_map(value, field="aggregate_budget")
+
+    @field_validator("per_task_budget")
+    @classmethod
+    def validate_per_task_budget(
+        cls, value: dict[str, dict[str, float]]
+    ) -> dict[str, dict[str, float]]:
+        normalized: dict[str, dict[str, float]] = {}
+        for task_id, budget in value.items():
+            clean_task = _agent_identifier(task_id, field="per_task_budget key")
+            normalized[clean_task] = cls._normalize_budget_map(
+                budget,
+                field=f"per_task_budget.{clean_task}",
+            )
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @staticmethod
+    def _normalize_budget_map(value: dict[str, float], *, field: str) -> dict[str, float]:
+        _agent_safe_value(value, field)
+        normalized: dict[str, float] = {}
+        for key, raw in value.items():
+            clean_key = str(key).strip().lower()
+            if str(key) != clean_key or re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,63}", clean_key) is None:
+                raise ValueError(f"{field} contains a non-canonical budget dimension")
+            if isinstance(raw, bool):
+                raise ValueError(f"{field}.{clean_key} must be non-negative")
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field}.{clean_key} must be non-negative") from exc
+            if not math.isfinite(parsed) or parsed < 0:
+                raise ValueError(f"{field}.{clean_key} must be non-negative")
+            normalized[clean_key] = parsed
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("max_retries", "max_replans", mode="before")
+    @classmethod
+    def validate_nonnegative_count(cls, value: Any, info: Any) -> int:
+        parsed = _parse_int_field(
+            value,
+            message=f"{info.field_name} must be a non-negative integer",
+        )
+        if parsed < 0:
+            raise ValueError(f"{info.field_name} must be a non-negative integer")
+        return parsed
+
+    @field_validator("valid_from", "valid_until", "created_at")
+    @classmethod
+    def validate_timestamps(cls, value: str, info: Any) -> str:
+        clean = _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=64,
+            allow_empty=info.field_name in {"valid_from", "created_at"},
+        )
+        if clean:
+            try:
+                parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(f"{info.field_name} must be an ISO-8601 timestamp") from exc
+            if parsed.tzinfo is None:
+                raise ValueError(f"{info.field_name} must include a timezone")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_grant(self) -> "AutonomyGrant":
+        valid_until = datetime.fromisoformat(self.valid_until.replace("Z", "+00:00"))
+        if self.valid_from:
+            valid_from = datetime.fromisoformat(self.valid_from.replace("Z", "+00:00"))
+            if valid_from > valid_until:
+                raise ValueError("valid_from must not be later than valid_until")
+        if set(self.per_task_budget).difference(self.allowed_tasks):
+            raise ValueError("per_task_budget must only name allowed tasks")
+        expected = _agent_digest(self.semantic_material())
+        if self.grant_digest and self.grant_digest != expected:
+            raise ValueError("autonomy grant digest mismatch")
+        object.__setattr__(self, "grant_digest", expected)
+        expected_id = f"autonomy-grant-{expected.split(':', 1)[1][:32]}"
+        if self.grant_id and self.grant_id != expected_id:
+            raise ValueError("grant_id must derive from grant_digest")
+        object.__setattr__(self, "grant_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("grant_id", None)
+        payload.pop("grant_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+    def scope_material(self) -> dict[str, Any]:
+        return self.semantic_material()
+
+
+class AuthorityEvaluation(BaseModel):
+    """Non-executable relation plus semantic-boundary decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AUTHORITY_EVALUATION_V1] = AUTHORITY_EVALUATION_V1
+    evaluation_id: str = ""
+    evaluation_digest: str = ""
+    grant_id: str
+    grant_digest: str
+    candidate_scope_digest: str
+    relation: AuthorityRelation
+    semantic_boundary: SemanticBoundary
+    auto_apply: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    executable: Literal[False] = False
+
+    @field_validator("evaluation_id")
+    @classmethod
+    def validate_evaluation_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="evaluation_id", allow_empty=True)
+
+    @field_validator("grant_id")
+    @classmethod
+    def validate_evaluation_grant_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="grant_id")
+
+    @field_validator("grant_digest", "candidate_scope_digest", "evaluation_digest")
+    @classmethod
+    def validate_evaluation_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "evaluation_digest",
+        )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_evaluation_reasons(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="reason_codes",
+            sort_values=True,
+            max_items=32,
+        )
+        if any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+            raise ValueError("reason_codes must use uppercase canonical codes")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_evaluation(self) -> "AuthorityEvaluation":
+        expected_auto = (
+            self.relation is AuthorityRelation.SUBSET
+            and self.semantic_boundary is SemanticBoundary.NONE
+        )
+        if self.auto_apply != expected_auto:
+            raise ValueError("auto_apply must be derived from relation and semantic boundary")
+        expected = _agent_digest(self.semantic_material())
+        if self.evaluation_digest and self.evaluation_digest != expected:
+            raise ValueError("authority evaluation digest mismatch")
+        object.__setattr__(self, "evaluation_digest", expected)
+        expected_id = f"authority-evaluation-{expected.split(':', 1)[1][:32]}"
+        if self.evaluation_id and self.evaluation_id != expected_id:
+            raise ValueError("evaluation_id must derive from evaluation_digest")
+        object.__setattr__(self, "evaluation_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("evaluation_id", None)
+        payload.pop("evaluation_digest", None)
+        return payload
 
 
 class AgentPlanAuthorization(BaseModel):
@@ -10050,6 +10443,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "remote_resource_authority_policy": RemoteResourceAuthorityPolicy,
     "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
     "agent_plan_authorization": AgentPlanAuthorization,
+    "autonomy_grant": AutonomyGrant,
+    "authority_evaluation": AuthorityEvaluation,
     "agent_plan_start_intent": AgentPlanStartIntent,
     "agent_harness_controller_start_request": AgentHarnessControllerStartRequest,
     "agent_harness_controller_execution": AgentHarnessControllerExecution,
