@@ -66,9 +66,14 @@ def _budget_subset(
     candidate: Mapping[str, float],
     grant: Mapping[str, float],
 ) -> bool:
-    """Compare caps, treating omitted candidate dimensions as zero usage."""
+    """Compare caps using infinity for an omitted budget dimension."""
 
-    return all(float(candidate.get(key, 0.0)) <= float(grant.get(key, 0.0)) for key in candidate)
+    dimensions = set(candidate) | set(grant)
+    return all(
+        float(candidate.get(key, float("inf")))
+        <= float(grant.get(key, float("inf")))
+        for key in dimensions
+    )
 
 
 def _as_parameter_bound(value: Any) -> AutonomyParameterBound:
@@ -278,14 +283,19 @@ def _change_text(change: Any) -> tuple[str, SemanticBoundary | None]:
     if isinstance(change, str):
         return change.lower(), None
     if isinstance(change, Mapping):
+        explicit = change.get("semantic_boundary", change.get("boundary"))
+        has_explicit_boundary = explicit not in (None, "")
         if "dimension" in change:
             dimension = str(change.get("dimension", "")).strip().lower()
             if dimension not in KNOWN_AUTHORITY_CHANGE_DIMENSIONS:
                 raise AuthorityPolicyError(
                     f"unknown structured change dimension: {dimension or '<empty>'}"
                 )
-        explicit = change.get("semantic_boundary", change.get("boundary"))
-        boundary = None if explicit in (None, "") else _normalize_boundary(explicit)
+        elif not has_explicit_boundary:
+            raise AuthorityPolicyError(
+                "structured change evidence requires a canonical dimension or explicit semantic boundary"
+            )
+        boundary = None if not has_explicit_boundary else _normalize_boundary(explicit)
         text = " ".join(
             str(change.get(key, ""))
             for key in ("dimension", "path", "field", "kind", "before", "after")

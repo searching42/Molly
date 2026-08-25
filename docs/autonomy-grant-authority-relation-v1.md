@@ -33,7 +33,10 @@ min(aggregate_cap,
 ```
 
 Removing a per-task entry can consequently expand authority when the aggregate
-cap is wider than the original explicit cap.
+cap is wider than the original explicit cap. Aggregate cap comparison uses the
+same containment rule in both directions: a missing budget dimension means an
+infinite cap, so deleting an aggregate cap is an expansion rather than a
+reduction.
 
 ## Authority relation
 
@@ -64,12 +67,14 @@ current vocabulary is:
 The classifier accepts explicit boundary values or canonical change evidence.
 Structured change evidence must use the reviewed canonical dimensions
 `task`, `dependency`, `option`, `artifact`, `route_profile_resource`, `budget`,
-`gate`, or `semantic`; an unknown dimension fails closed. Explicit boundary
-evidence is merged monotonically with detected evidence: it can add a stronger
-human boundary but cannot downgrade one. For example, detected `PUBLICATION`
-plus explicit `NONE` remains `PUBLICATION`. A candidate can therefore be inside
-the grant while still requiring a human scientific decision, for example when a
-confirmed dataset replaces a raw dataset or a publication step is introduced.
+`gate`, or `semantic`; an unknown dimension fails closed. A structured mapping
+without either a canonical `dimension` or an explicit boundary is also
+rejected. Explicit boundary evidence is merged monotonically with detected
+evidence: it can add a stronger human boundary but cannot downgrade one. For
+example, detected `PUBLICATION` plus explicit `NONE` remains `PUBLICATION`. A
+candidate can therefore be inside the grant while still requiring a human
+scientific decision, for example when a confirmed dataset replaces a raw
+dataset or a publication step is introduced.
 
 ## Automatic-application rule
 
