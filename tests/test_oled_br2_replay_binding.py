@@ -303,8 +303,14 @@ def test_frozen_request_persist_reread_recomputes_exact_identity(tmp_path: Path)
     assert loaded.source_candidates_digest == compute_oled_source_candidates_digest([source])
     assert loaded.metadata["historically_persisted"] is False
 
-    with pytest.raises(ValueError, match="create-only"):
-        persist_frozen_oled_llm_paper_mapping_request(path, artifact)
+    replayed = persist_frozen_oled_llm_paper_mapping_request(path, artifact)
+    assert replayed == persisted
+
+    with pytest.raises(ValueError, match="different identity"):
+        persist_frozen_oled_llm_paper_mapping_request(
+            path,
+            artifact.model_copy(update={"run_id": "different-run"}),
+        )
 
 
 def test_tampered_frozen_request_fails_closed_before_candidate_assembly(

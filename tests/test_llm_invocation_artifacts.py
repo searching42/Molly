@@ -120,6 +120,22 @@ def test_persist_reread_recomputes_exact_digest_and_is_idempotent(tmp_path: Path
     assert (tmp_path / "private" / "invocations" / frozen.invocation_digest / "manifest.json").is_file()
 
 
+@pytest.mark.pr_fast
+def test_partial_pre_effect_invocation_publication_is_resumable(tmp_path: Path) -> None:
+    store = ExactLLMInvocationArtifactStore(tmp_path / "private" / "invocations")
+    frozen = _frozen()
+    artifact_dir = store.root / frozen.invocation_digest
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "payload.json").write_bytes(
+        canonical_json_bytes(frozen.provider_payload())
+    )
+
+    recovered = store.persist_and_verify(frozen)
+
+    assert recovered.invocation_digest == frozen.invocation_digest
+    assert (artifact_dir / "manifest.json").is_file()
+
+
 def test_tampered_payload_or_manifest_fails_closed(tmp_path: Path) -> None:
     store = ExactLLMInvocationArtifactStore(tmp_path / "invocations")
     frozen = _frozen()

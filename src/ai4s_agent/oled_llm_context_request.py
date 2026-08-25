@@ -10,6 +10,10 @@ from typing import Any, Literal, Sequence, TextIO
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.attempt_publication import (
+    AttemptPublicationConflict,
+    publish_json_no_replace,
+)
 from ai4s_agent.domains.oled_llm_context_mapping import (
     OledLLMContextMappingResult,
     OledLLMPaperMappingRequest,
@@ -292,14 +296,26 @@ def persist_frozen_oled_llm_paper_mapping_request(
     path: str | Path,
     artifact: FrozenOledLLMPaperMappingRequestArtifact,
 ) -> FrozenOledLLMPaperMappingRequestArtifact:
-    """Persist once, reread, and verify a private frozen request artifact."""
+    """Create or replay the exact frozen request without replacement."""
 
-    raw_path = Path(path).expanduser()
-    if raw_path.exists() or raw_path.is_symlink():
-        raise ValueError("frozen domain request artifact is create-only")
-    output_path = raw_path.resolve()
-    write_json(output_path, artifact.model_dump(mode="json"))
-    return load_frozen_oled_llm_paper_mapping_request(output_path)
+    output_path = Path(path).expanduser().absolute()
+    try:
+        publish_json_no_replace(output_path, artifact.model_dump(mode="json"))
+    except AttemptPublicationConflict as exc:
+        existing = load_frozen_oled_llm_paper_mapping_request(output_path)
+        if compute_oled_mapping_attempt_identity(existing) != (
+            compute_oled_mapping_attempt_identity(artifact)
+        ):
+            raise ValueError(
+                "frozen domain request publication conflicts with a different identity"
+            ) from exc
+        return existing
+    persisted = load_frozen_oled_llm_paper_mapping_request(output_path)
+    if compute_oled_mapping_attempt_identity(persisted) != (
+        compute_oled_mapping_attempt_identity(artifact)
+    ):
+        raise ValueError("frozen domain request identity changed during publication")
+    return persisted
 
 
 def load_frozen_oled_llm_paper_mapping_request(
@@ -352,14 +368,26 @@ def persist_frozen_oled_llm_provider_invocation_manifest(
     path: str | Path,
     manifest: FrozenOledLLMProviderInvocationManifest,
 ) -> FrozenOledLLMProviderInvocationManifest:
-    """Persist the safe invocation linkage once and verify it after reread."""
+    """Create or replay one invocation linkage without replacement."""
 
-    raw_path = Path(path).expanduser()
-    if raw_path.exists() or raw_path.is_symlink():
-        raise ValueError("provider invocation manifest is create-only")
-    output_path = raw_path.resolve()
-    write_json(output_path, manifest.model_dump(mode="json"))
-    return load_frozen_oled_llm_provider_invocation_manifest(output_path)
+    output_path = Path(path).expanduser().absolute()
+    try:
+        publish_json_no_replace(output_path, manifest.model_dump(mode="json"))
+    except AttemptPublicationConflict as exc:
+        existing = load_frozen_oled_llm_provider_invocation_manifest(output_path)
+        if _provider_invocation_manifest_identity(existing) != (
+            _provider_invocation_manifest_identity(manifest)
+        ):
+            raise ValueError(
+                "provider invocation manifest conflicts with a different identity"
+            ) from exc
+        return existing
+    persisted = load_frozen_oled_llm_provider_invocation_manifest(output_path)
+    if _provider_invocation_manifest_identity(persisted) != (
+        _provider_invocation_manifest_identity(manifest)
+    ):
+        raise ValueError("provider invocation manifest identity changed during publication")
+    return persisted
 
 
 def verify_oled_br2_replay_binding(
@@ -413,6 +441,34 @@ def compute_oled_source_candidates_digest(
         for candidate in source_candidates
     ]
     return hashlib.sha256(canonical_oled_json_bytes(payload)).hexdigest()
+
+
+def compute_oled_mapping_attempt_identity(
+    artifact: FrozenOledLLMPaperMappingRequestArtifact,
+) -> str:
+    """Bind one BR2 mapping attempt to its run, request, and source snapshot."""
+
+    identity = {
+        "artifact_version": artifact.artifact_version,
+        "run_id": artifact.run_id,
+        "paper_id": artifact.paper_id,
+        "request_digest": artifact.request_digest,
+        "source_candidates_digest": artifact.source_candidates_digest,
+    }
+    return hashlib.sha256(canonical_oled_json_bytes(identity)).hexdigest()
+
+
+def _provider_invocation_manifest_identity(
+    manifest: FrozenOledLLMProviderInvocationManifest,
+) -> tuple[str, str, str, str, str, bool]:
+    return (
+        manifest.request_digest,
+        manifest.invocation_digest,
+        manifest.provider,
+        manifest.model,
+        manifest.prompt_version,
+        manifest.response_id_present,
+    )
 
 
 def prepare_oled_llm_context_request_from_files(
@@ -506,6 +562,7 @@ __all__ = [
     "FrozenOledLLMProviderInvocationManifest",
     "OledLLMContextRequestArtifact",
     "build_frozen_oled_llm_provider_invocation_manifest",
+    "compute_oled_mapping_attempt_identity",
     "compute_oled_source_candidates_digest",
     "freeze_oled_llm_paper_mapping_request",
     "load_frozen_oled_llm_paper_mapping_request",

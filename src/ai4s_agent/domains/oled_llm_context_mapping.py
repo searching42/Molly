@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, Literal
 
@@ -903,6 +903,7 @@ def run_oled_llm_context_mapping(
     *,
     provider: LLMProvider,
     invocation_artifact_store: ExactLLMInvocationArtifactStore | None = None,
+    before_provider_call: Callable[[FrozenLLMInvocation | None], None] | None = None,
 ) -> OledLLMContextMappingResult:
     request_digest = request.request_digest
     invocation: LLMInvocationRecord | None = None
@@ -958,6 +959,8 @@ def run_oled_llm_context_mapping(
                     llm_call_attempted=False,
                 )
             validation_stages["provider_invocation_artifact"] = "verified"
+        if before_provider_call is not None:
+            before_provider_call(frozen_invocation)
         try:
             provider_kwargs: dict[str, Any] = {
                 "messages": messages,

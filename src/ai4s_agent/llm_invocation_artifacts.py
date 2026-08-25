@@ -16,6 +16,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from ai4s_agent.attempt_publication import (
+    AttemptPublicationError,
+    publish_bytes_no_replace,
+)
+
 
 EXACT_INVOCATION_SCHEMA_VERSION = "br2_exact_invocation.v1"
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -376,11 +381,18 @@ class ExactLLMInvocationArtifactStore:
                 raise ExactLLMInvocationArtifactError(
                     "invocation artifact path is unsafe"
                 )
-            return self.load(artifact_dir)
-        try:
-            artifact_dir.mkdir(mode=0o700)
-        except FileExistsError:
-            return self.load(artifact_dir)
+            if (artifact_dir / "payload.json").is_file() and (
+                artifact_dir / "manifest.json"
+            ).is_file():
+                return self.load(artifact_dir)
+        else:
+            try:
+                artifact_dir.mkdir(mode=0o700)
+            except FileExistsError:
+                if artifact_dir.is_symlink() or not artifact_dir.is_dir():
+                    raise ExactLLMInvocationArtifactError(
+                        "invocation artifact path is unsafe"
+                    )
         _write_create_only(artifact_dir / "payload.json", canonical_json_bytes(frozen.provider_payload()))
         reread_payload = _read_regular_json(artifact_dir / "payload.json")
         reread = FrozenLLMInvocation.from_payload(
@@ -501,35 +513,12 @@ def _read_regular_json_with_bytes(path: Path) -> tuple[dict[str, Any], bytes]:
 
 
 def _write_create_only(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     try:
-        descriptor = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
-    except OSError as exc:
+        publish_bytes_no_replace(path, payload)
+    except AttemptPublicationError as exc:
         raise ExactLLMInvocationArtifactError(
-            f"cannot create invocation artifact file: {path.name}"
+            f"cannot create or replay invocation artifact file: {path.name}"
         ) from exc
-    try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise ExactLLMInvocationArtifactError(
-                    "invocation artifact write made no progress"
-                )
-            view = view[written:]
-        os.fsync(descriptor)
-    except (OSError, ExactLLMInvocationArtifactError) as exc:
-        if isinstance(exc, ExactLLMInvocationArtifactError):
-            raise
-        raise ExactLLMInvocationArtifactError(
-            "invocation artifact write could not be verified"
-        ) from exc
-    finally:
-        os.close(descriptor)
 
 
 def _fsync_directory(path: Path) -> None:

@@ -7,12 +7,13 @@ import pytest
 
 import ai4s_agent.adapters as adapter_exports
 import ai4s_agent.adapters.br2_contextual_mapping as br2_adapter
+import ai4s_agent.attempt_publication as attempt_publication
 from ai4s_agent.domains.oled_mineru_candidates import (
     OledMineruCandidate,
     OledMineruCandidateType,
 )
 from ai4s_agent.domains.oled_llm_context_mapping import OledLLMContextMappingResult
-from ai4s_agent.llm_provider import StubLLMProvider
+from ai4s_agent.llm_provider import LLMProviderError, StubLLMProvider
 from ai4s_agent.planner import br2_contextual_mapping_task_registry_v1, expand_run_plan
 from ai4s_agent.schemas import (
     LLMProviderConfig,
@@ -134,6 +135,193 @@ def _provider_response(evidence_path: Path) -> dict:
             }
         )
     return {"paper_id": evidence["paper_id"], "packet_results": results, "response_notes": []}
+
+
+def _mapping_adapter_payloads(tmp_path: Path) -> tuple[dict, Path]:
+    parsed_path = tmp_path / "parsed_document.json"
+    parsed_path.write_text(
+        json.dumps(_parsed_document().model_dump(mode="json")),
+        encoding="utf-8",
+    )
+    evidence_root = tmp_path / "evidence"
+    extracted = br2_adapter.extract_oled_evidence_adapter(
+        {
+            "parsed_document_path": str(parsed_path),
+            "output_root": str(evidence_root),
+            "run_id": "br2-publication-retry",
+        }
+    )
+    assert extracted["status"] == "success"
+    evidence_path = Path(extracted["outputs"]["oled_mapping_evidence"])
+    return (
+        {
+            "parsed_document_path": str(parsed_path),
+            "oled_mapping_evidence_path": str(evidence_path),
+            "output_root": str(tmp_path / "mapping"),
+            "workspace_dir": str(tmp_path / "workspace"),
+            "run_id": "br2-publication-retry",
+        },
+        evidence_path,
+    )
+
+
+class _ToggleSettings:
+    external_llm_data_sharing_enabled = False
+
+    def __init__(self, *args, **kwargs):
+        del args, kwargs
+
+    def resolve(self):
+        return "available", LLMProviderConfig(provider="stub", model="controlled")
+
+
+class _CountingStubProvider(StubLLMProvider):
+    def __init__(self, *, response: dict, fail_unknown: bool = False) -> None:
+        super().__init__(response=response)
+        self.complete_calls = 0
+        self.fail_unknown = fail_unknown
+
+    def complete_json(self, **kwargs):
+        self.complete_calls += 1
+        if self.fail_unknown:
+            raise LLMProviderError("injected provider outcome unknown")
+        return super().complete_json(**kwargs)
+
+
+@pytest.mark.pr_fast
+def test_mapping_pre_effect_failure_resumes_and_complete_replays_without_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, evidence_path = _mapping_adapter_payloads(tmp_path)
+    provider = _CountingStubProvider(response=_provider_response(evidence_path))
+    factory_calls = 0
+
+    def provider_factory(_config):
+        nonlocal factory_calls
+        factory_calls += 1
+        return provider
+
+    monkeypatch.setattr(br2_adapter, "LLMSettingsStore", _ToggleSettings)
+    monkeypatch.setattr(br2_adapter, "create_llm_provider", provider_factory)
+
+    _ToggleSettings.external_llm_data_sharing_enabled = False
+    first = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert first["status"] == "failed"
+    assert first["error"]["code"] == "external_llm_data_sharing_required"
+    assert provider.complete_calls == 0
+    assert (
+        Path(payload["output_root"]) / "frozen_domain_mapping_request.json"
+    ).is_file()
+
+    _ToggleSettings.external_llm_data_sharing_enabled = True
+    second = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert second["status"] == "success"
+    assert provider.complete_calls == 1
+    assert factory_calls == 1
+
+    _ToggleSettings.external_llm_data_sharing_enabled = False
+    third = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert third == second
+    assert provider.complete_calls == 1
+    assert factory_calls == 1
+    attempt_root = (
+        Path(payload["output_root"])
+        / "private"
+        / "attempt_publications"
+        / "map_oled_contextual_semantics"
+    )
+    assert json.loads((attempt_root / "complete.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "COMPLETE"
+
+
+@pytest.mark.pr_fast
+def test_mapping_unknown_effect_never_calls_provider_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, evidence_path = _mapping_adapter_payloads(tmp_path)
+    provider = _CountingStubProvider(
+        response=_provider_response(evidence_path),
+        fail_unknown=True,
+    )
+    monkeypatch.setattr(br2_adapter, "LLMSettingsStore", _ToggleSettings)
+    _ToggleSettings.external_llm_data_sharing_enabled = True
+    monkeypatch.setattr(br2_adapter, "create_llm_provider", lambda _config: provider)
+
+    first = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert first["status"] == "failed"
+    assert first["error"]["code"] == "llm_provider_error"
+    assert provider.complete_calls == 1
+
+    def provider_must_not_be_resolved(_config):
+        raise AssertionError("unknown effect retry resolved a provider")
+
+    monkeypatch.setattr(
+        br2_adapter,
+        "create_llm_provider",
+        provider_must_not_be_resolved,
+    )
+    second = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert second["status"] == "failed"
+    assert second["error"]["code"] == "effect_outcome_unknown"
+    assert provider.complete_calls == 1
+
+
+@pytest.mark.pr_fast
+def test_mapping_result_publication_crash_recovers_without_second_provider_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, evidence_path = _mapping_adapter_payloads(tmp_path)
+    provider = _CountingStubProvider(response=_provider_response(evidence_path))
+    monkeypatch.setattr(br2_adapter, "LLMSettingsStore", _ToggleSettings)
+    _ToggleSettings.external_llm_data_sharing_enabled = True
+    monkeypatch.setattr(br2_adapter, "create_llm_provider", lambda _config: provider)
+    original_publish = attempt_publication.publish_bytes_no_replace
+
+    def crash_before_manifest(path, content):
+        if Path(path).name == "provider_invocation_manifest.json":
+            raise OSError("injected manifest publication crash")
+        return original_publish(path, content)
+
+    monkeypatch.setattr(
+        attempt_publication,
+        "publish_bytes_no_replace",
+        crash_before_manifest,
+    )
+    first = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert first["status"] == "failed"
+    assert "injected manifest publication crash" in first["error"]["message"]
+    assert provider.complete_calls == 1
+    assert (
+        Path(payload["output_root"]) / "contextual_mapping_result.json"
+    ).is_file()
+    assert not (
+        Path(payload["output_root"]) / "provider_invocation_manifest.json"
+    ).exists()
+
+    monkeypatch.setattr(
+        attempt_publication,
+        "publish_bytes_no_replace",
+        original_publish,
+    )
+
+    def provider_must_not_be_resolved(_config):
+        raise AssertionError("result reconciliation resolved a provider")
+
+    monkeypatch.setattr(
+        br2_adapter,
+        "create_llm_provider",
+        provider_must_not_be_resolved,
+    )
+    second = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert second["status"] == "success"
+    assert provider.complete_calls == 1
+    assert (
+        Path(payload["output_root"]) / "provider_invocation_manifest.json"
+    ).is_file()
 
 
 def test_response_binding_failure_artifact_writer_persists_only_structured_report(
