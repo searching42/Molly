@@ -71,6 +71,8 @@ from ai4s_agent.schemas import ParsedDocument
 
 
 _ADAPTER_PREFIX = "br2_contextual_mapping"
+_MAX_MAPPING_RESULT_BYTES = 64_000_000
+_MAX_INVOCATION_MANIFEST_BYTES = 1_000_000
 
 
 def extract_oled_evidence_adapter(payload: dict[str, Any]) -> dict[str, Any]:
@@ -319,10 +321,18 @@ def _recover_mapping_publication(
 ) -> dict[str, Any] | None:
     result_path = output_root / "contextual_mapping_result.json"
     manifest_path = output_root / "provider_invocation_manifest.json"
-    result_exists = result_path.exists() or result_path.is_symlink()
-    manifest_exists = manifest_path.exists() or manifest_path.is_symlink()
-    if not result_exists:
-        if manifest_exists:
+    result_bytes = _read_optional_publication_artifact(
+        publication=publication,
+        path=result_path,
+        max_bytes=_MAX_MAPPING_RESULT_BYTES,
+    )
+    manifest_bytes = _read_optional_publication_artifact(
+        publication=publication,
+        path=manifest_path,
+        max_bytes=_MAX_INVOCATION_MANIFEST_BYTES,
+    )
+    if result_bytes is None:
+        if manifest_bytes is not None:
             raise AttemptPublicationConflict(
                 "provider invocation manifest exists without a mapping result"
             )
@@ -337,15 +347,15 @@ def _recover_mapping_publication(
             "mapping result exists without an EFFECT_STARTED marker"
         )
 
-    mapping_result = OledLLMContextMappingResult.model_validate(_read_json(result_path))
+    mapping_result = OledLLMContextMappingResult.model_validate_json(result_bytes)
     invocation = mapping_result.llm_invocation
     if invocation is None:
         raise AttemptPublicationConflict(
             "persisted mapping result lacks provider invocation"
         )
     invocation_manifest = (
-        load_frozen_oled_llm_provider_invocation_manifest(manifest_path)
-        if manifest_exists
+        FrozenOledLLMProviderInvocationManifest.model_validate_json(manifest_bytes)
+        if manifest_bytes is not None
         else build_frozen_oled_llm_provider_invocation_manifest(
             request_digest=frozen_request.request_digest,
             invocation=invocation,
@@ -356,13 +366,12 @@ def _recover_mapping_publication(
         mapping_result=mapping_result,
         invocation_manifest=invocation_manifest,
     )
-    manifest_bytes = (
-        manifest_path.read_bytes()
-        if manifest_exists
-        else immutable_json_bytes(invocation_manifest.model_dump(mode="json"))
-    )
+    if manifest_bytes is None:
+        manifest_bytes = immutable_json_bytes(
+            invocation_manifest.model_dump(mode="json")
+        )
     result_artifacts = {
-        "contextual_mapping_result": (result_path, result_path.read_bytes()),
+        "contextual_mapping_result": (result_path, result_bytes),
         "provider_invocation_manifest": (manifest_path, manifest_bytes),
     }
     if publication.stage is AttemptPublicationStage.EFFECT_STARTED:
@@ -381,6 +390,18 @@ def _recover_mapping_publication(
         mapping_result=mapping_result,
         invocation_manifest=invocation_manifest,
     )
+
+
+def _read_optional_publication_artifact(
+    *,
+    publication: AttemptPublicationSession,
+    path: Path,
+    max_bytes: int,
+) -> bytes | None:
+    try:
+        return publication.read_artifact_bytes(path, max_bytes=max_bytes)
+    except FileNotFoundError:
+        return None
 
 
 def _record_mapping_effect_failure(

@@ -47,6 +47,22 @@ def _concurrent_publish(
         results.put((type(exc).__name__, identity_digest))
 
 
+def _direct_concurrent_publish(
+    destination: str,
+    *,
+    payload_label: str,
+    payload: bytes,
+    race_barrier: Any,
+    results: Any,
+) -> None:
+    race_barrier.wait(timeout=10)
+    try:
+        outcome = publish_bytes_no_replace(destination, payload)
+        results.put((outcome, payload_label))
+    except Exception as exc:  # pragma: no cover - asserted in parent process
+        results.put((type(exc).__name__, payload_label))
+
+
 def _run_concurrent_publications(
     tmp_path: Path,
     publications: list[tuple[str, bytes]],
@@ -77,6 +93,35 @@ def _run_concurrent_publications(
     return observed
 
 
+def _run_direct_concurrent_publications(
+    destination: Path,
+    publications: list[tuple[str, bytes]],
+) -> list[tuple[str, str]]:
+    context = multiprocessing.get_context("spawn")
+    race_barrier = context.Barrier(len(publications))
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_direct_concurrent_publish,
+            kwargs={
+                "destination": str(destination),
+                "payload_label": payload_label,
+                "payload": payload,
+                "race_barrier": race_barrier,
+                "results": results,
+            },
+        )
+        for payload_label, payload in publications
+    ]
+    for process in processes:
+        process.start()
+    observed = [results.get(timeout=15) for _process in processes]
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+    return observed
+
+
 def test_no_replace_file_publication_replays_identical_bytes_and_rejects_conflict(
     tmp_path: Path,
 ) -> None:
@@ -88,6 +133,90 @@ def test_no_replace_file_publication_replays_identical_bytes_and_rejects_conflic
         publish_bytes_no_replace(target, b"second\n")
 
     assert target.read_bytes() == b"first\n"
+
+
+def test_direct_two_process_same_bytes_race_is_one_create_and_one_replay(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "direct-same.json"
+
+    observed = _run_direct_concurrent_publications(
+        target,
+        [("first", b"same\n"), ("second", b"same\n")],
+    )
+
+    assert sorted(status for status, _label in observed) == ["created", "replay"]
+    assert target.read_bytes() == b"same\n"
+
+
+def test_direct_two_process_different_bytes_race_has_one_winner_and_one_conflict(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "direct-different.json"
+    payloads = {"first": b"first\n", "second": b"second\n"}
+
+    observed = _run_direct_concurrent_publications(
+        target,
+        list(payloads.items()),
+    )
+
+    winners = [label for status, label in observed if status == "created"]
+    conflicts = [
+        label
+        for status, label in observed
+        if status == "AttemptPublicationConflict"
+    ]
+    assert len(winners) == 1, observed
+    assert len(conflicts) == 1, observed
+    assert winners[0] != conflicts[0]
+    assert target.read_bytes() == payloads[winners[0]]
+
+
+def test_attempt_state_rejects_intermediate_private_directory_symlink(
+    tmp_path: Path,
+) -> None:
+    publication_root = tmp_path / "publication"
+    outside = tmp_path / "outside"
+    publication_root.mkdir()
+    outside.mkdir()
+    (publication_root / "private").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(AttemptPublicationConflict, match="path component"):
+        with AttemptPublicationStore(publication_root).session(
+            attempt_id="mapping",
+            identity_digest=_digest("identity"),
+        ):
+            pass
+
+    assert not (outside / "attempt_publications").exists()
+
+
+def test_attempt_artifact_rejects_intermediate_output_directory_symlink(
+    tmp_path: Path,
+) -> None:
+    publication_root = tmp_path / "publication"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    with AttemptPublicationStore(publication_root).session(
+        attempt_id="mapping",
+        identity_digest=_digest("identity"),
+    ) as session:
+        (publication_root / "outputs").symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+        with pytest.raises(AttemptPublicationConflict, match="path component"):
+            session.publish_request_artifacts(
+                {
+                    "request": (
+                        publication_root / "outputs" / "request.json",
+                        b"request\n",
+                    )
+                }
+            )
+
+    assert not (outside / "request.json").exists()
 
 
 def test_attempt_publication_advances_through_append_only_stages(tmp_path: Path) -> None:

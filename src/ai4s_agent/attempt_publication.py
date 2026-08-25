@@ -85,7 +85,12 @@ def immutable_json_bytes(value: Any) -> bytes:
         ) from exc
 
 
-def publish_bytes_no_replace(path: str | Path, payload: bytes) -> str:
+def publish_bytes_no_replace(
+    path: str | Path,
+    payload: bytes,
+    *,
+    trusted_root: str | Path | None = None,
+) -> str:
     """Atomically create ``path`` or verify an identical existing file.
 
     The temporary file is fully fsynced before an atomic hard-link creates the
@@ -96,57 +101,37 @@ def publish_bytes_no_replace(path: str | Path, payload: bytes) -> str:
     if not isinstance(payload, bytes):
         raise TypeError("publication payload must be bytes")
     target = Path(path).expanduser().absolute()
-    _ensure_directory(target.parent)
-    if target.is_symlink():
-        raise AttemptPublicationConflict("publication destination is a symbolic link")
-    if target.exists():
-        _verify_regular_bytes(target, payload)
-        return "replay"
-
-    temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(temporary, flags, 0o600)
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:  # pragma: no cover - defensive OS boundary
-                raise AttemptPublicationError("publication payload write made no progress")
-            view = view[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        try:
-            os.link(temporary, target, follow_symlinks=False)
-        except FileExistsError:
-            _verify_regular_bytes(target, payload)
-            return "replay"
-        except OSError as exc:
-            if target.exists() or target.is_symlink():
-                _verify_regular_bytes(target, payload)
-                return "replay"
-            raise AttemptPublicationError(
-                "atomic no-replace publication is unavailable"
-            ) from exc
-        _fsync_directory(target.parent)
-        _verify_regular_bytes(target, payload)
-        return "created"
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    root = (
+        Path(trusted_root).expanduser().absolute()
+        if trusted_root is not None
+        else target.parent
+    )
+    _ensure_directory(root)
+    with _confined_directory_descriptor(
+        trusted_root=root,
+        directory=target.parent,
+        create=True,
+    ) as parent_descriptor:
+        return _publish_bytes_at(
+            parent_descriptor=parent_descriptor,
+            filename=target.name,
+            payload=payload,
+        )
 
 
-def publish_json_no_replace(path: str | Path, value: Any) -> str:
+def publish_json_no_replace(
+    path: str | Path,
+    value: Any,
+    *,
+    trusted_root: str | Path | None = None,
+) -> str:
     """Publish one JSON document with exact replay and no replacement."""
 
-    return publish_bytes_no_replace(path, immutable_json_bytes(value))
+    return publish_bytes_no_replace(
+        path,
+        immutable_json_bytes(value),
+        trusted_root=trusted_root,
+    )
 
 
 class AttemptPublicationStore:
@@ -168,10 +153,13 @@ class AttemptPublicationStore:
         clean_attempt_id = _require_safe_id(attempt_id, label="attempt_id")
         clean_identity = _require_digest(identity_digest, label="identity_digest")
         _ensure_directory(self.publication_root)
-        _ensure_directory(self.state_root)
+        _ensure_confined_directory(self.publication_root, self.state_root)
         attempt_root = self.state_root / clean_attempt_id
-        _ensure_directory(attempt_root)
-        with _exclusive_process_lock(attempt_root / "attempt.lock"):
+        _ensure_confined_directory(self.publication_root, attempt_root)
+        with _exclusive_process_lock(
+            attempt_root / "attempt.lock",
+            trusted_root=self.publication_root,
+        ):
             session = AttemptPublicationSession(
                 publication_root=self.publication_root,
                 attempt_root=attempt_root,
@@ -201,15 +189,30 @@ class AttemptPublicationSession:
 
     @property
     def stage(self) -> AttemptPublicationStage:
-        if (self.attempt_root / "complete.json").is_file():
+        if self._marker_exists("complete.json"):
             return AttemptPublicationStage.COMPLETE
-        if (self.attempt_root / "result_committed.json").is_file():
+        if self._marker_exists("result_committed.json"):
             return AttemptPublicationStage.RESULT_COMMITTED
         if self._effect_attempts():
             return AttemptPublicationStage.EFFECT_STARTED
-        if (self.attempt_root / "request_frozen.json").is_file():
+        if self._marker_exists("request_frozen.json"):
             return AttemptPublicationStage.REQUEST_FROZEN
         return AttemptPublicationStage.RESERVED
+
+    def read_artifact_bytes(
+        self,
+        path: str | Path,
+        *,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a regular artifact without following any confined symlink."""
+
+        target = self._artifact_target(path)
+        return _read_confined_regular_bytes(
+            trusted_root=self.publication_root,
+            path=target,
+            max_bytes=max_bytes,
+        )
 
     def publish_request_artifacts(
         self,
@@ -368,8 +371,7 @@ class AttemptPublicationSession:
         artifacts: Mapping[str, tuple[str | Path, bytes]],
     ) -> None:
         manifest = self._artifact_manifest(artifacts)
-        marker_path = self.attempt_root / marker_name
-        if marker_path.exists() or marker_path.is_symlink():
+        if self._marker_exists(marker_name):
             existing = self._read_marker(marker_name)
             if existing.get("artifacts") != manifest:
                 raise AttemptPublicationConflict(
@@ -383,7 +385,11 @@ class AttemptPublicationSession:
             expected = manifest[logical_name]
             if hashlib.sha256(payload).hexdigest() != expected["sha256"]:
                 raise AttemptPublicationConflict("artifact bytes changed during publication")
-            publish_bytes_no_replace(target, payload)
+            publish_bytes_no_replace(
+                target,
+                payload,
+                trusted_root=self.publication_root,
+            )
         self._write_marker(
             marker_name,
             {
@@ -454,7 +460,10 @@ class AttemptPublicationSession:
                 raise AttemptPublicationConflict(
                     "publication artifact size is invalid"
                 ) from exc
-            payload = _read_regular_bytes(target, max_bytes=max(expected_size, 0) + 1)
+            payload = self.read_artifact_bytes(
+                target,
+                max_bytes=max(expected_size, 0) + 1,
+            )
             if len(payload) != expected_size:
                 raise AttemptPublicationConflict("publication artifact size changed")
             if hashlib.sha256(payload).hexdigest() != expected_digest:
@@ -476,16 +485,21 @@ class AttemptPublicationSession:
         self,
     ) -> list[tuple[EffectAttempt, dict[str, Any] | None]]:
         effects_root = self.attempt_root / "effects"
-        if not effects_root.exists():
+        try:
+            with _confined_directory_descriptor(
+                trusted_root=self.publication_root,
+                directory=effects_root,
+                create=False,
+            ) as effects_descriptor:
+                entries = sorted(os.listdir(effects_descriptor))
+        except FileNotFoundError:
             return []
-        if effects_root.is_symlink() or not effects_root.is_dir():
-            raise AttemptPublicationConflict("effect state directory is unsafe")
-        started_paths = sorted(effects_root.glob("*.started.json"))
+        started_names = [name for name in entries if name.endswith(".started.json")]
         attempts: list[tuple[EffectAttempt, dict[str, Any] | None]] = []
-        for expected_index, started_path in enumerate(started_paths, start=1):
-            if started_path.name != f"{expected_index:06d}.started.json":
+        for expected_index, started_name in enumerate(started_names, start=1):
+            if started_name != f"{expected_index:06d}.started.json":
                 raise AttemptPublicationConflict("effect attempt sequence is not contiguous")
-            started = self._read_marker(f"effects/{started_path.name}")
+            started = self._read_marker(f"effects/{started_name}")
             if started.get("status") != AttemptPublicationStage.EFFECT_STARTED.value:
                 raise AttemptPublicationConflict("effect start marker is invalid")
             if started.get("effect_index") != expected_index:
@@ -496,10 +510,10 @@ class AttemptPublicationSession:
                     str(started.get("effect_digest") or ""), label="effect_digest"
                 ),
             )
-            outcome_path = effects_root / f"{expected_index:06d}.outcome.json"
+            outcome_name = f"{expected_index:06d}.outcome.json"
             outcome = None
-            if outcome_path.exists() or outcome_path.is_symlink():
-                outcome = self._read_marker(f"effects/{outcome_path.name}")
+            if outcome_name in entries:
+                outcome = self._read_marker(f"effects/{outcome_name}")
                 if outcome.get("effect_index") != expected_index:
                     raise AttemptPublicationConflict("effect outcome index changed")
                 if outcome.get("effect_digest") != effect.effect_digest:
@@ -512,8 +526,8 @@ class AttemptPublicationSession:
                     str(outcome.get("failure_digest") or ""), label="failure_digest"
                 )
             attempts.append((effect, outcome))
-        outcome_paths = sorted(effects_root.glob("*.outcome.json"))
-        if len(outcome_paths) != sum(outcome is not None for _effect, outcome in attempts):
+        outcome_names = [name for name in entries if name.endswith(".outcome.json")]
+        if len(outcome_names) != sum(outcome is not None for _effect, outcome in attempts):
             raise AttemptPublicationConflict("orphan effect outcome marker exists")
         return attempts
 
@@ -522,11 +536,19 @@ class AttemptPublicationSession:
             **dict(payload),
         }
         path = self.attempt_root / relative_name
-        publish_json_no_replace(path, marker)
+        publish_json_no_replace(
+            path,
+            marker,
+            trusted_root=self.publication_root,
+        )
 
     def _read_marker(self, relative_name: str) -> dict[str, Any]:
         path = self.attempt_root / relative_name
-        payload = _read_regular_bytes(path, max_bytes=_MAX_MARKER_BYTES)
+        payload = _read_confined_regular_bytes(
+            trusted_root=self.publication_root,
+            path=path,
+            max_bytes=_MAX_MARKER_BYTES,
+        )
         try:
             loaded = json.loads(payload)
         except json.JSONDecodeError as exc:
@@ -549,15 +571,21 @@ class AttemptPublicationSession:
         marker = self._read_marker(relative_name)
         return hashlib.sha256(immutable_json_bytes(marker)).hexdigest()
 
+    def _marker_exists(self, relative_name: str) -> bool:
+        return _confined_regular_file_exists(
+            trusted_root=self.publication_root,
+            path=self.attempt_root / relative_name,
+        )
+
     def _validate_state(self) -> None:
         reservation = self._read_marker("reservation.json")
         if reservation.get("status") != AttemptPublicationStage.RESERVED.value:
             raise AttemptPublicationConflict("attempt reservation marker is invalid")
-        request_path = self.attempt_root / "request_frozen.json"
-        result_path = self.attempt_root / "result_committed.json"
-        complete_path = self.attempt_root / "complete.json"
         attempts = self._effect_attempts()
-        if request_path.exists() or request_path.is_symlink():
+        request_exists = self._marker_exists("request_frozen.json")
+        result_exists = self._marker_exists("result_committed.json")
+        complete_exists = self._marker_exists("complete.json")
+        if request_exists:
             request = self._read_marker("request_frozen.json")
             if request.get("status") != AttemptPublicationStage.REQUEST_FROZEN.value:
                 raise AttemptPublicationConflict("request freeze marker is invalid")
@@ -565,9 +593,9 @@ class AttemptPublicationSession:
             if not isinstance(request_artifacts, dict):
                 raise AttemptPublicationConflict("request artifact manifest is invalid")
             self._verify_manifest_artifacts(request_artifacts)
-        if (result_path.exists() or complete_path.exists() or attempts) and not request_path.is_file():
+        if (result_exists or complete_exists or attempts) and not request_exists:
             raise AttemptPublicationConflict("attempt state skipped REQUEST_FROZEN")
-        if result_path.exists():
+        if result_exists:
             result = self._read_marker("result_committed.json")
             if result.get("status") != AttemptPublicationStage.RESULT_COMMITTED.value:
                 raise AttemptPublicationConflict("result commit marker is invalid")
@@ -577,11 +605,11 @@ class AttemptPublicationSession:
             if not isinstance(result_artifacts, dict):
                 raise AttemptPublicationConflict("result artifact manifest is invalid")
             self._verify_manifest_artifacts(result_artifacts)
-        if complete_path.exists():
+        if complete_exists:
             complete = self._read_marker("complete.json")
             if complete.get("status") != AttemptPublicationStage.COMPLETE.value:
                 raise AttemptPublicationConflict("completion marker is invalid")
-            if not result_path.is_file():
+            if not result_exists:
                 raise AttemptPublicationConflict("attempt state skipped RESULT_COMMITTED")
             if complete.get("request_manifest_digest") != self._marker_digest(
                 "request_frozen.json"
@@ -620,65 +648,343 @@ def _ensure_directory(path: Path) -> None:
         raise AttemptPublicationConflict("publication directory is unsafe")
 
 
-def _read_regular_bytes(path: Path, *, max_bytes: int) -> bytes:
-    if path.is_symlink() or not path.is_file():
-        raise AttemptPublicationConflict("publication file is missing or unsafe")
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise AttemptPublicationError("publication file cannot be inspected") from exc
-    if size < 0 or size > max_bytes:
-        raise AttemptPublicationConflict("publication file exceeds its expected bound")
-    try:
-        payload = path.read_bytes()
-    except OSError as exc:
-        raise AttemptPublicationError("publication file cannot be read") from exc
-    if len(payload) != size:
-        raise AttemptPublicationConflict("publication file changed while being read")
-    return payload
+def _publish_bytes_at(
+    *,
+    parent_descriptor: int,
+    filename: str,
+    payload: bytes,
+) -> str:
+    if not filename or filename in {".", ".."} or "/" in filename:
+        raise AttemptPublicationConflict("publication filename is unsafe")
+    existing = _read_regular_bytes_at(
+        parent_descriptor=parent_descriptor,
+        filename=filename,
+        max_bytes=len(payload),
+        missing_ok=True,
+    )
+    if existing is not None:
+        if existing != payload:
+            raise AttemptPublicationConflict(
+                "publication destination already contains different bytes"
+            )
+        return "replay"
 
-
-def _verify_regular_bytes(path: Path, expected: bytes) -> None:
-    actual = _read_regular_bytes(path, max_bytes=len(expected))
-    if actual != expected:
-        raise AttemptPublicationConflict(
-            "publication destination already contains different bytes"
+    temporary_name = f".{filename}.{uuid.uuid4().hex}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary_name,
+            flags,
+            0o600,
+            dir_fd=parent_descriptor,
         )
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    descriptor = os.open(path, flags)
-    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:  # pragma: no cover - defensive OS boundary
+                raise AttemptPublicationError(
+                    "publication payload write made no progress"
+                )
+            view = view[written:]
         os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(
+                temporary_name,
+                filename,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            existing = _read_regular_bytes_at(
+                parent_descriptor=parent_descriptor,
+                filename=filename,
+                max_bytes=len(payload),
+            )
+            if existing != payload:
+                raise AttemptPublicationConflict(
+                    "publication destination already contains different bytes"
+                )
+            return "replay"
+        except OSError as exc:
+            existing = _read_regular_bytes_at(
+                parent_descriptor=parent_descriptor,
+                filename=filename,
+                max_bytes=len(payload),
+                missing_ok=True,
+            )
+            if existing is not None:
+                if existing != payload:
+                    raise AttemptPublicationConflict(
+                        "publication destination already contains different bytes"
+                    )
+                return "replay"
+            raise AttemptPublicationError(
+                "atomic no-replace publication is unavailable"
+            ) from exc
+        os.fsync(parent_descriptor)
+        committed = _read_regular_bytes_at(
+            parent_descriptor=parent_descriptor,
+            filename=filename,
+            max_bytes=len(payload),
+        )
+        if committed != payload:
+            raise AttemptPublicationConflict(
+                "publication destination changed after commit"
+            )
+        return "created"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+
+
+def _read_regular_bytes_at(
+    *,
+    parent_descriptor: int,
+    filename: str,
+    max_bytes: int,
+    missing_ok: bool = False,
+) -> bytes | None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(filename, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    except OSError as exc:
+        raise AttemptPublicationConflict(
+            "publication file is a symbolic link or unsafe"
+        ) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise AttemptPublicationConflict("publication file is not regular")
+        if info.st_size < 0 or info.st_size > max_bytes:
+            raise AttemptPublicationConflict(
+                "publication file exceeds its expected bound"
+            )
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(65_536, max_bytes - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise AttemptPublicationConflict(
+                    "publication file exceeds its expected bound"
+                )
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        if len(payload) != info.st_size:
+            raise AttemptPublicationConflict(
+                "publication file changed while being read"
+            )
+        return payload
     finally:
         os.close(descriptor)
 
 
+def _read_confined_regular_bytes(
+    *,
+    trusted_root: Path,
+    path: Path,
+    max_bytes: int,
+) -> bytes:
+    target = path.expanduser().absolute()
+    with _confined_directory_descriptor(
+        trusted_root=trusted_root,
+        directory=target.parent,
+        create=False,
+    ) as parent_descriptor:
+        payload = _read_regular_bytes_at(
+            parent_descriptor=parent_descriptor,
+            filename=target.name,
+            max_bytes=max_bytes,
+        )
+    if payload is None:  # pragma: no cover - missing_ok is false
+        raise FileNotFoundError(target)
+    return payload
+
+
+def _confined_regular_file_exists(
+    *,
+    trusted_root: Path,
+    path: Path,
+) -> bool:
+    target = path.expanduser().absolute()
+    try:
+        with _confined_directory_descriptor(
+            trusted_root=trusted_root,
+            directory=target.parent,
+            create=False,
+        ) as parent_descriptor:
+            try:
+                info = os.stat(
+                    target.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return False
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        raise AttemptPublicationConflict("publication file is a symbolic link")
+    if not stat.S_ISREG(info.st_mode):
+        raise AttemptPublicationConflict("publication file is not regular")
+    return True
+
+
+def _ensure_confined_directory(trusted_root: Path, directory: Path) -> None:
+    with _confined_directory_descriptor(
+        trusted_root=trusted_root,
+        directory=directory,
+        create=True,
+    ):
+        return
+
+
 @contextmanager
-def _exclusive_process_lock(path: Path) -> Iterator[None]:
-    if path.is_symlink():
-        raise AttemptPublicationConflict("attempt lock is a symbolic link")
-    flags = os.O_RDWR | os.O_CREAT
+def _confined_directory_descriptor(
+    *,
+    trusted_root: Path,
+    directory: Path,
+    create: bool,
+) -> Iterator[int]:
+    root = trusted_root.expanduser().absolute()
+    target = directory.expanduser().absolute()
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise AttemptPublicationConflict(
+            "publication path escapes its trusted root"
+        ) from exc
+    if root.is_symlink():
+        raise AttemptPublicationConflict("trusted publication root is a symbolic link")
+    _ensure_directory(root)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags, 0o600)
+        root_descriptor = os.open(root, flags)
     except OSError as exc:
-        raise AttemptPublicationError("attempt lock is unavailable") from exc
+        raise AttemptPublicationConflict("trusted publication root is unsafe") from exc
+    descriptors = [root_descriptor]
     try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode):
-            raise AttemptPublicationConflict("attempt lock is not a regular file")
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
+        for part in relative.parts:
+            if not part or part in {".", ".."}:
+                raise AttemptPublicationConflict(
+                    "publication path component is unsafe"
+                )
+            try:
+                child_descriptor = os.open(part, flags, dir_fd=descriptors[-1])
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=descriptors[-1])
+                    os.fsync(descriptors[-1])
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise AttemptPublicationError(
+                        "publication directory is unavailable"
+                    ) from exc
+                try:
+                    child_descriptor = os.open(
+                        part,
+                        flags,
+                        dir_fd=descriptors[-1],
+                    )
+                except OSError as exc:
+                    raise AttemptPublicationConflict(
+                        "publication path component is a symbolic link or unsafe"
+                    ) from exc
+            except OSError as exc:
+                raise AttemptPublicationConflict(
+                    "publication path component is a symbolic link or unsafe"
+                ) from exc
+            info = os.fstat(child_descriptor)
+            if not stat.S_ISDIR(info.st_mode):
+                os.close(child_descriptor)
+                raise AttemptPublicationConflict(
+                    "publication path component is not a directory"
+                )
+            descriptors.append(child_descriptor)
+        yield descriptors[-1]
     finally:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        finally:
+        for descriptor in reversed(descriptors):
             os.close(descriptor)
+
+
+@contextmanager
+def _exclusive_process_lock(
+    path: Path,
+    *,
+    trusted_root: Path,
+) -> Iterator[None]:
+    open_flags = os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        open_flags |= os.O_NOFOLLOW
+    with _confined_directory_descriptor(
+        trusted_root=trusted_root,
+        directory=path.parent,
+        create=True,
+    ) as parent_descriptor:
+        try:
+            descriptor = os.open(path.name, open_flags, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            try:
+                descriptor = os.open(
+                    path.name,
+                    open_flags | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                os.fsync(parent_descriptor)
+            except FileExistsError:
+                try:
+                    descriptor = os.open(
+                        path.name,
+                        open_flags,
+                        dir_fd=parent_descriptor,
+                    )
+                except OSError as exc:
+                    raise AttemptPublicationConflict(
+                        "attempt lock is a symbolic link or unsafe"
+                    ) from exc
+            except OSError as exc:
+                raise AttemptPublicationError("attempt lock is unavailable") from exc
+        except OSError as exc:
+            raise AttemptPublicationConflict(
+                "attempt lock is a symbolic link or unsafe"
+            ) from exc
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise AttemptPublicationConflict("attempt lock is not a regular file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
 
 __all__ = [

@@ -49,10 +49,17 @@ Both frozen artifacts are no-replace publications at the writer boundary. An
 identical identity resolves to the existing immutable artifact; different
 bytes or a different identity are a conflict. Publication uses a fully fsynced
 temporary file followed by an atomic hard-link commit, so concurrent processes
-cannot pass an `exists()` check and then overwrite each other. Every publish is
-followed by reread and model validation. Any request digest, source evidence
-digest, invocation digest, roster, schema-version, paper, or linkage mismatch
-fails closed.
+cannot pass an `exists()` check and then overwrite each other. The primitive is
+tested with direct competing processes outside the attempt-session lock. Every
+publish is followed by reread and model validation. Any request digest, source
+evidence digest, invocation digest, roster, schema-version, paper, or linkage
+mismatch fails closed.
+
+All state and artifact access below the trusted publication root walks each
+path component through directory descriptors with `O_NOFOLLOW`. Intermediate
+directory symlinks and final-file symlinks are rejected before any read or
+write. BR2 result recovery uses that confined regular-file reader before JSON
+parsing, so an uncommitted result symlink is never followed.
 
 ## Attempt publication lifecycle
 

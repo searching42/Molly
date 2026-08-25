@@ -281,10 +281,10 @@ def test_mapping_result_publication_crash_recovers_without_second_provider_call(
     monkeypatch.setattr(br2_adapter, "create_llm_provider", lambda _config: provider)
     original_publish = attempt_publication.publish_bytes_no_replace
 
-    def crash_before_manifest(path, content):
+    def crash_before_manifest(path, content, **kwargs):
         if Path(path).name == "provider_invocation_manifest.json":
             raise OSError("injected manifest publication crash")
-        return original_publish(path, content)
+        return original_publish(path, content, **kwargs)
 
     monkeypatch.setattr(
         attempt_publication,
@@ -322,6 +322,47 @@ def test_mapping_result_publication_crash_recovers_without_second_provider_call(
     assert (
         Path(payload["output_root"]) / "provider_invocation_manifest.json"
     ).is_file()
+
+
+@pytest.mark.pr_fast
+@pytest.mark.adversarial
+def test_mapping_recovery_rejects_result_file_symlink_before_reading_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, evidence_path = _mapping_adapter_payloads(tmp_path)
+    provider = _CountingStubProvider(
+        response=_provider_response(evidence_path),
+        fail_unknown=True,
+    )
+    monkeypatch.setattr(br2_adapter, "LLMSettingsStore", _ToggleSettings)
+    _ToggleSettings.external_llm_data_sharing_enabled = True
+    monkeypatch.setattr(br2_adapter, "create_llm_provider", lambda _config: provider)
+
+    first = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+    assert first["status"] == "failed"
+    assert first["error"]["code"] == "llm_provider_error"
+    assert provider.complete_calls == 1
+
+    outside_result = tmp_path / "outside-result.json"
+    outside_result.write_text("{}", encoding="utf-8")
+    result_path = Path(payload["output_root"]) / "contextual_mapping_result.json"
+    result_path.symlink_to(outside_result)
+
+    def provider_must_not_be_resolved(_config):
+        raise AssertionError("symlink recovery resolved a provider")
+
+    monkeypatch.setattr(
+        br2_adapter,
+        "create_llm_provider",
+        provider_must_not_be_resolved,
+    )
+    second = br2_adapter.map_oled_contextual_semantics_adapter(payload)
+
+    assert second["status"] == "failed"
+    assert second["error"]["code"] == "publication_conflict"
+    assert "symbolic link" in second["error"]["message"]
+    assert provider.complete_calls == 1
 
 
 def test_response_binding_failure_artifact_writer_persists_only_structured_report(
