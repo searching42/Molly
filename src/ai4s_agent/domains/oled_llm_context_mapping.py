@@ -34,6 +34,11 @@ from ai4s_agent.llm_provider import (
     LLMProviderError,
     LLMResponseValidationError,
 )
+from ai4s_agent.llm_invocation_artifacts import (
+    ExactLLMInvocationArtifactError,
+    ExactLLMInvocationArtifactStore,
+    FrozenLLMInvocation,
+)
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
@@ -805,10 +810,12 @@ def run_oled_llm_context_mapping(
     request: OledLLMPaperMappingRequest,
     *,
     provider: LLMProvider,
+    invocation_artifact_store: ExactLLMInvocationArtifactStore | None = None,
 ) -> OledLLMContextMappingResult:
     request_digest = request.request_digest
     invocation: LLMInvocationRecord | None = None
     validation_stages = _initial_validation_stages()
+    invocation_artifact_summary: dict[str, Any] | None = None
     try:
         messages = _mapping_messages(request)
     except OledContextProjectionError as exc:
@@ -825,12 +832,49 @@ def run_oled_llm_context_mapping(
         validation_stages = _initial_validation_stages()
         invocation = None
         response = None
+        frozen_invocation: FrozenLLMInvocation | None = None
+        if invocation_artifact_store is not None:
+            try:
+                prepare = getattr(provider, "prepare_json_invocation", None)
+                if not callable(prepare):
+                    raise ExactLLMInvocationArtifactError(
+                        "provider does not expose exact invocation preparation"
+                    )
+                frozen_invocation = prepare(
+                    messages=messages,
+                    prompt_version=PROMPT_VERSION,
+                    response_model=OledLLMPaperMappingResponse,
+                    request_digest=request_digest,
+                )
+                if not isinstance(frozen_invocation, FrozenLLMInvocation):
+                    raise ExactLLMInvocationArtifactError(
+                        "provider returned an invalid frozen invocation"
+                    )
+                frozen_invocation = invocation_artifact_store.persist_and_verify(
+                    frozen_invocation
+                )
+                invocation_artifact_summary = frozen_invocation.safe_summary()
+            except (ExactLLMInvocationArtifactError, OSError, TypeError, ValueError) as exc:
+                validation_stages["provider_invocation_artifact"] = "failed"
+                return _failed_result(
+                    request,
+                    status="provider_error",
+                    code="llm_invocation_artifact_error",
+                    message=str(exc),
+                    validation_stages=validation_stages,
+                    invocation_artifact_summary=invocation_artifact_summary,
+                    llm_call_attempted=False,
+                )
+            validation_stages["provider_invocation_artifact"] = "verified"
         try:
-            invocation = provider.complete_json(
-                messages=messages,
-                prompt_version=PROMPT_VERSION,
-                response_model=OledLLMPaperMappingResponse,
-            )
+            provider_kwargs: dict[str, Any] = {
+                "messages": messages,
+                "prompt_version": PROMPT_VERSION,
+                "response_model": OledLLMPaperMappingResponse,
+            }
+            if frozen_invocation is not None:
+                provider_kwargs["frozen_invocation"] = frozen_invocation
+            invocation = provider.complete_json(**provider_kwargs)
         except LLMResponseValidationError as exc:
             validation_stages["structured_validation"] = "failed"
             if attempt + 1 < _MAX_MAPPING_VALIDATION_ATTEMPTS:
@@ -842,6 +886,7 @@ def run_oled_llm_context_mapping(
                 code="llm_provider_error",
                 message=str(exc),
                 validation_stages=validation_stages,
+                invocation_artifact_summary=invocation_artifact_summary,
             )
         except (LLMProviderError, OSError, TypeError) as exc:
             return _failed_result(
@@ -850,6 +895,7 @@ def run_oled_llm_context_mapping(
                 code="llm_provider_error",
                 message=str(exc),
                 validation_stages=validation_stages,
+                invocation_artifact_summary=invocation_artifact_summary,
             )
 
         try:
@@ -887,6 +933,7 @@ def run_oled_llm_context_mapping(
                 response=response,
                 binding_error=exc,
                 validation_stages=validation_stages,
+                invocation_artifact_summary=invocation_artifact_summary,
             )
         except ValidationError as exc:
             validation_stages["structured_validation"] = "failed"
@@ -900,6 +947,7 @@ def run_oled_llm_context_mapping(
                 message=str(exc),
                 invocation=invocation,
                 validation_stages=validation_stages,
+                invocation_artifact_summary=invocation_artifact_summary,
             )
         except ValueError as exc:
             validation_stages["semantic_validation"] = "failed"
@@ -914,6 +962,7 @@ def run_oled_llm_context_mapping(
                 invocation=invocation,
                 response=response,
                 validation_stages=validation_stages,
+                invocation_artifact_summary=invocation_artifact_summary,
             )
         break
 
@@ -924,6 +973,7 @@ def run_oled_llm_context_mapping(
             code="llm_provider_error",
             message="contextual mapping did not produce a validated response",
             validation_stages=validation_stages,
+            invocation_artifact_summary=invocation_artifact_summary,
         )
 
     extensions = [
@@ -958,6 +1008,7 @@ def run_oled_llm_context_mapping(
             "gold_records_created": False,
             "dataset_written": False,
             "validation_stages": dict(validation_stages),
+            "invocation_artifact": invocation_artifact_summary,
         },
     )
 
@@ -1545,6 +1596,7 @@ def _explicit_property_signal_labels(packet: OledSemanticMappingPacket) -> list[
 
 def _initial_validation_stages() -> dict[str, str]:
     return {
+        "provider_invocation_artifact": "not_reached",
         "structured_validation": "not_reached",
         "identity_binding": "not_reached",
         "deterministic_binding": "not_reached",
@@ -1695,6 +1747,7 @@ def _build_response_binding_failure_report(
     error: ResponseBindingError,
     response: OledLLMPaperMappingResponse | None,
     validation_stages: Mapping[str, str],
+    invocation_artifact_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": "oled_response_binding_failure.v1",
@@ -1704,6 +1757,11 @@ def _build_response_binding_failure_report(
         "safe_message": error.safe_message,
         "safe_details": dict(error.details),
         "validation_stages": dict(validation_stages),
+        "invocation_artifact": (
+            dict(invocation_artifact_summary)
+            if invocation_artifact_summary is not None
+            else None
+        ),
         "response_projection": (
             _safe_response_binding_projection(response) if response is not None else None
         ),
@@ -1952,12 +2010,14 @@ def _failed_result(
     response: OledLLMPaperMappingResponse | None = None,
     binding_error: ResponseBindingError | None = None,
     validation_stages: Mapping[str, str] | None = None,
+    invocation_artifact_summary: Mapping[str, Any] | None = None,
+    llm_call_attempted: bool = True,
 ) -> OledLLMContextMappingResult:
     metadata = {
         **_projection_result_metadata(request),
-        "llm_call_attempted": True,
+        "llm_call_attempted": llm_call_attempted,
         "llm_response_received": invocation is not None,
-        "llm_called": True,
+        "llm_called": llm_call_attempted,
         "human_review_required": True,
         "automatic_candidate_merge": False,
         "ontology_extensions_applied": False,
@@ -1965,12 +2025,18 @@ def _failed_result(
         "gold_records_created": False,
         "dataset_written": False,
         "validation_stages": dict(validation_stages or _initial_validation_stages()),
+        "invocation_artifact": (
+            dict(invocation_artifact_summary)
+            if invocation_artifact_summary is not None
+            else None
+        ),
     }
     if binding_error is not None:
         metadata["response_binding_failure"] = _build_response_binding_failure_report(
             error=binding_error,
             response=response,
             validation_stages=metadata["validation_stages"],
+            invocation_artifact_summary=invocation_artifact_summary,
         )
     return OledLLMContextMappingResult(
         paper_id=request.paper_id,

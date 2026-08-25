@@ -256,6 +256,7 @@ def test_response_binding_failure_exposes_safe_paper_identity_diagnostic() -> No
         "returned_paper_id": "paper-context-other",
     }
     assert result.metadata["validation_stages"] == {
+        "provider_invocation_artifact": "not_reached",
         "structured_validation": "passed",
         "identity_binding": "failed",
         "deterministic_binding": "not_reached",

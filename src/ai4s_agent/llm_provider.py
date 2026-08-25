@@ -16,6 +16,10 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ValidationError
 
+from ai4s_agent.llm_invocation_artifacts import (
+    FrozenLLMInvocation,
+    canonical_json_bytes,
+)
 from ai4s_agent.schemas import LLMInvocationRecord, LLMProviderConfig
 
 
@@ -50,6 +54,7 @@ class LLMProvider(Protocol):
         prompt_version: str,
         response_model: ResponseModel | None = None,
         response_schema: dict[str, Any] | None = None,
+        frozen_invocation: FrozenLLMInvocation | None = None,
     ) -> LLMInvocationRecord:
         ...
 
@@ -102,7 +107,13 @@ class StubLLMProvider:
         prompt_version: str,
         response_model: ResponseModel | None = None,
         response_schema: dict[str, Any] | None = None,
+        frozen_invocation: FrozenLLMInvocation | None = None,
     ) -> LLMInvocationRecord:
+        if frozen_invocation is not None:
+            if frozen_invocation.provider != "stub":
+                raise LLMProviderError("frozen invocation provider does not match stub")
+            messages = frozen_invocation.messages()
+            prompt_version = frozen_invocation.prompt_version
         parsed = _validate_structured_output(
             self.response,
             response_model=response_model,
@@ -115,6 +126,32 @@ class StubLLMProvider:
             response_id=self.response_id,
             raw_response={"messages": messages, "response": self.response},
             parsed_output=parsed,
+        )
+
+    def prepare_json_invocation(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        response_model: ResponseModel | None = None,
+        response_schema: dict[str, Any] | None = None,
+        request_digest: str,
+    ) -> FrozenLLMInvocation:
+        _validate_schema_arguments(response_model=response_model, response_schema=response_schema)
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [dict(message) for message in messages],
+        }
+        if response_model is not None or response_schema is not None:
+            payload["response_format"] = {"type": "json_object"}
+        return FrozenLLMInvocation.from_payload(
+            provider="stub",
+            model=self.model,
+            prompt_version=prompt_version,
+            request_digest=request_digest,
+            structured_output_mode="json_object_local_validation",
+            structured_output_transport="buffered",
+            payload=payload,
         )
 
     def stream_text(
@@ -175,21 +212,44 @@ class OpenAICompatibleProvider:
         prompt_version: str,
         response_model: ResponseModel | None = None,
         response_schema: dict[str, Any] | None = None,
+        frozen_invocation: FrozenLLMInvocation | None = None,
     ) -> LLMInvocationRecord:
         _validate_schema_arguments(response_model=response_model, response_schema=response_schema)
         if self.config.structured_output_transport == "sse_stream":
+            payload = (
+                self._validated_frozen_payload(
+                    frozen_invocation,
+                    messages=messages,
+                    prompt_version=prompt_version,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                )
+                if frozen_invocation is not None
+                else None
+            )
             return self._complete_json_sse(
                 messages=messages,
                 prompt_version=prompt_version,
                 response_model=response_model,
                 response_schema=response_schema,
+                payload=payload,
             )
         deadline = self._clock() + float(self.config.total_timeout_sec)
-        payload = self._payload(
-            messages=messages,
-            json_mode=True,
-            response_model=response_model,
-            response_schema=response_schema,
+        payload = (
+            self._validated_frozen_payload(
+                frozen_invocation,
+                messages=messages,
+                prompt_version=prompt_version,
+                response_model=response_model,
+                response_schema=response_schema,
+            )
+            if frozen_invocation is not None
+            else self._payload(
+                messages=messages,
+                json_mode=True,
+                response_model=response_model,
+                response_schema=response_schema,
+            )
         )
         raw = self._request_raw(
             payload,
@@ -219,6 +279,7 @@ class OpenAICompatibleProvider:
         prompt_version: str,
         response_model: ResponseModel | None,
         response_schema: dict[str, Any] | None,
+        payload: dict[str, object] | None = None,
     ) -> LLMInvocationRecord:
         self._ensure_open()
         if self.transport is not None:
@@ -228,13 +289,18 @@ class OpenAICompatibleProvider:
         if self._client is None:
             raise LLMProviderError("OpenAI-compatible HTTP client is unavailable")
 
-        payload = self._payload(
-            messages=messages,
-            json_mode=True,
-            response_model=response_model,
-            response_schema=response_schema,
-        )
-        payload["stream"] = True
+        if payload is None:
+            payload = self._payload(
+                messages=messages,
+                json_mode=True,
+                response_model=response_model,
+                response_schema=response_schema,
+            )
+            payload["stream"] = True
+        elif payload.get("stream") is not True:
+            raise LLMProviderError(
+                "frozen structured SSE invocation must set stream=true"
+            )
         deadline = self._clock() + float(self.config.total_timeout_sec)
         attempts = 0
         while True:
@@ -321,6 +387,69 @@ class OpenAICompatibleProvider:
                 raise
             except httpx.HTTPError as exc:
                 raise self._request_error(exc) from exc
+
+    def prepare_json_invocation(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        response_model: ResponseModel | None = None,
+        response_schema: dict[str, Any] | None = None,
+        request_digest: str,
+    ) -> FrozenLLMInvocation:
+        _validate_schema_arguments(response_model=response_model, response_schema=response_schema)
+        payload = self._payload(
+            messages=messages,
+            json_mode=True,
+            response_model=response_model,
+            response_schema=response_schema,
+        )
+        if self.config.structured_output_transport == "sse_stream":
+            payload["stream"] = True
+        return FrozenLLMInvocation.from_payload(
+            provider="openai_compatible",
+            model=str(payload["model"]),
+            prompt_version=prompt_version,
+            request_digest=request_digest,
+            structured_output_mode=self.config.capabilities.structured_output_mode,
+            structured_output_transport=self.config.structured_output_transport,
+            payload=payload,
+        )
+
+    def _validated_frozen_payload(
+        self,
+        frozen_invocation: FrozenLLMInvocation,
+        *,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        response_model: ResponseModel | None,
+        response_schema: dict[str, Any] | None,
+    ) -> dict[str, object]:
+        del messages
+        if frozen_invocation.provider != "openai_compatible":
+            raise LLMProviderError("frozen invocation provider does not match configured provider")
+        if frozen_invocation.prompt_version != prompt_version:
+            raise LLMProviderError("frozen invocation prompt version does not match request")
+        if frozen_invocation.model != (self.config.model or "default"):
+            raise LLMProviderError("frozen invocation model does not match configured model")
+        if frozen_invocation.structured_output_mode != self.config.capabilities.structured_output_mode:
+            raise LLMProviderError("frozen invocation structured output mode does not match config")
+        if frozen_invocation.structured_output_transport != self.config.structured_output_transport:
+            raise LLMProviderError("frozen invocation transport does not match config")
+        payload = frozen_invocation.provider_payload()
+        expected = self._payload(
+            messages=frozen_invocation.messages(),
+            json_mode=True,
+            response_model=response_model,
+            response_schema=response_schema,
+        )
+        if self.config.structured_output_transport == "sse_stream":
+            expected["stream"] = True
+        if canonical_json_bytes(payload) != canonical_json_bytes(expected):
+            raise LLMProviderError(
+                "frozen invocation payload does not match the configured structured contract"
+            )
+        return payload
 
     def stream_text(
         self,

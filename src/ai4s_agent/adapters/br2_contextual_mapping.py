@@ -30,6 +30,7 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     build_oled_semantic_mapping_packets,
     map_oled_mineru_candidates_to_schema_candidates,
 )
+from ai4s_agent.llm_invocation_artifacts import ExactLLMInvocationArtifactStore
 from ai4s_agent.llm_provider import (
     LLMProviderError,
     LLMProviderManager,
@@ -99,6 +100,10 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
         parsed_document = _load_parsed_document(payload)
         evidence = _load_mapping_evidence(payload)
         request = _mapping_request_from_evidence(parsed_document, evidence)
+        output_root = _output_root(payload)
+        invocation_artifact_store = ExactLLMInvocationArtifactStore(
+            output_root / "private" / "llm_invocations"
+        )
         workspace_dir = Path(str(payload.get("workspace_dir") or Path.cwd())).expanduser()
         config_dir_raw = str(payload.get("llm_config_dir") or "").strip()
         settings = LLMSettingsStore(
@@ -125,7 +130,11 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                         "llm_provider_unavailable",
                         "scientific_mapping provider is unavailable",
                     )
-                mapping_result = run_oled_llm_context_mapping(request, provider=provider)
+                mapping_result = run_oled_llm_context_mapping(
+                    request,
+                    provider=provider,
+                    invocation_artifact_store=invocation_artifact_store,
+                )
         finally:
             providers.close()
 
@@ -142,6 +151,13 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 failure["summary"] = {
                     "validation_stages": mapping_result.metadata.get("validation_stages", {}),
                     "response_binding_failure": response_binding_failure,
+                }
+            else:
+                failure["summary"] = {
+                    "validation_stages": mapping_result.metadata.get("validation_stages", {}),
+                    "invocation_artifact": mapping_result.metadata.get(
+                        "invocation_artifact"
+                    ),
                 }
             return failure
 
@@ -162,6 +178,9 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 "model": invocation.model if invocation else "",
                 "response_id": invocation.response_id if invocation else "",
                 "request_digest": mapping_result.request_digest,
+                "invocation_artifact": mapping_result.metadata.get(
+                    "invocation_artifact"
+                ),
                 "candidate_count": len(mapping_result.schema_candidates),
                 "ontology_review_count": len(mapping_result.ontology_extension_proposals),
                 "ontology_mutated": False,

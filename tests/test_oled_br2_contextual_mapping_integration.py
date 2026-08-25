@@ -252,6 +252,28 @@ def test_controller_executor_mapping_chain_uses_existing_artifact_contracts(
     assert package["human_confirmation_required"] is True
     assert package["ontology_mutated"] is False
     assert storage.read_stage_state(project_id, run_id).status == RunStatus.SUCCEEDED
+    invocation_root = (
+        storage.run_dir(project_id, run_id)
+        / "br2_contextual_mapping"
+        / "private"
+        / "llm_invocations"
+    )
+    invocation_dirs = [path for path in invocation_root.iterdir() if path.is_dir()]
+    assert len(invocation_dirs) == 1
+    manifest = json.loads(
+        (invocation_dirs[0] / "manifest.json").read_text(encoding="utf-8")
+    )
+    mapping_result = json.loads(
+        (
+            storage.run_dir(project_id, run_id)
+            / "br2_contextual_mapping"
+            / "contextual_mapping_result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert manifest["status"] == "verified"
+    assert mapping_result["metadata"]["invocation_artifact"]["invocation_digest"] == manifest[
+        "invocation_digest"
+    ]
 
 
 def test_executor_rejects_malformed_mapping_publication_before_success(
