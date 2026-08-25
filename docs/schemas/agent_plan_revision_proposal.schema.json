@@ -132,7 +132,10 @@
           "type": "string"
         },
         "prompt_version": {
-          "const": "scientific-agent-long-horizon-plan.v1",
+          "enum": [
+            "scientific-agent-long-horizon-plan.v1",
+            "scientific-agent-long-horizon-plan.v2"
+          ],
           "title": "Prompt Version",
           "type": "string"
         },
@@ -378,7 +381,10 @@
           "type": "string"
         },
         "prompt_version": {
-          "const": "scientific-agent-long-horizon-plan.v1",
+          "enum": [
+            "scientific-agent-long-horizon-plan.v1",
+            "scientific-agent-long-horizon-plan.v2"
+          ],
           "title": "Prompt Version",
           "type": "string"
         },

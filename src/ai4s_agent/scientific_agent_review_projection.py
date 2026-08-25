@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
@@ -52,6 +54,22 @@ _PROJECTION_KEYS = frozenset(
         "counts",
         "reason_code_counts",
         "confirmation_required",
+        "paper_id",
+        "dataset_scope",
+        "candidate_record_count",
+        "property_observation_count",
+        "compiled_count",
+        "partial_count",
+        "needs_review_count",
+        "rejected_count",
+        "unresolved_count",
+        "source_check_count",
+        "ontology_review_count",
+        "device_only_excluded_count",
+        "evidence_observation_count",
+        "evidence_bound_observation_count",
+        "evidence_bound_records_count",
+        "all_promoted_rows_have_evidence",
     }
 )
 
@@ -275,10 +293,172 @@ def project_current_dataset_review(
     )
 
 
+def project_current_oled_candidate_review(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    run_id: str,
+    current_task_id: str,
+) -> dict[str, Any]:
+    """Project the verified BR2 candidate package into the existing review seam.
+
+    The candidate package and its review artifact are already verified by the
+    Controller/Executor path.  This function only reads those registered
+    outputs and produces the same non-authoritative browser projection used by
+    BR1; it does not create a second publication or confirmation authority.
+    """
+
+    from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
+        OledBr2CandidateRawDataset,
+        OledBr2CandidateRawDatasetReview,
+    )
+
+    registry = storage.read_artifact_registry(project_id, run_id)
+    run_dir = storage.run_dir(project_id, run_id)
+    package_path = _safe_registry_path(
+        run_dir,
+        registry.get("candidate_raw_dataset", ""),
+        label="candidate raw dataset",
+    )
+    review_path = _safe_registry_path(
+        run_dir,
+        registry.get("candidate_raw_dataset_review", ""),
+        label="candidate raw dataset review",
+    )
+
+    def read_json(path: Path, *, label: str) -> tuple[Mapping[str, Any], bytes]:
+        try:
+            payload_bytes = path.read_bytes()
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ScientificAgentReviewProjectionError(
+                f"{label} is unavailable"
+            ) from exc
+        if len(payload_bytes) > 128 * 1024 * 1024 or not isinstance(payload, Mapping):
+            raise ScientificAgentReviewProjectionError(f"{label} is invalid")
+        return payload, payload_bytes
+
+    package_payload, _package_bytes = read_json(
+        package_path,
+        label="candidate raw dataset",
+    )
+    review_payload, review_bytes = read_json(
+        review_path,
+        label="candidate raw dataset review",
+    )
+    try:
+        package = OledBr2CandidateRawDataset.model_validate(package_payload)
+        review = OledBr2CandidateRawDatasetReview.model_validate(review_payload)
+    except ValueError as exc:
+        raise ScientificAgentReviewProjectionError(
+            "verified BR2 candidate review artifacts are malformed"
+        ) from exc
+    if review.paper_id != package.paper_id:
+        raise ScientificAgentReviewProjectionError("BR2 candidate review paper binding is invalid")
+    if (
+        package.confirmed
+        or package.gold_records_created
+        or package.ontology_mutated
+        or not package.human_confirmation_required
+        or review.confirmed
+        or not review.human_confirmation_required
+    ):
+        raise ScientificAgentReviewProjectionError(
+            "BR2 candidate review crossed the confirmation boundary"
+        )
+    coverage = review.evidence_coverage
+    observation_count = _non_negative_count(
+        coverage.get("property_observation_count", review.property_observation_count),
+        field="evidence_observation_count",
+    )
+    bound_observation_count = _non_negative_count(
+        coverage.get("property_observations_with_evidence", 0),
+        field="evidence_bound_observation_count",
+    )
+    bound_record_count = _non_negative_count(
+        coverage.get("records_with_evidence", 0),
+        field="evidence_bound_records_count",
+    )
+    all_rows_bound = coverage.get("all_promoted_rows_have_evidence") is True
+    review_digest = "sha256:" + hashlib.sha256(review_bytes).hexdigest()
+    candidate_count = _non_negative_count(
+        review.candidate_record_count,
+        field="candidate_record_count",
+    )
+    projection = {
+        "schema_version": REVIEW_PROJECTION_SCHEMA,
+        "review_kind": "br2_oled_candidate_raw_dataset",
+        "read_only": True,
+        "authoritative": False,
+        "current_task_id": _safe_text(current_task_id, field="current_task_id"),
+        "gate_id": "",
+        "snapshot_id": "candidate_raw_dataset_review",
+        "snapshot_digest": review_digest,
+        "review_snapshot_id": "candidate_raw_dataset_review",
+        "review_snapshot_digest": review_digest,
+        "paper_id": _safe_text(review.paper_id, field="paper_id"),
+        "dataset_scope": _safe_text(package.dataset_scope, field="dataset_scope"),
+        "target_property": "",
+        "scientific_scope": _safe_text(package.dataset_scope, field="scientific_scope"),
+        "comparability_policy": "",
+        "row_count": candidate_count,
+        "included_count": candidate_count,
+        "excluded_count": _non_negative_count(
+            review.device_only_excluded_count + review.rejected_count,
+            field="excluded_count",
+        ),
+        "duplicate_count": 0,
+        "conflict_count": 0,
+        "candidate_record_count": candidate_count,
+        "property_observation_count": _non_negative_count(
+            review.property_observation_count,
+            field="property_observation_count",
+        ),
+        "compiled_count": _non_negative_count(review.compiled_count, field="compiled_count"),
+        "partial_count": _non_negative_count(review.partial_count, field="partial_count"),
+        "needs_review_count": _non_negative_count(
+            review.needs_review_count,
+            field="needs_review_count",
+        ),
+        "rejected_count": _non_negative_count(review.rejected_count, field="rejected_count"),
+        "unresolved_count": _non_negative_count(review.unresolved_count, field="unresolved_count"),
+        "source_check_count": _non_negative_count(
+            review.source_check_count,
+            field="source_check_count",
+        ),
+        "ontology_review_count": _non_negative_count(
+            review.ontology_review_count,
+            field="ontology_review_count",
+        ),
+        "device_only_excluded_count": _non_negative_count(
+            review.device_only_excluded_count,
+            field="device_only_excluded_count",
+        ),
+        "evidence_observation_count": observation_count,
+        "evidence_bound_observation_count": bound_observation_count,
+        "evidence_bound_records_count": bound_record_count,
+        "all_promoted_rows_have_evidence": all_rows_bound,
+        "counts": {
+            "row": candidate_count,
+            "included": candidate_count,
+            "excluded": _non_negative_count(
+                review.device_only_excluded_count + review.rejected_count,
+                field="excluded_count",
+            ),
+            "duplicates": 0,
+            "conflicts": 0,
+        },
+        "reason_code_counts": {},
+        "confirmation_required": True,
+    }
+    return validate_review_projection(projection)
+
+
 __all__ = [
     "REVIEW_PROJECTION_SCHEMA",
     "ScientificAgentReviewProjectionError",
     "project_current_dataset_review",
+    "project_current_oled_candidate_review",
     "project_verified_review_snapshot",
     "validate_review_projection",
 ]

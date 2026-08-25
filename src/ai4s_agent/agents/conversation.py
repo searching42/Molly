@@ -37,6 +37,32 @@ class ConversationAgent:
         "url",
     }
     TRAINING_TERMS = ("train", "training", "model", "predict", "optimize", "screen")
+    BR2_SOURCE_TERMS = (
+        "literature",
+        "paper",
+        "papers",
+        "pdf",
+        "文献",
+        "论文",
+        "文章",
+    )
+    BR2_REVIEW_TERMS = (
+        "extract",
+        "parse",
+        "evidence",
+        "review",
+        "candidate raw",
+        "candidate dataset",
+        "organize",
+        "整理",
+        "提取",
+        "解析",
+        "证据",
+        "候选",
+        "数据",
+        "确认",
+        "建模",
+    )
     EXPLICIT_APPROVAL_TERMS = ("approve", "approved", "allow", "allowed", "permission", "批准", "同意", "允许")
     PLAN_APPROVAL_PHRASES = (
         "确认执行",
@@ -164,6 +190,7 @@ class ConversationAgent:
         goal = self._goal_from_messages(clean_messages)
         full_text = "\n".join(message["content"] for message in clean_messages)
         property_id = self._detect_property(full_text, available_properties=property_choices)
+        br2_contextual_request = self.is_br2_contextual_request(full_text)
         approved = self._external_evidence_approved(clean_messages)
         evidence = self._extract_cited_evidence(clean_messages)
         questions = self._questions(
@@ -176,6 +203,7 @@ class ConversationAgent:
             "run_id": str(run_id or "").strip(),
             "goal": goal,
             "property_id": property_id,
+            "br2_contextual_request": br2_contextual_request,
             "user_approved_external_search": approved,
             "cited_target_evidence": evidence if approved else [],
             "pending_cited_target_evidence": [] if approved else evidence,
@@ -219,7 +247,16 @@ class ConversationAgent:
         ]
         pending_evidence = list(modeling_payload.get("pending_cited_target_evidence") or [])
         property_id = str(modeling_payload.get("property_id") or "").strip()
-        if not property_id:
+        is_br2_contextual_request = bool(modeling_payload.get("br2_contextual_request"))
+        if not property_id and is_br2_contextual_request:
+            status = "ready_for_modeling_plan"
+            summary = (
+                "The dialogue identifies an OLED literature review request; the server can "
+                "propose the bounded evidence-to-candidate workflow."
+            )
+            next_actions = ["review_modeling_plan_payload", "generate_modeling_plan"]
+            blocked_reasons = []
+        elif not property_id:
             status = "needs_clarification"
             summary = "The dialogue does not yet identify a trainable target property."
             next_actions = ["answer_agent_questions", "resubmit_conversation_turn"]
@@ -249,6 +286,22 @@ class ConversationAgent:
             requires_user_response=status != "ready_for_modeling_plan",
             executable=False,
         )
+
+    @classmethod
+    def is_br2_contextual_request(cls, content: str) -> bool:
+        """Recognize a bounded OLED literature-review intent without inventing a property.
+
+        This is routing metadata only.  It does not select a task, authorize an
+        execution, or promote any scientific observation.
+        """
+
+        normalized = str(content or "").strip().lower()
+        if not normalized:
+            return False
+        oled = any(term in normalized for term in ("oled", "有机发光", "tadf"))
+        source = any(term in normalized for term in cls.BR2_SOURCE_TERMS)
+        review = any(term in normalized for term in cls.BR2_REVIEW_TERMS)
+        return oled and source and review
 
     @classmethod
     def recognize_plan_approval(cls, content: str) -> bool:

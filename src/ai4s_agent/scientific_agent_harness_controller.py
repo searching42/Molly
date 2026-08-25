@@ -1774,7 +1774,8 @@ class ScientificAgentHarnessController:
         return self._inspect_local_action(execution, slot, stage, registry, facts)
 
     def _inspect_local_action(self, execution: Any, slot: Any, stage: Any, registry: Any, facts: list[Any]):
-        task = self._authorization(execution, verify_current=False).run_plan.tasks[slot.planned_task_index]
+        authorization = self._authorization(execution, verify_current=False)
+        task = authorization.run_plan.tasks[slot.planned_task_index]
         spec = self.executor.registry.get(task.task_id)
         if stage is not None and stage.stage == task.task_id:
             if stage.status == RunStatus.RUNNING:
@@ -1830,7 +1831,9 @@ class ScientificAgentHarnessController:
                     AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
                     facts,
                 )
-        if spec.gates:
+        if spec.gates and not self._preauthorized_operational_gates_cover(
+            authorization, spec
+        ):
             if stage is None or stage.stage != task.task_id or stage.status != RunStatus.WAITING_USER:
                 return self._inspection(execution, AgentHarnessControllerStatus.ACTIVE, slot, AgentHarnessControllerAction.PREPARE_LOCAL_GATE, facts)
             snapshot = stage.details.get("execution_snapshot")
@@ -1849,7 +1852,9 @@ class ScientificAgentHarnessController:
             authorization = self._authorization(execution, verify_current=False)
             task = authorization.run_plan.tasks[slot.planned_task_index]
             spec = self.executor.registry.get(task.task_id)
-            if spec.gates:
+            if spec.gates and not self._preauthorized_operational_gates_cover(
+                authorization, spec
+            ):
                 stage = self.storage.read_stage_state(
                     execution.project_id, execution.run_id
                 )
@@ -3627,6 +3632,25 @@ class ScientificAgentHarnessController:
             project_id=execution.project_id, authorization_id=execution.authorization_id,
             verify_current=verify_current,
         )
+
+    @staticmethod
+    def _preauthorized_operational_gates_cover(authorization: Any, spec: Any) -> bool:
+        """Return whether an exact task Gate roster is already preauthorized.
+
+        Plan preauthorization is an existing authorization contract.  The
+        Controller must consume that contract before exposing a user Gate;
+        otherwise a valid frozen-plan authorization can never reach the
+        remote request or local task action.  Partial rosters remain on the
+        ordinary Gate path and are therefore fail-closed.
+        """
+
+        required = {str(gate) for gate in spec.gates}
+        if not required:
+            return False
+        preauthorized = {
+            str(gate) for gate in authorization.preauthorized_operational_gates
+        }
+        return required.issubset(preauthorized)
 
     @staticmethod
     def _inspection(execution: Any, status: Any, slot: Any, action: Any, facts: list[Any]):

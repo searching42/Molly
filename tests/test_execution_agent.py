@@ -9,12 +9,18 @@ from typing import Any
 
 import pytest
 
+import ai4s_agent.execution_agent as execution_agent_module
 from ai4s_agent.execution_agent import (
+    EXECUTION_AGENT_PROMPT_VERSION,
+    EXECUTION_AGENT_PROMPT_VERSION_V1,
+    EXECUTION_AGENT_PROMPT_VERSION_V2,
+    EXECUTION_AGENT_PROMPT_VERSION_V3,
     ExecutionAgentConflict,
     ExecutionAgentLLMOutcomeUnknown,
     ExecutionAgentLLMResponseInvalid,
     ExecutionAgentStale,
     build_execution_tool_catalog,
+    execution_agent_prompt_digest,
 )
 from ai4s_agent.execution_agent_store import (
     ExecutionAgentStoreConflict,
@@ -200,6 +206,17 @@ def test_provider_prompt_contains_only_safe_observation_and_catalog(tmp_path) ->
         provider_binding_digest=_agent_digest({"provider": "stub"}),
     )
     assert len(provider.messages) == 2
+    system_message = provider.messages[0]["content"]
+    assert EXECUTION_AGENT_PROMPT_VERSION == EXECUTION_AGENT_PROMPT_VERSION_V3
+    assert "Return one root JSON object with exactly one field: selected_tool_id." in system_message
+    assert "Copy the exact catalog tool_id into the response field selected_tool_id." in system_message
+    assert "Do not include decision_summary." in system_message
+    assert "Do not include any other field." in system_message
+    assert "Do not rename, wrap, or nest the response." in system_message
+    assert "Do not provide arguments, explanation, or chain-of-thought." in system_message
+    assert "Provide only a concise decision summary" not in system_message
+    assert "The response field name is selected_tool_id, not tool_id." not in system_message
+    assert "Choose exactly one tool_id from" not in system_message
     user_message = provider.messages[1]["content"]
     assert set(json.loads(user_message)) == {
         "observation",
@@ -215,6 +232,51 @@ def test_provider_prompt_contains_only_safe_observation_and_catalog(tmp_path) ->
         "api_key",
     ):
         assert forbidden not in user_message
+
+
+def test_v3_single_field_response_materializes_empty_decision_summary(tmp_path) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="v3-single-field-response",
+        ),
+        provider=CountingStubProvider(
+            response={"selected_tool_id": "agent.pause_current.v1"}
+        ),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    assert result.publication.proposal.prompt_version == EXECUTION_AGENT_PROMPT_VERSION_V3
+    assert result.publication.proposal.parsed_llm_response.selected_tool_id == (
+        "agent.pause_current.v1"
+    )
+    assert result.publication.proposal.parsed_llm_response.decision_summary == ""
+
+
+def test_v3_prompt_digest_is_distinct_from_v2(tmp_path) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="v3-prompt-digest",
+        ),
+        provider=_provider("agent.pause_current.v1"),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    proposal = result.publication.proposal
+    v2_digest = execution_agent_prompt_digest(
+        observation_digest=proposal.observation_digest,
+        tool_catalog_digest=proposal.tool_catalog_digest,
+        prompt_version=EXECUTION_AGENT_PROMPT_VERSION_V2,
+    )
+    assert proposal.prompt_version == EXECUTION_AGENT_PROMPT_VERSION_V3
+    assert proposal.prompt_digest != v2_digest
 
 
 def test_same_request_different_safe_provider_binding_conflicts(tmp_path) -> None:
@@ -420,6 +482,13 @@ def test_provider_metadata_rejection_is_checkpointed_and_never_recalled(
         CountingStubProvider(
             response={
                 "selected_tool_id": "agent.pause_current.v1",
+                "decision_summary": "Pause this bounded turn.",
+                "tool_id": "agent.pause_current.v1",
+            }
+        ),
+        CountingStubProvider(
+            response={
+                "selected_tool_id": "agent.pause_current.v1",
                 "decision_summary": "Read /private/tmp/secret before pausing.",
             }
         ),
@@ -484,6 +553,52 @@ def test_invalid_llm_output_never_publishes_proposal(tmp_path, provider) -> None
     assert not proposal_root.exists() or list(proposal_root.iterdir()) == []
 
 
+def test_observed_tool_id_transport_alias_normalizes_to_canonical_response(tmp_path) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="observed-tool-id-transport-alias",
+        ),
+        provider=CountingStubProvider(
+            response={
+                "tool_id": "agent.pause_current.v1",
+                "decision_summary": "Pause this bounded turn.",
+            }
+        ),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert result.publication.proposal.selected_tool_id == "agent.pause_current.v1"
+    assert result.publication.proposal.parsed_llm_response.selected_tool_id == (
+        "agent.pause_current.v1"
+    )
+
+
+def test_v3_unexpected_unsafe_summary_still_fails_privacy_validation(tmp_path) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    with pytest.raises(ExecutionAgentLLMResponseInvalid):
+        service.create_proposal(
+            project_id="project-1",
+            controller_execution_id=initial.execution.controller_execution_id,
+            request=_proposal_request(
+                initial.execution.execution_digest,
+                request_id="v3-unsafe-summary",
+            ),
+            provider=CountingStubProvider(
+                response={
+                    "selected_tool_id": "agent.pause_current.v1",
+                    "decision_summary": "Read /private/tmp/secret before pausing.",
+                }
+            ),
+            provider_binding_digest=_agent_digest({"provider": "stub"}),
+        )
+
+
 def test_response_checkpoint_recovers_without_second_llm_call(tmp_path) -> None:
     storage, _, controller, initial = local_controller_execution(tmp_path)
     phases: list[str] = []
@@ -518,6 +633,17 @@ def test_response_checkpoint_recovers_without_second_llm_call(tmp_path) -> None:
     )
     assert result.publication.proposal.selected_tool_id == "agent.pause_current.v1"
     assert provider.calls == 1
+    request_root = (
+        storage.project_dir("project-1")
+        / "agent_execution_agent_requests"
+        / initial.execution.controller_execution_id
+        / "requests"
+        / request.client_request_id
+    )
+    checkpoint = json.loads(
+        (request_root / "llm_response_committed.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["prompt_version"] == EXECUTION_AGENT_PROMPT_VERSION_V3
 
 
 @pytest.mark.parametrize(
@@ -1149,6 +1275,7 @@ def test_historical_execution_agent_publication_replays_byte_exact(
         tool_call_proposal_id=manifest["tool_call_proposal_id"],
     )
     assert publication.proposal.selected_tool_id == "agent.pause_current.v1"
+    assert publication.proposal.prompt_version == EXECUTION_AGENT_PROMPT_VERSION_V1
     serialized_tools = publication.tool_catalog.model_dump(mode="json")["tools"]
     assert all("option_schema" not in tool for tool in serialized_tools)
     # Regenerated bytes equal the persisted bytes, which is exactly what the
@@ -1157,6 +1284,106 @@ def test_historical_execution_agent_publication_replays_byte_exact(
         publication.tool_catalog.model_dump(mode="json")
     )
     assert expected == (fixture_root / "tool_catalog.json").read_bytes()
+
+
+def test_v1_prompt_publication_replays_after_current_prompt_moves_to_v3(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    monkeypatch.setattr(
+        execution_agent_module,
+        "EXECUTION_AGENT_PROMPT_VERSION",
+        EXECUTION_AGENT_PROMPT_VERSION_V1,
+    )
+    created = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="historical-v1-prompt-publication",
+        ),
+        provider=_provider("agent.pause_current.v1"),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    historical = created.publication
+    expected_v1_digest = execution_agent_prompt_digest(
+        observation_digest=historical.observation.observation_digest,
+        tool_catalog_digest=historical.tool_catalog.tool_catalog_digest,
+        prompt_version=EXECUTION_AGENT_PROMPT_VERSION_V1,
+    )
+    assert historical.proposal.prompt_version == EXECUTION_AGENT_PROMPT_VERSION_V1
+    assert historical.proposal.prompt_digest == expected_v1_digest
+
+    monkeypatch.setattr(
+        execution_agent_module,
+        "EXECUTION_AGENT_PROMPT_VERSION",
+        EXECUTION_AGENT_PROMPT_VERSION_V3,
+    )
+    replayed = service.read_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        tool_call_proposal_id=historical.proposal.tool_call_proposal_id,
+    )
+    assert replayed.current is True
+    assert replayed.publication.proposal.prompt_version == (
+        EXECUTION_AGENT_PROMPT_VERSION_V1
+    )
+    assert replayed.publication.proposal.prompt_digest == expected_v1_digest
+
+
+def test_v2_prompt_publication_with_safe_summary_replays_after_current_moves_to_v3(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    monkeypatch.setattr(
+        execution_agent_module,
+        "EXECUTION_AGENT_PROMPT_VERSION",
+        EXECUTION_AGENT_PROMPT_VERSION_V2,
+    )
+    created = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="historical-v2-prompt-publication",
+        ),
+        provider=_provider("agent.pause_current.v1"),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    historical = created.publication
+    expected_v2_digest = execution_agent_prompt_digest(
+        observation_digest=historical.observation.observation_digest,
+        tool_catalog_digest=historical.tool_catalog.tool_catalog_digest,
+        prompt_version=EXECUTION_AGENT_PROMPT_VERSION_V2,
+    )
+    assert historical.proposal.prompt_version == EXECUTION_AGENT_PROMPT_VERSION_V2
+    assert historical.proposal.prompt_digest == expected_v2_digest
+    assert historical.proposal.parsed_llm_response.decision_summary == (
+        "Select one bounded server operation."
+    )
+
+    monkeypatch.setattr(
+        execution_agent_module,
+        "EXECUTION_AGENT_PROMPT_VERSION",
+        EXECUTION_AGENT_PROMPT_VERSION_V3,
+    )
+    replayed = service.read_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        tool_call_proposal_id=historical.proposal.tool_call_proposal_id,
+    )
+    assert replayed.current is True
+    assert replayed.publication.proposal.prompt_version == (
+        EXECUTION_AGENT_PROMPT_VERSION_V2
+    )
+    assert replayed.publication.proposal.prompt_digest == expected_v2_digest
+    assert replayed.publication.proposal.parsed_llm_response.decision_summary == (
+        "Select one bounded server operation."
+    )
 
 
 def test_sequential_turn_reaches_stable_terminal_observation(tmp_path) -> None:

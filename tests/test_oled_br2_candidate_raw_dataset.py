@@ -39,8 +39,8 @@ def _source_and_packet(index: int) -> tuple[OledMineruCandidate, OledSemanticMap
         page_index=3,
         block_index=index,
         block_id=f"table-{index}",
-        raw_text="Emitter | PLQY (%)\nMolecule-A | 82",
-        caption="Photophysical properties",
+        raw_text=f"Emitter | PLQY (%)\nMolecule-A | 82\nTable {index}",
+        caption=f"Photophysical properties {index}",
         table_headers=["Emitter", "PLQY (%)"],
         table_rows=[{"Emitter": "Molecule-A", "PLQY (%)": "82"}],
         table_parse_status=OledMineruTableParseStatus.PARSED,
@@ -53,7 +53,7 @@ def _source_and_packet(index: int) -> tuple[OledMineruCandidate, OledSemanticMap
         source_evidence_anchor=anchor,
         source_candidate_type=OledMineruCandidateType.TABLE,
         paper_id="paper",
-        caption="Photophysical properties",
+        caption=f"Photophysical properties {index}",
         raw_text=source.raw_text,
         table_headers=source.table_headers,
         table_rows=source.table_rows,
@@ -135,6 +135,18 @@ def _request(
                     "text": "Molecule-A is the emitter.",
                     "source_hash": "context-hash",
                 }
+            ],
+            "tables": [
+                {
+                    "table_id": packet.source_evidence_anchor.replace(":", "-"),
+                    "page": 3,
+                    "caption": packet.caption,
+                    "headers": list(packet.table_headers),
+                    "rows": [dict(row) for row in packet.table_rows],
+                    "footnotes": [],
+                }
+                for packet in packets
+                if packet.source_candidate_type == OledMineruCandidateType.TABLE
             ],
         },
     )

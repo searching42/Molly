@@ -1,4 +1,5 @@
 from ai4s_agent.agents.planner import PlannerAgent
+from ai4s_agent.planner import DEFAULT_ATOMIC_TASKS, br2_contextual_mapping_task_registry_v1
 from ai4s_agent.schemas import AgentPlanProposal, PlanQuestion, PlanRationale, ProjectMemoryRecord
 
 
@@ -57,6 +58,45 @@ def test_planner_agent_proposes_literature_to_dataset_dry_run_plan() -> None:
     assert proposal.rationales[0].required_gates == ["gate_2_data_mining"]
     assert any("No adapters are executed" in item for item in proposal.assumptions)
     assert "gate_2_data_mining" in proposal.required_gates
+
+
+def test_planner_agent_proposes_review_only_oled_candidate_chain() -> None:
+    proposal = PlannerAgent(registry=br2_contextual_mapping_task_registry_v1()).propose_plan(
+        run_id="r-br2-review",
+        goal="Parse this OLED paper, extract the evidence, and organize a candidate raw dataset for me to review.",
+        available_artifacts=["pdf_corpus"],
+    )
+
+    assert proposal.status == "needs_confirmation"
+    assert proposal.run_plan.requested_tasks == ["prepare_oled_candidate_raw_dataset"]
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "parse_document",
+        "extract_oled_evidence",
+        "map_oled_contextual_semantics",
+        "prepare_oled_candidate_raw_dataset",
+    ]
+    assert proposal.required_gates == ["gate_2_data_mining"]
+
+
+def test_planner_agent_routes_plain_oled_organize_request_to_review_chain() -> None:
+    proposal = PlannerAgent(registry=br2_contextual_mapping_task_registry_v1()).propose_plan(
+        run_id="r-br2-plain-review",
+        goal="帮我从这篇 OLED 文献中整理可用于后续建模的数据。",
+        available_artifacts=["pdf_corpus"],
+    )
+
+    assert proposal.run_plan.requested_tasks == ["prepare_oled_candidate_raw_dataset"]
+    assert "train_model" not in [task.task_id for task in proposal.run_plan.tasks]
+
+
+def test_br2_registry_only_preapproves_existing_parse_gate() -> None:
+    default_parse = next(task for task in DEFAULT_ATOMIC_TASKS if task.task_id == "parse_document")
+    br2_parse = br2_contextual_mapping_task_registry_v1().get("parse_document")
+
+    assert default_parse.supports_plan_preapproval is False
+    assert br2_parse.supports_plan_preapproval is True
+    assert br2_parse.gates == default_parse.gates
+    assert br2_parse.default_adapter == default_parse.default_adapter
 
 
 def test_planner_agent_asks_question_for_underspecified_goal() -> None:

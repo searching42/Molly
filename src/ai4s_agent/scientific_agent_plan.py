@@ -26,6 +26,7 @@ from jsonschema import Draft202012Validator
 from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.observability_correlation import (
@@ -57,7 +58,9 @@ from ai4s_agent.schemas import (
 )
 
 
-SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION = "scientific-agent-long-horizon-plan.v1"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1 = "scientific-agent-long-horizon-plan.v1"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2 = "scientific-agent-long-horizon-plan.v2"
+SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION = SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2
 PLANNER_OPTION_COMPILER_VERSION = "scientific-planner-option-compiler.v1"
 SOURCE_BINDING_SCHEMA_VERSION = "agent_plan_source_binding.v1"
 PROPOSAL_VERIFICATION_SCHEMA_VERSION = "agent_plan_proposal_verification.v1"
@@ -78,6 +81,7 @@ _PROPOSAL_DATA_FILES = (
     "verification.json",
 )
 _PROPOSAL_FILES = (*_PROPOSAL_DATA_FILES, "publication_manifest.json")
+_OBSERVED_PLANNER_WRAPPER_KEY = "response"
 
 
 class ScientificAgentPlanError(ValueError):
@@ -98,6 +102,83 @@ class ScientificAgentPlanRecoveryRequired(ScientificAgentPlanError):
     def __init__(self, state: str) -> None:
         self.state = state
         super().__init__(f"planning request requires typed recovery from state: {state}")
+
+
+def normalize_agent_execution_plan_response(
+    payload: Mapping[str, Any],
+) -> AgentExecutionPlanLLMResponse:
+    """Validate the canonical planner response or one known envelope.
+
+    The canonical response remains the only planning schema.  The envelope
+    branch exists solely for the observed provider serialization shape and is
+    deliberately one level deep; legacy planning objects are not translated.
+    """
+
+    try:
+        return AgentExecutionPlanLLMResponse.model_validate(payload)
+    except ValueError as direct_error:
+        if (
+            not isinstance(payload, Mapping)
+            or set(payload) != {_OBSERVED_PLANNER_WRAPPER_KEY}
+        ):
+            raise direct_error
+        wrapped = payload[_OBSERVED_PLANNER_WRAPPER_KEY]
+        if not isinstance(wrapped, Mapping):
+            raise direct_error
+        return AgentExecutionPlanLLMResponse.model_validate(wrapped)
+
+
+_SCIENTIFIC_AGENT_PLAN_SYSTEM_PROMPT_V1 = (
+    "You are a scientific planning model. Return JSON only matching "
+    "agent_execution_plan_llm_response.v1. You may propose registered "
+    "logical tools, high-level typed options, logical profiles, limits, "
+    "stop conditions, success criteria, concise rationales, assumptions, "
+    "and questions. Never return approval, execution, dispatch, status, "
+    "adapter, command, path, SSH, worker, or credential fields. The "
+    "proposal is review-only and will not start work. Return the "
+    "AgentExecutionPlanLLMResponse object directly at the JSON root. "
+    "The root object must directly contain the canonical fields "
+    "requested_tool_ids, selected_input_artifact_ids, task_options, "
+    "selected_logical_profile_ids, limits, stop_conditions, "
+    "success_criteria, rationales, assumptions, and questions. Do "
+    "not wrap it in plan, response, result, data, output, or any "
+    "other object. Do not use legacy planning fields such as "
+    "selected_tool_id, proposed_tasks, logical_tools, or "
+    "logical_execution_profiles."
+)
+
+
+def _scientific_agent_plan_system_prompt(
+    prompt_version: str,
+    *,
+    is_br2_request: bool,
+) -> str:
+    if prompt_version not in {
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1,
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2,
+    }:
+        raise ValueError(f"unsupported Scientific Agent plan prompt version: {prompt_version}")
+    prompt = _SCIENTIFIC_AGENT_PLAN_SYSTEM_PROMPT_V1
+    if is_br2_request:
+        prompt += (
+            " This is a bounded OLED literature review request. Select exactly the registered "
+            "planner tool `prepare_oled_candidate_raw_dataset` when it is present in the catalog, "
+            "select the server-registered `pdf_corpus` input when it is available, and select "
+            "the available logical execution profile `mineru-v1` for the parser when it is present. The server "
+            "will expand that tool into parse_document -> extract_oled_evidence -> "
+            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. Do not select "
+            "training, generation, prediction, ranking, confirmation, or any other downstream task."
+        )
+        if prompt_version == SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2:
+            prompt += (
+                " For this bounded BR2 literature-review request, do not invent resource or budget "
+                "limits. Set `limits` to `{}` unless the user's explicit constraints contain a "
+                "concrete resource or budget limit. Execution resources are selected by the "
+                "server-owned Resource Authority, not by the Planner. Do not infer GPU count, "
+                "CPU count, walltime, GPU-hours, cost, steps, or record limits from profiles or "
+                "tools, and do not put Resource Authority values into the response."
+            )
+    return prompt
 
 
 def _existing_project_dir(storage: Any, project_id: str) -> Path:
@@ -1666,7 +1747,7 @@ class AgentExecutionPlanCompiler:
             goal=observation.goal_context,
             user_constraints=observation.explicit_constraints,
             planner_backend=invocation.provider,
-            prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
+            prompt_version=invocation.prompt_version,
             observation_id=observation.observation_id,
             observation_digest=observation.observation_digest,
             tool_catalog_digest=observation.tool_catalog.catalog_digest,
@@ -1701,8 +1782,15 @@ class AgentExecutionPlanCompiler:
 def build_scientific_agent_plan_messages(
     *,
     observation: AgentProjectObservation,
+    prompt_version: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the sole LLM input from validated, privacy-safe material."""
+
+    resolved_prompt_version = (
+        SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION
+        if prompt_version is None
+        else prompt_version
+    )
 
     material = {
         "observation": observation.model_dump(mode="json"),
@@ -1713,14 +1801,11 @@ def build_scientific_agent_plan_messages(
     return [
         {
             "role": "system",
-            "content": (
-                "You are a scientific planning model. Return JSON only matching "
-                "agent_execution_plan_llm_response.v1. You may propose registered "
-                "logical tools, high-level typed options, logical profiles, limits, "
-                "stop conditions, success criteria, concise rationales, assumptions, "
-                "and questions. Never return approval, execution, dispatch, status, "
-                "adapter, command, path, SSH, worker, or credential fields. The "
-                "proposal is review-only and will not start work."
+            "content": _scientific_agent_plan_system_prompt(
+                resolved_prompt_version,
+                is_br2_request=ConversationAgent.is_br2_contextual_request(
+                    observation.goal_context
+                ),
             ),
         },
         {
@@ -1848,7 +1933,9 @@ class ScientificAgentPlanService:
             latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
             self.proposal_store._fault("after_llm_response")
             try:
-                parsed = AgentExecutionPlanLLMResponse.model_validate(invocation_record.parsed_output)
+                parsed = normalize_agent_execution_plan_response(
+                    invocation_record.parsed_output
+                )
                 invocation = AgentLLMInvocationMetadata(
                     provider=invocation_record.provider,
                     model=invocation_record.model,
@@ -1909,10 +1996,10 @@ class ScientificAgentPlanService:
                 ) as llm_span:
                     invocation = provider.complete_json(
                         messages=build_scientific_agent_plan_messages(
-                            observation=observation
+                            observation=observation,
+                            prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
                         ),
                         prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
-                        response_model=AgentExecutionPlanLLMResponse,
                     )
                     llm_span.set_attribute(
                         "response_digest",
@@ -2864,6 +2951,8 @@ AgentPlanProposalStore = ScientificAgentPlanProposalStore
 
 
 __all__ = [
+    "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V1",
+    "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2",
     "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION",
     "PLANNER_OPTION_COMPILER_VERSION",
     "ScientificAgentPlanError",
@@ -2876,6 +2965,7 @@ __all__ = [
     "AgentExecutionPlanCompiler",
     "PlannerOptionCompiler",
     "build_scientific_agent_plan_messages",
+    "normalize_agent_execution_plan_response",
     "ScientificAgentPlanService",
     "ScientificAgentPlanPublication",
     "ScientificAgentPlanProposalStore",

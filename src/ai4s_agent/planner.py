@@ -1328,11 +1328,22 @@ def private_structured_dataset_task_registry_v2() -> AtomicTaskRegistry:
 def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
     """Add the BR2 mapping projection to the existing task catalog.
 
-    The document parser remains the default ``parse_document`` task and is
-    deliberately not overridden here.  These three local tasks only consume
-    its verified output, build the existing deterministic OLED evidence, call
-    the configured contextual mapper, and publish a review-only package.
+    The document parser remains the existing ``parse_document`` task.  This
+    registry only opts that operational parsing Gate into the existing frozen
+    plan preauthorization contract; the final scientific confirmation remains
+    a conversation boundary after the review-only package is verified.  The
+    three local tasks consume the parser output, build the existing
+    deterministic OLED evidence, call the configured contextual mapper, and
+    publish a review-only package.
     """
+
+    parse_document = next(
+        task for task in DEFAULT_ATOMIC_TASKS if task.task_id == "parse_document"
+    ).model_copy(update={"supports_plan_preapproval": True})
+    retained_tasks = [
+        parse_document if task.task_id == "parse_document" else task
+        for task in DEFAULT_ATOMIC_TASKS
+    ]
 
     trust = {
         "parsed_document": ["registered_intermediate", "verified_output"],
@@ -1376,14 +1387,18 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         required_artifacts=["parsed_document", "oled_mapping_evidence"],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
-        output_artifacts=["contextual_mapping_result"],
+        output_artifacts=[
+            "contextual_mapping_result",
+            "frozen_domain_mapping_request",
+            "provider_invocation_manifest",
+        ],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="map_oled_contextual_semantics_adapter",
         scientific_tool_id="map_oled_contextual_semantics",
         label="Map OLED contextual semantics",
         description=(
-            "Call the configured structured-output LLM mapper on full document "
-            "context and keep proposals review-only."
+            "Freeze the complete domain request before calling the configured "
+            "structured-output LLM mapper, then keep proposals review-only."
         ),
         effect_class="external_io",
         required_permissions=["external_document_processing", "derive_project_artifact"],
@@ -1411,8 +1426,8 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
     candidate_dataset = AtomicTaskSpec(
         task_id="prepare_oled_candidate_raw_dataset",
         required_artifacts=[
-            "parsed_document",
-            "oled_mapping_evidence",
+            "frozen_domain_mapping_request",
+            "provider_invocation_manifest",
             "contextual_mapping_result",
         ],
         optional_input_artifacts=[],
@@ -1423,8 +1438,9 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         scientific_tool_id="prepare_oled_candidate_raw_dataset",
         label="Prepare OLED candidate raw dataset",
         description=(
-            "Compile evidence-bound layered OLED candidates into a review-only "
-            "package without confirmation or downstream execution."
+            "Replay the verified frozen domain request and validated mapping "
+            "result into a review-only package without confirmation or downstream "
+            "execution."
         ),
         effect_class="derive_local",
         required_permissions=["derive_project_artifact"],
@@ -1440,8 +1456,14 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         backend_execution_routes={},
         backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
-            "parsed_document": ["registered_intermediate", "verified_output"],
-            "oled_mapping_evidence": ["registered_intermediate", "verified_output"],
+            "frozen_domain_mapping_request": [
+                "registered_intermediate",
+                "verified_output",
+            ],
+            "provider_invocation_manifest": [
+                "registered_intermediate",
+                "verified_output",
+            ],
             "contextual_mapping_result": ["registered_intermediate", "verified_output"],
         },
         budget_dimensions=["max_records"],
@@ -1451,7 +1473,7 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         planner_visible=True,
     )
     return AtomicTaskRegistry(
-        [*DEFAULT_ATOMIC_TASKS, extract_evidence, contextual_mapping, candidate_dataset]
+        [*retained_tasks, extract_evidence, contextual_mapping, candidate_dataset]
     )
 
 
