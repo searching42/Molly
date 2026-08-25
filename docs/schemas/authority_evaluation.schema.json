@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "AuthorityRelation": {
+      "description": "Relationship between a proposed authority scope and an existing grant.",
+      "enum": [
+        "SUBSET",
+        "EQUIVALENT",
+        "EXPANSION",
+        "INCOMPARABLE"
+      ],
+      "title": "AuthorityRelation",
+      "type": "string"
+    },
+    "SemanticBoundary": {
+      "description": "Human scientific boundaries independent of resource authority.",
+      "enum": [
+        "NONE",
+        "SCIENTIFIC_CONFIRMATION",
+        "GOAL_CHANGE",
+        "DATASET_CHANGE",
+        "EXTERNAL_SHARING_CHANGE",
+        "PUBLICATION",
+        "PROMOTION",
+        "IRREVERSIBLE_EFFECT"
+      ],
+      "title": "SemanticBoundary",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Non-executable relation plus semantic-boundary decision.",
+  "properties": {
+    "schema_version": {
+      "const": "authority_evaluation.v1",
+      "default": "authority_evaluation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evaluation_id": {
+      "default": "",
+      "title": "Evaluation Id",
+      "type": "string"
+    },
+    "evaluation_digest": {
+      "default": "",
+      "title": "Evaluation Digest",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "candidate_scope_digest": {
+      "title": "Candidate Scope Digest",
+      "type": "string"
+    },
+    "relation": {
+      "$ref": "#/$defs/AuthorityRelation"
+    },
+    "semantic_boundary": {
+      "$ref": "#/$defs/SemanticBoundary"
+    },
+    "auto_apply": {
+      "title": "Auto Apply",
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "grant_id",
+    "grant_digest",
+    "candidate_scope_digest",
+    "relation",
+    "semantic_boundary",
+    "auto_apply"
+  ],
+  "title": "AuthorityEvaluation",
+  "type": "object"
+}

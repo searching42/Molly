@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "AutonomyParameterBound": {
+      "additionalProperties": false,
+      "description": "One closed numeric or enumerated parameter interval in an autonomy grant.",
+      "properties": {
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "allowed_values": {
+          "items": {},
+          "title": "Allowed Values",
+          "type": "array"
+        }
+      },
+      "title": "AutonomyParameterBound",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable user authority envelope for bounded autonomous work.\n\nThe grant is an authority description only.  It is not an execution\nrequest, a tool call, or permission to bypass the existing Controller.\n``AutonomyGrant`` instances can be compared as scopes by the phase-2\nauthority policy without consulting an LLM.",
+  "properties": {
+    "schema_version": {
+      "const": "autonomy_grant.v1",
+      "default": "autonomy_grant.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "grant_id": {
+      "default": "",
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "grant_digest": {
+      "default": "",
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "allowed_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Tasks",
+      "type": "array"
+    },
+    "allowed_effect_classes": {
+      "items": {
+        "enum": [
+          "observe",
+          "derive_local",
+          "mutate_artifacts",
+          "external_io",
+          "compute",
+          "scientific_confirm",
+          "change_objective",
+          "publish_or_promote"
+        ],
+        "type": "string"
+      },
+      "title": "Allowed Effect Classes",
+      "type": "array"
+    },
+    "parameter_bounds": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AutonomyParameterBound"
+      },
+      "title": "Parameter Bounds",
+      "type": "object"
+    },
+    "resource_profiles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Resource Profiles",
+      "type": "array"
+    },
+    "external_io_scopes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "External Io Scopes",
+      "type": "array"
+    },
+    "aggregate_budget": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Aggregate Budget",
+      "type": "object"
+    },
+    "per_task_budget": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "type": "object"
+      },
+      "title": "Per Task Budget",
+      "type": "object"
+    },
+    "max_retries": {
+      "default": 0,
+      "title": "Max Retries",
+      "type": "integer"
+    },
+    "max_replans": {
+      "default": 0,
+      "title": "Max Replans",
+      "type": "integer"
+    },
+    "valid_from": {
+      "default": "",
+      "title": "Valid From",
+      "type": "string"
+    },
+    "valid_until": {
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "created_at": {
+      "default": "",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "valid_until"
+  ],
+  "title": "AutonomyGrant",
+  "type": "object"
+}

@@ -1,0 +1,380 @@
+"""Phase-2 authority comparison for bounded autonomous execution.
+
+This module is intentionally a policy primitive, not a scheduler or an
+execution path.  It compares one proposed :class:`AutonomyGrant` with an
+existing grant and keeps resource authority separate from scientific semantic
+boundaries.  Callers must still pass the result through the existing
+Permission, Controller, Executor, and verifier chain before any effect.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from datetime import datetime
+from typing import Any
+
+from ai4s_agent.schemas import (
+    AuthorityEvaluation,
+    AuthorityRelation,
+    AutonomyGrant,
+    AutonomyParameterBound,
+    SemanticBoundary,
+    _agent_digest,
+)
+
+
+AUTONOMY_AUTHORITY_POLICY_VERSION = "scientific-agent-autonomy-authority-policy.v1"
+AUTONOMY_AUTHORITY_POLICY_MATERIAL: dict[str, Any] = {
+    "schema_version": "scientific-agent-autonomy-authority-policy-material.v1",
+    "policy_version": AUTONOMY_AUTHORITY_POLICY_VERSION,
+    "relation_order": [item.value for item in AuthorityRelation],
+    "automatic_relations": [AuthorityRelation.SUBSET.value],
+    "automatic_boundary": SemanticBoundary.NONE.value,
+    "parameter_rule": "candidate bounds must be contained by grant bounds",
+    "budget_rule": "candidate budgets and retry/replan caps must not exceed grant",
+    "scope_rule": "task, effect, resource, and external-io scopes use exact set containment",
+    "unknown_semantics": "fail_closed",
+}
+AUTONOMY_AUTHORITY_POLICY_DIGEST = _agent_digest(AUTONOMY_AUTHORITY_POLICY_MATERIAL)
+
+
+class AuthorityPolicyError(ValueError):
+    """A malformed or ambiguous authority comparison input."""
+
+
+def _set_subset(left: Iterable[str], right: Iterable[str]) -> bool:
+    return set(left).issubset(set(right))
+
+
+def _budget_subset(
+    candidate: Mapping[str, float],
+    grant: Mapping[str, float],
+) -> bool:
+    """Compare caps, treating omitted candidate dimensions as zero usage."""
+
+    return all(float(candidate.get(key, 0.0)) <= float(grant.get(key, 0.0)) for key in candidate)
+
+
+def _as_parameter_bound(value: Any) -> AutonomyParameterBound:
+    if isinstance(value, AutonomyParameterBound):
+        return value
+    try:
+        return AutonomyParameterBound.model_validate(value)
+    except (TypeError, ValueError) as exc:
+        raise AuthorityPolicyError("parameter bounds must be typed AutonomyParameterBound values") from exc
+
+
+def _verified_scope_digest(grant: AutonomyGrant) -> str:
+    expected = _agent_digest(grant.scope_material())
+    if grant.grant_digest != expected:
+        raise AuthorityPolicyError("autonomy grant digest is stale or forged")
+    return expected
+
+
+def _per_task_budget_subset(candidate: AutonomyGrant, grant: AutonomyGrant) -> bool:
+    for task_id, candidate_budget in candidate.per_task_budget.items():
+        grant_budget = grant.per_task_budget.get(task_id, grant.aggregate_budget)
+        if not _budget_subset(candidate_budget, grant_budget):
+            return False
+    return True
+
+
+def _timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _validity_subset(candidate: AutonomyGrant, grant: AutonomyGrant) -> bool:
+    candidate_from = _timestamp(candidate.valid_from)
+    grant_from = _timestamp(grant.valid_from)
+    if grant_from is not None and (candidate_from is None or candidate_from < grant_from):
+        return False
+    return _timestamp(candidate.valid_until) <= _timestamp(grant.valid_until)
+
+
+def _parameter_is_for_removed_task(
+    parameter: str,
+    *,
+    candidate: AutonomyGrant,
+    grant: AutonomyGrant,
+) -> bool:
+    task_prefix = parameter.split(".", 1)[0]
+    return (
+        task_prefix in grant.allowed_tasks
+        and task_prefix not in candidate.allowed_tasks
+    )
+
+
+def authority_scope_is_subset(candidate: AutonomyGrant, grant: AutonomyGrant) -> bool:
+    """Return whether ``candidate`` can execute entirely inside ``grant``."""
+
+    if candidate.project_id != grant.project_id:
+        return False
+    if not _set_subset(candidate.allowed_tasks, grant.allowed_tasks):
+        return False
+    if not _set_subset(
+        (str(item) for item in candidate.allowed_effect_classes),
+        (str(item) for item in grant.allowed_effect_classes),
+    ):
+        return False
+    if not _set_subset(candidate.resource_profiles, grant.resource_profiles):
+        return False
+    if not _set_subset(candidate.external_io_scopes, grant.external_io_scopes):
+        return False
+    for parameter, candidate_bound in candidate.parameter_bounds.items():
+        if _parameter_is_for_removed_task(parameter, candidate=candidate, grant=grant):
+            continue
+        grant_bound = grant.parameter_bounds.get(parameter)
+        if grant_bound is None:
+            continue
+        if not _as_parameter_bound(candidate_bound).is_subset_of(
+            _as_parameter_bound(grant_bound)
+        ):
+            return False
+    for parameter in set(grant.parameter_bounds).difference(candidate.parameter_bounds):
+        # An absent candidate bound is unbounded.  It is safe only when the
+        # grant also leaves that parameter unbounded, handled by the branch
+        # above; a grant bound therefore cannot silently be widened.
+        if _parameter_is_for_removed_task(parameter, candidate=candidate, grant=grant):
+            continue
+        if parameter not in candidate.parameter_bounds:
+            return False
+    if not _budget_subset(candidate.aggregate_budget, grant.aggregate_budget):
+        return False
+    if not _per_task_budget_subset(candidate, grant):
+        return False
+    if candidate.max_retries > grant.max_retries or candidate.max_replans > grant.max_replans:
+        return False
+    return _validity_subset(candidate, grant)
+
+
+def classify_authority_relation(
+    grant: AutonomyGrant,
+    candidate: AutonomyGrant,
+) -> AuthorityRelation:
+    """Classify a candidate scope against an existing grant.
+
+    A mixed narrowing/expansion is deliberately ``INCOMPARABLE`` rather than
+    being guessed as an expansion.  The caller must then obtain a fresh
+    authority decision instead of relying on a broad one-sided diff.
+    """
+
+    if not isinstance(grant, AutonomyGrant) or not isinstance(candidate, AutonomyGrant):
+        raise AuthorityPolicyError("authority comparison requires typed grants")
+    _verified_scope_digest(grant)
+    _verified_scope_digest(candidate)
+    candidate_subset = authority_scope_is_subset(candidate, grant)
+    grant_subset = authority_scope_is_subset(grant, candidate)
+    if candidate_subset and grant_subset:
+        return AuthorityRelation.EQUIVALENT
+    if candidate_subset:
+        return AuthorityRelation.SUBSET
+    if grant_subset:
+        return AuthorityRelation.EXPANSION
+    return AuthorityRelation.INCOMPARABLE
+
+
+def compare_authority(grant: AutonomyGrant, candidate: AutonomyGrant) -> AuthorityRelation:
+    """Compatibility alias for callers that prefer a comparison verb."""
+
+    return classify_authority_relation(grant, candidate)
+
+
+_BOUNDARY_PRIORITY: tuple[SemanticBoundary, ...] = (
+    SemanticBoundary.IRREVERSIBLE_EFFECT,
+    SemanticBoundary.PUBLICATION,
+    SemanticBoundary.PROMOTION,
+    SemanticBoundary.SCIENTIFIC_CONFIRMATION,
+    SemanticBoundary.EXTERNAL_SHARING_CHANGE,
+    SemanticBoundary.DATASET_CHANGE,
+    SemanticBoundary.GOAL_CHANGE,
+    SemanticBoundary.NONE,
+)
+_BOUNDARY_TOKENS: dict[SemanticBoundary, tuple[str, ...]] = {
+    SemanticBoundary.IRREVERSIBLE_EFFECT: ("irreversible", "non_reversible"),
+    SemanticBoundary.PUBLICATION: ("publication", "publish", "published"),
+    SemanticBoundary.PROMOTION: ("promotion", "promote", "promoted"),
+    SemanticBoundary.SCIENTIFIC_CONFIRMATION: (
+        "scientific_confirmation",
+        "confirmation",
+        "confirm",
+        "confirmed",
+    ),
+    SemanticBoundary.EXTERNAL_SHARING_CHANGE: (
+        "external_sharing",
+        "external_io",
+        "sharing",
+        "share",
+        "shared",
+    ),
+    SemanticBoundary.DATASET_CHANGE: (
+        "dataset",
+        "input_dataset",
+        "selected_artifact",
+        "source_artifact",
+        "raw_data",
+    ),
+    SemanticBoundary.GOAL_CHANGE: (
+        "goal",
+        "objective",
+        "scientific_scope",
+        "target_property",
+        "user_constraint",
+        "constraint",
+    ),
+}
+
+
+def _normalize_boundary(value: Any) -> SemanticBoundary:
+    if isinstance(value, SemanticBoundary):
+        return value
+    token = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    try:
+        return SemanticBoundary(token)
+    except ValueError as exc:
+        raise AuthorityPolicyError("unknown semantic boundary") from exc
+
+
+def _change_text(change: Any) -> tuple[str, SemanticBoundary | None]:
+    if isinstance(change, SemanticBoundary):
+        return "", change
+    if isinstance(change, str):
+        return change.lower(), None
+    if isinstance(change, Mapping):
+        explicit = change.get("semantic_boundary", change.get("boundary"))
+        boundary = None if explicit in (None, "") else _normalize_boundary(explicit)
+        text = " ".join(
+            str(change.get(key, ""))
+            for key in ("dimension", "path", "field", "kind", "before", "after")
+        )
+        return text.lower(), boundary
+    model_dump = getattr(change, "model_dump", None)
+    if callable(model_dump):
+        return _change_text(model_dump(mode="json"))
+    return str(change).lower(), None
+
+
+def classify_semantic_boundary(changes: Any = None) -> SemanticBoundary:
+    """Derive the strongest explicit semantic boundary from change evidence.
+
+    Unknown dimensions are not silently converted into a scientific boundary;
+    they remain ``NONE`` here and must be rejected by the caller's canonical
+    change schema.  Explicit but unknown boundary names raise
+    ``AuthorityPolicyError``.
+    """
+
+    if changes is None:
+        return SemanticBoundary.NONE
+    if isinstance(changes, (str, SemanticBoundary, Mapping)):
+        items = [changes]
+    else:
+        try:
+            items = list(changes)
+        except TypeError:
+            items = [changes]
+    observed: set[SemanticBoundary] = set()
+    for change in items:
+        text, explicit = _change_text(change)
+        if explicit is not None:
+            observed.add(explicit)
+        for boundary, tokens in _BOUNDARY_TOKENS.items():
+            if any(token in text for token in tokens):
+                observed.add(boundary)
+    for boundary in _BOUNDARY_PRIORITY:
+        if boundary in observed:
+            return boundary
+    return SemanticBoundary.NONE
+
+
+def detect_semantic_boundary(changes: Any = None) -> SemanticBoundary:
+    """Compatibility alias for the semantic-boundary classifier."""
+
+    return classify_semantic_boundary(changes)
+
+
+def authority_can_auto_apply(
+    relation: AuthorityRelation,
+    semantic_boundary: SemanticBoundary,
+) -> bool:
+    """Return whether the two-dimensional policy permits automatic use."""
+
+    if not isinstance(relation, AuthorityRelation):
+        relation = AuthorityRelation(str(relation).strip().upper())
+    if not isinstance(semantic_boundary, SemanticBoundary):
+        semantic_boundary = _normalize_boundary(semantic_boundary)
+    return (
+        relation is AuthorityRelation.SUBSET
+        and semantic_boundary is SemanticBoundary.NONE
+    )
+
+
+def can_auto_apply(
+    relation: AuthorityRelation,
+    semantic_boundary: SemanticBoundary,
+) -> bool:
+    """Compatibility alias for ``authority_can_auto_apply``."""
+
+    return authority_can_auto_apply(relation, semantic_boundary)
+
+
+def evaluate_authority(
+    grant: AutonomyGrant,
+    candidate: AutonomyGrant,
+    *,
+    changes: Any = None,
+    semantic_boundary: SemanticBoundary | str | None = None,
+) -> AuthorityEvaluation:
+    """Build a signed, non-executable relation/boundary projection."""
+
+    if not isinstance(grant, AutonomyGrant) or not isinstance(candidate, AutonomyGrant):
+        raise AuthorityPolicyError("authority evaluation requires typed grants")
+    grant_digest = _verified_scope_digest(grant)
+    candidate_digest = _verified_scope_digest(candidate)
+    relation = classify_authority_relation(grant, candidate)
+    boundary = (
+        classify_semantic_boundary(changes)
+        if semantic_boundary in (None, "")
+        else _normalize_boundary(semantic_boundary)
+    )
+    auto_apply = authority_can_auto_apply(relation, boundary)
+    reasons = [
+        {
+            AuthorityRelation.SUBSET: "AUTHORITY_WITHIN_GRANT",
+            AuthorityRelation.EQUIVALENT: "AUTHORITY_EQUIVALENT",
+            AuthorityRelation.EXPANSION: "AUTHORITY_EXPANSION_REQUIRES_NEW_GRANT",
+            AuthorityRelation.INCOMPARABLE: "AUTHORITY_INCOMPARABLE_REQUIRES_REVIEW",
+        }[relation],
+        (
+            "SEMANTIC_BOUNDARY_NONE"
+            if boundary is SemanticBoundary.NONE
+            else "SEMANTIC_BOUNDARY_REQUIRES_HUMAN"
+        ),
+    ]
+    if auto_apply:
+        reasons.append("AUTONOMY_AUTO_APPLY_ELIGIBLE")
+    return AuthorityEvaluation(
+        grant_id=grant.grant_id,
+        grant_digest=grant_digest,
+        candidate_scope_digest=candidate_digest,
+        relation=relation,
+        semantic_boundary=boundary,
+        auto_apply=auto_apply,
+        reason_codes=reasons,
+    )
+
+
+__all__ = [
+    "AUTONOMY_AUTHORITY_POLICY_DIGEST",
+    "AUTONOMY_AUTHORITY_POLICY_MATERIAL",
+    "AUTONOMY_AUTHORITY_POLICY_VERSION",
+    "AuthorityPolicyError",
+    "authority_can_auto_apply",
+    "authority_scope_is_subset",
+    "can_auto_apply",
+    "classify_authority_relation",
+    "classify_semantic_boundary",
+    "compare_authority",
+    "detect_semantic_boundary",
+    "evaluate_authority",
+]
