@@ -433,7 +433,19 @@ class OledLLMContextMappingResult(BaseModel):
         return self.status in {"ready_for_human_review", "no_eligible_property"}
 
 
-def build_oled_paper_context_elements(parsed_document: Mapping[str, Any] | BaseModel) -> list[OledPaperContextElement]:
+def build_oled_paper_context_elements(
+    parsed_document: Mapping[str, Any] | BaseModel,
+    *,
+    canonical_table_packets: Iterable[OledSemanticMappingPacket] = (),
+) -> list[OledPaperContextElement]:
+    """Build source context, optionally binding table text to packet headers.
+
+    A table packet already carries the namespace consumed by the response
+    binding validator.  When packets are supplied, table context is rendered
+    from that same namespace instead of independently re-rendering the raw
+    ParsedDocument headers.  The default remains the historical raw-context
+    behavior for callers that do not have packet projections available.
+    """
     payload = (
         parsed_document.model_dump(mode="json")
         if isinstance(parsed_document, BaseModel)
@@ -484,6 +496,8 @@ def build_oled_paper_context_elements(parsed_document: Mapping[str, Any] | BaseM
                 source_hash=source_hash,
             )
         )
+    if canonical_table_packets and context:
+        return _canonicalize_table_context_from_packets(context, canonical_table_packets)
     return context
 
 
@@ -666,6 +680,81 @@ def _packet_context_matches(
     return matches[:1]
 
 
+def _canonical_table_projection(
+    packet: OledSemanticMappingPacket,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Return the packet's single authoritative, positionally aligned table view."""
+
+    headers = [str(header) for header in packet.table_headers]
+    if len(headers) != len(set(headers)):
+        raise ValueError(f"duplicate canonical table header in packet {packet.packet_id}")
+
+    rows = [dict(row) for row in packet.table_rows]
+    header_set = set(headers)
+    for row_index, row in enumerate(rows):
+        if len(row) != len(headers) or set(row) != header_set:
+            raise ValueError(
+                f"table row {row_index} in packet {packet.packet_id} is not aligned to canonical headers"
+            )
+    return headers, rows
+
+
+def _canonicalize_table_context_from_packets(
+    context: list[OledPaperContextElement],
+    packets: Iterable[OledSemanticMappingPacket],
+) -> list[OledPaperContextElement]:
+    """Make each packet-backed table context use the validator namespace exactly."""
+
+    table_packets = [
+        packet
+        for packet in packets
+        if packet.source_candidate_type.value == "table"
+    ]
+    if not table_packets:
+        return context
+
+    canonical_context = list(context)
+    used_context_indices: set[int] = set()
+    for packet in table_packets:
+        matches = _packet_context_matches(packet, canonical_context)
+        table_matches = [
+            index
+            for index in matches
+            if canonical_context[index].element_type == "table"
+        ]
+        if len(table_matches) != 1:
+            raise ValueError(
+                f"could not bind exactly one ParsedDocument table context to packet {packet.packet_id}"
+            )
+        context_index = table_matches[0]
+        if context_index in used_context_indices:
+            raise ValueError(
+                f"multiple table packets bind to ParsedDocument context element "
+                f"{canonical_context[context_index].element_id}"
+            )
+        used_context_indices.add(context_index)
+
+        headers, rows = _canonical_table_projection(packet)
+        existing = canonical_context[context_index]
+        try:
+            existing_compact = json.loads(existing.text)
+        except (TypeError, ValueError):
+            existing_compact = {}
+        canonical_element = {
+            "table_id": existing_compact.get("table_id") or existing.element_id,
+            "page": existing.page,
+            "caption": existing_compact.get("caption") or packet.caption or "",
+            "headers": headers,
+            "rows": rows,
+            "footnotes": existing_compact.get("footnotes") or [],
+        }
+        canonical_context[context_index] = existing.model_copy(
+            update={"text": _compact_table_text(canonical_element)}
+        )
+
+    return canonical_context
+
+
 def _packet_is_device_only(
     packet: OledSemanticMappingPacket,
     device_only_hashes: set[str],
@@ -771,7 +860,10 @@ def build_oled_llm_paper_mapping_request(
     packet_list = list(packets)
     if not packet_list:
         raise ValueError("at least one semantic mapping packet is required")
-    context = build_oled_paper_context_elements(parsed_document)
+    context = build_oled_paper_context_elements(
+        parsed_document,
+        canonical_table_packets=packet_list,
+    )
     deterministic_schema_candidates = (
         deterministic_report.schema_candidates if deterministic_report else []
     )
@@ -1853,10 +1945,10 @@ def _packet_payload_for_llm(
         exclude={"instructions", "expected_output_schema"},
     )
     if packet.source_candidate_type.value == "table":
-        headers = list(packet.table_headers)
+        headers, rows = _canonical_table_projection(packet)
         payload["table_rows"] = [
             [str(row.get(header) or "") for header in headers]
-            for row in packet.table_rows
+            for row in rows
         ]
         payload["table_row_values_aligned_to_headers"] = True
         payload["raw_text"] = ""

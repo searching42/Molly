@@ -90,6 +90,69 @@ def _parsed_document() -> dict:
     }
 
 
+def _table_namespace_fixture() -> tuple[
+    OledSemanticMappingPacket,
+    dict,
+    list[str],
+    list[str],
+]:
+    canonical_headers = [
+        "emitter",
+        r"absorption $\lambda_{\mathrm{abs}}$ (nm)",
+        "PLQY (%)",
+        "lifetime (ns)",
+        "host material",
+        "dopant concentration",
+        r"neat film/doped film $\bar{\lambda}$ (nm)",
+        "photoluminescence peak (nm)",
+        "energy gap (eV)",
+        "prompt lifetime (ns)",
+        "diffusion lifetime (us)",
+        "radiative rate (s-1)",
+        "nonradiative rate (s-1)",
+    ]
+    raw_headers = list(canonical_headers)
+    raw_headers[1] = raw_headers[1].replace(" (nm)", "  (nm)")
+    raw_headers[6] = raw_headers[6].replace(" (nm)", "  (nm)")
+    row_values = [
+        "Molecule-A",
+        "405",
+        "82",
+        "13.20",
+        "Host-H",
+        "10 wt%",
+        "476",
+        "476",
+        "2.61",
+        "13.20",
+        "4.8",
+        "1.2",
+        "0.3",
+    ]
+    packet = _packet().model_copy(
+        update={
+            "packet_id": "packet:paper-context:table-namespace",
+            "source_candidate_hash": "source-table-namespace-hash",
+            "source_evidence_anchor": "paper-context:p3:table-namespace",
+            "caption": "Synthetic photophysical table.",
+            "table_headers": canonical_headers,
+            "table_rows": [dict(zip(canonical_headers, row_values, strict=True))],
+        }
+    )
+    parsed = _parsed_document()
+    parsed["tables"] = [
+        {
+            "table_id": "paper-context:table-namespace",
+            "page": 3,
+            "caption": "Synthetic photophysical table.",
+            "headers": raw_headers,
+            "rows": [dict(zip(raw_headers, row_values, strict=True))],
+            "footnotes": [],
+        }
+    ]
+    return packet, parsed, canonical_headers, raw_headers
+
+
 def _packet_ref() -> dict:
     return {
         "source_candidate_hash": "source-table-hash",
@@ -143,6 +206,11 @@ def _request_with_packet_count(count: int):
                     "packet_id": f"packet:paper-context:table-{index + 1}",
                     "source_candidate_hash": f"source-table-hash-{index + 1}",
                     "source_evidence_anchor": f"paper-context:p3:table-{index + 1}",
+                    "source_candidate_type": OledMineruCandidateType.TEXT,
+                    "raw_text": f"Synthetic packet {index + 1} for namespace testing.",
+                    "caption": None,
+                    "table_headers": [],
+                    "table_rows": [],
                 }
             )
         )
@@ -382,6 +450,88 @@ def test_table_context_projection_emits_headers_once_and_preserves_cells() -> No
     assert "Measured in a 10 wt% doped film." in compact["footnotes"]
     assert table.text.count("Emitter") == 1
     assert table.text.count("PLQY (%)") == 1
+
+
+def test_table_header_namespace_unification_canonicalizes_all_columns_once() -> None:
+    packet, parsed, canonical_headers, raw_headers = _table_namespace_fixture()
+
+    raw_table = next(
+        element
+        for element in build_oled_paper_context_elements(parsed)
+        if element.element_type == "table"
+    )
+    raw_compact = json.loads(raw_table.text)
+    assert raw_compact["headers"] == raw_headers
+    assert raw_compact["headers"] != canonical_headers
+
+    request_a = build_oled_llm_paper_mapping_request([packet], parsed_document=parsed)
+    request_b = build_oled_llm_paper_mapping_request([packet], parsed_document=parsed)
+    canonical_table = next(
+        element
+        for element in request_a.document_context
+        if element.element_type == "table"
+    )
+    canonical_compact = json.loads(canonical_table.text)
+
+    assert canonical_compact["headers"] == canonical_headers
+    assert canonical_compact["headers"] == packet.table_headers
+    assert len(canonical_compact["headers"]) == 13
+    assert len(canonical_compact["rows"][0]) == len(canonical_compact["headers"])
+    assert _stable_hash(canonical_compact["headers"]) == _stable_hash(packet.table_headers)
+    assert request_a.request_digest == request_b.request_digest
+    assert [element.text for element in request_a.document_context] == [
+        element.text for element in request_b.document_context
+    ]
+
+
+def test_table_header_namespace_unification_keeps_validator_exact_and_fail_closed() -> None:
+    packet, parsed, canonical_headers, raw_headers = _table_namespace_fixture()
+    request = build_oled_llm_paper_mapping_request([packet], parsed_document=parsed)
+
+    canonical_response = _valid_response()
+    canonical_response["packet_results"][0]["packet_id"] = packet.packet_id
+    canonical_ref = canonical_response["packet_results"][0]["candidate_proposals"][0]["evidence_refs"][0]
+    canonical_ref.update(
+        {
+            "source_candidate_hash": packet.source_candidate_hash,
+            "source_evidence_anchor": packet.source_evidence_anchor,
+            "column_name": canonical_headers[6],
+            "cell_value": "476",
+        }
+    )
+    _validate_response_binding(
+        request,
+        OledLLMPaperMappingResponse.model_validate(canonical_response),
+    )
+
+    invalid_response = json.loads(json.dumps(canonical_response))
+    invalid_response["packet_results"][0]["candidate_proposals"][0]["evidence_refs"][0][
+        "column_name"
+    ] = raw_headers[6]
+    with pytest.raises(ResponseBindingError) as raised:
+        _validate_response_binding(
+            request,
+            OledLLMPaperMappingResponse.model_validate(invalid_response),
+        )
+
+    assert raised.value.code == "TABLE_COLUMN_INVALID"
+
+
+def test_table_header_namespace_unification_rejects_duplicate_or_misaligned_packets() -> None:
+    packet, parsed, canonical_headers, _raw_headers = _table_namespace_fixture()
+    duplicate_packet = packet.model_copy(
+        update={
+            "table_headers": [*canonical_headers, canonical_headers[-1]],
+        }
+    )
+    with pytest.raises(ValueError, match="duplicate canonical table header"):
+        build_oled_llm_paper_mapping_request([duplicate_packet], parsed_document=parsed)
+
+    misaligned_packet = packet.model_copy(
+        update={"table_rows": [{canonical_headers[0]: "Molecule-A"}]}
+    )
+    with pytest.raises(ValueError, match="not aligned to canonical headers"):
+        build_oled_llm_paper_mapping_request([misaligned_packet], parsed_document=parsed)
 
 
 def test_context_projection_excludes_administrative_boilerplate() -> None:
