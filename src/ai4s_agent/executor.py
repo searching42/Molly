@@ -1146,16 +1146,18 @@ class RunPlanExecutor:
             OledSemanticMappingPacket,
             OledSemanticMappingReport,
         )
+        from ai4s_agent.oled_llm_context_request import (
+            load_frozen_oled_llm_paper_mapping_request,
+            load_frozen_oled_llm_provider_invocation_manifest,
+            verify_oled_br2_replay_binding,
+        )
 
         run_dir = self.storage.run_dir(project_id, run_id)
         artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
-        artifact_id = {
-            "extract_oled_evidence": "oled_mapping_evidence",
-            "map_oled_contextual_semantics": "contextual_mapping_result",
-            "prepare_oled_candidate_raw_dataset": "candidate_raw_dataset",
-        }[task_id]
-        payload = self._read_json_file(Path(self._require_artifact(artifact_paths, artifact_id)))
         if task_id == "extract_oled_evidence":
+            payload = self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "oled_mapping_evidence"))
+            )
             candidates = payload.get("mineru_candidates")
             packets = payload.get("semantic_packets")
             report = payload.get("deterministic_report")
@@ -1178,12 +1180,42 @@ class RunPlanExecutor:
                 raise ValueError("BR2 deterministic packet binding changed")
             return
         if task_id == "map_oled_contextual_semantics":
-            result = OledLLMContextMappingResult.model_validate(payload)
-            if not result.is_valid:
-                raise ValueError("BR2 contextual mapping result is not review-valid")
-            if result.llm_invocation is None or not result.metadata.get("llm_called"):
-                raise ValueError("BR2 contextual mapping did not record an LLM call")
+            result = OledLLMContextMappingResult.model_validate(
+                self._read_json_file(
+                    Path(self._require_artifact(artifact_paths, "contextual_mapping_result"))
+                )
+            )
+            domain_request = load_frozen_oled_llm_paper_mapping_request(
+                self._require_artifact(artifact_paths, "frozen_domain_mapping_request")
+            )
+            invocation_manifest = load_frozen_oled_llm_provider_invocation_manifest(
+                self._require_artifact(artifact_paths, "provider_invocation_manifest")
+            )
+            verify_oled_br2_replay_binding(
+                domain_request=domain_request,
+                mapping_result=result,
+                invocation_manifest=invocation_manifest,
+            )
             return
+        payload = self._read_json_file(
+            Path(self._require_artifact(artifact_paths, "candidate_raw_dataset"))
+        )
+        result = OledLLMContextMappingResult.model_validate(
+            self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "contextual_mapping_result"))
+            )
+        )
+        domain_request = load_frozen_oled_llm_paper_mapping_request(
+            self._require_artifact(artifact_paths, "frozen_domain_mapping_request")
+        )
+        invocation_manifest = load_frozen_oled_llm_provider_invocation_manifest(
+            self._require_artifact(artifact_paths, "provider_invocation_manifest")
+        )
+        verify_oled_br2_replay_binding(
+            domain_request=domain_request,
+            mapping_result=result,
+            invocation_manifest=invocation_manifest,
+        )
         package = OledBr2CandidateRawDataset.model_validate(payload)
         if package.metadata.get("llm_called") is not True:
             raise ValueError("BR2 candidate dataset lacks a recorded LLM call")

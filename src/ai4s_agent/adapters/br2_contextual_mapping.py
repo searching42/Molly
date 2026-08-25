@@ -41,6 +41,15 @@ from ai4s_agent.llm_provider_resolution import (
     resolve_llm_provider_payload,
 )
 from ai4s_agent.llm_settings import LLMSettingsStore
+from ai4s_agent.oled_llm_context_request import (
+    build_frozen_oled_llm_provider_invocation_manifest,
+    freeze_oled_llm_paper_mapping_request,
+    load_frozen_oled_llm_paper_mapping_request,
+    load_frozen_oled_llm_provider_invocation_manifest,
+    persist_frozen_oled_llm_paper_mapping_request,
+    persist_frozen_oled_llm_provider_invocation_manifest,
+    verify_oled_br2_replay_binding,
+)
 from ai4s_agent.schemas import ParsedDocument
 
 
@@ -100,7 +109,18 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
         parsed_document = _load_parsed_document(payload)
         evidence = _load_mapping_evidence(payload)
         request = _mapping_request_from_evidence(parsed_document, evidence)
+        source_candidates = _source_candidates_from_evidence(evidence)
         output_root = _output_root(payload)
+        frozen_request_path = output_root / "frozen_domain_mapping_request.json"
+        frozen_request = persist_frozen_oled_llm_paper_mapping_request(
+            frozen_request_path,
+            freeze_oled_llm_paper_mapping_request(
+                request=request,
+                source_candidates=source_candidates,
+                run_id=str(payload.get("run_id") or "").strip(),
+            ),
+        )
+        request = frozen_request.request
         invocation_artifact_store = ExactLLMInvocationArtifactStore(
             output_root / "private" / "llm_invocations"
         )
@@ -161,15 +181,35 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 }
             return failure
 
+        invocation = mapping_result.llm_invocation
+        if invocation is None:
+            raise ValueError("valid contextual mapping result lacks provider invocation")
+        invocation_manifest = build_frozen_oled_llm_provider_invocation_manifest(
+            request_digest=frozen_request.request_digest,
+            invocation=invocation,
+        )
+        verify_oled_br2_replay_binding(
+            domain_request=frozen_request,
+            mapping_result=mapping_result,
+            invocation_manifest=invocation_manifest,
+        )
         output_path = write_json(
-            _output_root(payload) / "contextual_mapping_result.json",
+            output_root / "contextual_mapping_result.json",
             mapping_result.model_dump(mode="json"),
         )
-        invocation = mapping_result.llm_invocation
+        invocation_manifest_path = output_root / "provider_invocation_manifest.json"
+        persisted_invocation_manifest = persist_frozen_oled_llm_provider_invocation_manifest(
+            invocation_manifest_path,
+            invocation_manifest,
+        )
         return {
             "status": "success",
             "adapter": "map_oled_contextual_semantics",
-            "outputs": {"contextual_mapping_result": str(output_path)},
+            "outputs": {
+                "contextual_mapping_result": str(output_path),
+                "frozen_domain_mapping_request": str(frozen_request_path.resolve()),
+                "provider_invocation_manifest": str(invocation_manifest_path.resolve()),
+            },
             "summary": {
                 "paper_id": mapping_result.paper_id,
                 "mapping_status": mapping_result.status,
@@ -181,6 +221,7 @@ def map_oled_contextual_semantics_adapter(payload: dict[str, Any]) -> dict[str, 
                 "invocation_artifact": mapping_result.metadata.get(
                     "invocation_artifact"
                 ),
+                "invocation_digest": persisted_invocation_manifest.invocation_digest,
                 "candidate_count": len(mapping_result.schema_candidates),
                 "ontology_review_count": len(mapping_result.ontology_extension_proposals),
                 "ontology_mutated": False,
@@ -214,21 +255,24 @@ def prepare_oled_candidate_raw_dataset_adapter(payload: dict[str, Any]) -> dict[
     """Compile contextual proposals into the review-only candidate package."""
 
     try:
-        parsed_document = _load_parsed_document(payload)
-        evidence = _load_mapping_evidence(payload)
+        frozen_request = load_frozen_oled_llm_paper_mapping_request(
+            _required_path(payload, "frozen_domain_mapping_request_path")
+        )
         mapping_result = OledLLMContextMappingResult.model_validate(
             _read_json(_required_path(payload, "contextual_mapping_result_path"))
         )
-        request = _mapping_request_from_evidence(parsed_document, evidence)
-        source_candidates = [
-            OledMineruCandidate.model_validate(item)
-            for item in evidence.get("mineru_candidates", [])
-            if isinstance(item, dict)
-        ]
+        invocation_manifest = load_frozen_oled_llm_provider_invocation_manifest(
+            _required_path(payload, "provider_invocation_manifest_path")
+        )
+        verify_oled_br2_replay_binding(
+            domain_request=frozen_request,
+            mapping_result=mapping_result,
+            invocation_manifest=invocation_manifest,
+        )
         package, review = build_oled_br2_candidate_raw_dataset(
-            request,
+            frozen_request.request,
             mapping_result,
-            source_candidates,
+            frozen_request.source_candidates,
         )
         output_root = _output_root(payload)
         package_path = write_json(
@@ -263,6 +307,19 @@ def _load_mapping_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     if not evidence.get("mineru_candidates") or not evidence.get("semantic_packets"):
         raise ValueError("oled mapping evidence is incomplete")
     return evidence
+
+
+def _source_candidates_from_evidence(
+    evidence: dict[str, Any],
+) -> list[OledMineruCandidate]:
+    raw_candidates = evidence.get("mineru_candidates")
+    if not isinstance(raw_candidates, list) or not raw_candidates:
+        raise ValueError("oled mapping evidence has no source candidate snapshot")
+    return [
+        OledMineruCandidate.model_validate(item)
+        for item in raw_candidates
+        if isinstance(item, dict)
+    ]
 
 
 def _mapping_request_from_evidence(

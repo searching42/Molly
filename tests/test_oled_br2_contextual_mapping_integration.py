@@ -239,6 +239,8 @@ def test_controller_executor_mapping_chain_uses_existing_artifact_contracts(
     assert set(registry) == {
         "oled_mapping_evidence",
         "contextual_mapping_result",
+        "frozen_domain_mapping_request",
+        "provider_invocation_manifest",
         "candidate_raw_dataset",
         "candidate_raw_dataset_review",
     }

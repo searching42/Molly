@@ -405,7 +405,7 @@ class OledLLMPaperMappingRequest(BaseModel):
 
     @property
     def request_digest(self) -> str:
-        return _stable_hash(self.model_dump(mode="python", exclude={"metadata"}))
+        return compute_oled_llm_paper_mapping_request_digest(self)
 
 
 class OledLLMContextMappingFinding(BaseModel):
@@ -2220,13 +2220,50 @@ def _page_number(value: Mapping[str, Any], *, fallback: int | None = None) -> in
 
 
 def _stable_hash(value: Any) -> str:
-    encoded = json.dumps(
+    return hashlib.sha256(canonical_oled_json_bytes(value)).hexdigest()
+
+
+def canonical_oled_json_bytes(value: Any) -> bytes:
+    """Serialize OLED identity material with the existing canonical rules."""
+
+    return json.dumps(
         _canonical_json_value(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+
+
+def canonical_oled_llm_paper_mapping_request_bytes(
+    request: OledLLMPaperMappingRequest,
+) -> bytes:
+    """Return the canonical bytes used by the existing request identity."""
+
+    return canonical_oled_json_bytes(
+        request.model_dump(mode="python", exclude={"metadata"})
+    )
+
+
+def compute_oled_llm_paper_mapping_request_digest(
+    request: OledLLMPaperMappingRequest,
+) -> str:
+    """Compute the authoritative request digest without redefining its scope."""
+
+    return hashlib.sha256(
+        canonical_oled_llm_paper_mapping_request_bytes(request)
+    ).hexdigest()
+
+
+def canonical_oled_llm_invocation_bytes(invocation: LLMInvocationRecord) -> bytes:
+    """Canonicalize one provider invocation record for BR2 replay identity."""
+
+    return canonical_oled_json_bytes(invocation.model_dump(mode="python"))
+
+
+def compute_oled_llm_invocation_digest(invocation: LLMInvocationRecord) -> str:
+    """Compute the v1 digest for a persisted BR2 provider invocation record."""
+
+    return hashlib.sha256(canonical_oled_llm_invocation_bytes(invocation)).hexdigest()
 
 
 def _canonical_json_value(value: Any) -> Any:
@@ -2310,6 +2347,11 @@ __all__ = [
     "OledPaperContextElement",
     "build_oled_llm_paper_mapping_request",
     "build_oled_paper_context_elements",
+    "canonical_oled_json_bytes",
+    "canonical_oled_llm_invocation_bytes",
+    "canonical_oled_llm_paper_mapping_request_bytes",
+    "compute_oled_llm_invocation_digest",
+    "compute_oled_llm_paper_mapping_request_digest",
     "project_oled_context_for_mapping",
     "run_oled_llm_context_mapping",
 ]
