@@ -80,13 +80,11 @@
       "type": "string"
     },
     "fresh_permission_required": {
-      "const": true,
       "default": true,
       "title": "Fresh Permission Required",
       "type": "boolean"
     },
     "fresh_authorization_required": {
-      "const": true,
       "default": true,
       "title": "Fresh Authorization Required",
       "type": "boolean"

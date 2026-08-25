@@ -512,6 +512,13 @@ class ScientificAgentConversationSessionService:
             "autonomy_l2_baseline_controller_receipt_digest": "",
             "autonomy_l2_successor_proposal_id": "",
             "autonomy_l2_successor_proposal_digest": "",
+            "autonomy_l2_authority_relation": "",
+            "autonomy_l2_semantic_boundary": "",
+            "autonomy_l2_authority_evaluation_id": "",
+            "autonomy_l2_authority_evaluation_digest": "",
+            "autonomy_l2_authority_auto_apply": False,
+            "autonomy_l2_fresh_permission_required": False,
+            "autonomy_l2_fresh_authorization_required": False,
             "autonomy_l2_reason_codes": [],
             "updated_at": "",
             "executable": False,
@@ -708,6 +715,13 @@ class ScientificAgentConversationSessionService:
                 "autonomy_l2_baseline_controller_receipt_digest",
                 "autonomy_l2_successor_proposal_id",
                 "autonomy_l2_successor_proposal_digest",
+                "autonomy_l2_authority_relation",
+                "autonomy_l2_semantic_boundary",
+                "autonomy_l2_authority_evaluation_id",
+                "autonomy_l2_authority_evaluation_digest",
+                "autonomy_l2_authority_auto_apply",
+                "autonomy_l2_fresh_permission_required",
+                "autonomy_l2_fresh_authorization_required",
                 "autonomy_l2_reason_codes",
                 "updated_at",
                 "executable",
@@ -786,6 +800,13 @@ class ScientificAgentConversationSessionService:
                 "autonomy_l2_baseline_controller_receipt_digest",
                 "autonomy_l2_successor_proposal_id",
                 "autonomy_l2_successor_proposal_digest",
+                "autonomy_l2_authority_relation",
+                "autonomy_l2_semantic_boundary",
+                "autonomy_l2_authority_evaluation_id",
+                "autonomy_l2_authority_evaluation_digest",
+                "autonomy_l2_authority_auto_apply",
+                "autonomy_l2_fresh_permission_required",
+                "autonomy_l2_fresh_authorization_required",
                 "autonomy_l2_reason_codes",
                 "updated_at",
                 "executable",
@@ -931,6 +952,26 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationSessionError(
                 "conversation L2 materiality class is invalid"
             )
+        l2_relation = str(result.get("autonomy_l2_authority_relation") or "")
+        if l2_relation not in {"", "SUBSET", "EQUIVALENT", "EXPANSION", "INCOMPARABLE"}:
+            raise ScientificAgentConversationSessionError(
+                "conversation L2 authority relation is invalid"
+            )
+        l2_boundary = str(result.get("autonomy_l2_semantic_boundary") or "")
+        if l2_boundary not in {
+            "",
+            "NONE",
+            "SCIENTIFIC_CONFIRMATION",
+            "GOAL_CHANGE",
+            "DATASET_CHANGE",
+            "EXTERNAL_SHARING_CHANGE",
+            "PUBLICATION",
+            "PROMOTION",
+            "IRREVERSIBLE_EFFECT",
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation L2 semantic boundary is invalid"
+            )
         for field in (
             "autonomy_l2_decision_digest",
             "autonomy_l2_revision_digest",
@@ -942,6 +983,7 @@ class ScientificAgentConversationSessionService:
             "autonomy_l2_baseline_controller_decision_digest",
             "autonomy_l2_baseline_controller_receipt_digest",
             "autonomy_l2_successor_proposal_digest",
+            "autonomy_l2_authority_evaluation_digest",
         ):
             value = str(result.get(field) or "")
             if value and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
@@ -959,11 +1001,21 @@ class ScientificAgentConversationSessionService:
             "autonomy_l2_baseline_controller_decision_id",
             "autonomy_l2_baseline_controller_receipt_id",
             "autonomy_l2_successor_proposal_id",
+            "autonomy_l2_authority_evaluation_id",
         ):
             value = str(result.get(field) or "")
             if value and SESSION_ID_PATTERN.fullmatch(value) is None:
                 raise ScientificAgentConversationSessionError(
                     "conversation L2 identity projection is invalid"
+                )
+        for field in (
+            "autonomy_l2_authority_auto_apply",
+            "autonomy_l2_fresh_permission_required",
+            "autonomy_l2_fresh_authorization_required",
+        ):
+            if not isinstance(result.get(field), bool):
+                raise ScientificAgentConversationSessionError(
+                    "conversation L2 boolean projection is invalid"
                 )
         l2_reasons = result.get("autonomy_l2_reason_codes")
         if not isinstance(l2_reasons, list) or len(l2_reasons) > 16 or any(
@@ -2317,6 +2369,9 @@ class ScientificAgentConversationSessionService:
         provider: LLMProvider | None,
         provider_binding_digest: str,
         actor: ActorContext | None,
+        automatic_authority_reuse: bool = False,
+        authority_evaluation_digest: str = "",
+        baseline_authorization: Any | None = None,
     ) -> ScientificAgentConversationTurnResult:
         if actor is None or not actor.actor:
             raise ScientificAgentConversationAuthorizationRequired(
@@ -2340,20 +2395,50 @@ class ScientificAgentConversationSessionService:
                 reason_codes=resource_authority_reasons,
                 llm_used=provider is not None,
             )
+        if automatic_authority_reuse and (
+            baseline_authorization is None
+            or not authority_evaluation_digest
+        ):
+            raise ScientificAgentConversationStaleAuthority(
+                "automatic authority reuse is missing its verified baseline binding"
+            )
         approval_request_id = _request_id(
-            "conversation-approval",
+            "conversation-authority-reuse"
+            if automatic_authority_reuse
+            else "conversation-approval",
             project_id,
             conversation_id,
             proposal.proposal_digest,
+            authority_evaluation_digest,
         )
         br2_mapping = self._is_br2_mapping_proposal(publication)
         authorization_mode = (
-            AgentAuthorizationMode.FROZEN_PLAN
+            baseline_authorization.authorization_mode
+            if automatic_authority_reuse
+            else AgentAuthorizationMode.FROZEN_PLAN
             if br2_mapping
             else AgentAuthorizationMode.STEPWISE
         )
         requested_preauthorized_gates = (
-            self._br2_preauthorized_gates(proposal) if br2_mapping else []
+            sorted(
+                set(baseline_authorization.preauthorized_operational_gates).intersection(
+                    proposal.required_gates
+                )
+            )
+            if automatic_authority_reuse
+            else self._br2_preauthorized_gates(proposal) if br2_mapping else []
+        )
+        authorization_actor_source = (
+            baseline_authorization.actor_source
+            if automatic_authority_reuse
+            else actor.source
+        )
+        authorization_note = (
+            "Automatic bounded-authority reuse under AuthorityRelation.SUBSET "
+            "and SemanticBoundary.NONE; evaluation="
+            f"{authority_evaluation_digest}."
+            if automatic_authority_reuse
+            else "Explicit conversational approval of the current scientific Agent plan."
         )
         try:
             approved: ApproveAndStartResult = self.authorization_service.approve_and_start(
@@ -2365,10 +2450,10 @@ class ScientificAgentConversationSessionService:
                     requested_preauthorized_gate_ids=requested_preauthorized_gates,
                     confirmed=True,
                     client_request_id=approval_request_id,
-                    note="Explicit conversational approval of the current scientific Agent plan.",
+                    note=authorization_note,
                 ),
                 actor=actor.actor,
-                actor_source=actor.source,
+                actor_source=authorization_actor_source,
             )
         except (
             ScientificAgentAuthorizationDenied,
@@ -2402,7 +2487,7 @@ class ScientificAgentConversationSessionService:
                 start_intent_id=approved.start_intent.start_intent_id,
                 request=controller_request,
                 actor=actor.actor,
-                actor_source=actor.source,
+                actor_source=authorization_actor_source,
             )
         except ScientificAgentHarnessControllerError as exc:
             state = self._transition(
@@ -3236,7 +3321,7 @@ class ScientificAgentConversationSessionService:
                 # or another publication attempt.
                 publication = self._read_pending_publication(state, clean_project)
                 decision_payload = {
-                    "schema_version": "agent_autonomy_l2_materiality_decision.v1",
+                    "schema_version": "agent_autonomy_l2_materiality_decision.v2",
                     "classification": "material",
                     "decision_id": str(state.get("autonomy_l2_decision_id") or ""),
                     "decision_digest": str(
@@ -3256,6 +3341,82 @@ class ScientificAgentConversationSessionService:
                     session=self.session_projection(state),
                     proposal=publication.proposal.model_dump(mode="json"),
                     plan_summary=self._plan_summary(publication),
+                )
+            if (
+                state.get("status") == "approval_required"
+                and state.get("autonomy_l2_authority_auto_apply") is True
+                and state.get("autonomy_l2_successor_proposal_id")
+            ):
+                # The successor publication and the durable pending-state
+                # transition committed, but automatic authority reuse may
+                # have been interrupted before the exact authorization/start
+                # chain completed.  Resume that chain without another LLM
+                # call or another revision publication.
+                publication = self._read_pending_publication(state, clean_project)
+                baseline_authorization_id = str(
+                    state.get("autonomy_l2_baseline_authorization_id") or ""
+                )
+                if not baseline_authorization_id:
+                    raise ScientificAgentConversationStaleAuthority(
+                        "automatic authority reuse baseline is unavailable"
+                    )
+                baseline_authorization = self.authorization_service.verify_authorization(
+                    project_id=clean_project,
+                    authorization_id=baseline_authorization_id,
+                    verify_current=False,
+                )
+                revision_id = str(state.get("autonomy_l2_revision_id") or "")
+                baseline_proposal_id = str(
+                    state.get("autonomy_l2_baseline_proposal_id") or ""
+                )
+                if not revision_id or not baseline_proposal_id:
+                    raise ScientificAgentConversationStaleAuthority(
+                        "automatic authority reuse revision binding is unavailable"
+                    )
+                from ai4s_agent.scientific_agent_autonomy_l2 import (
+                    classify_plan_revision_materiality,
+                )
+
+                revision = self.replanner.read_revision(
+                    project_id=clean_project,
+                    revision_id=revision_id,
+                )
+                baseline_proposal = self.proposal_store.read(
+                    project_id=clean_project,
+                    proposal_id=baseline_proposal_id,
+                    verify_current=False,
+                ).proposal
+                decision = classify_plan_revision_materiality(
+                    revision,
+                    baseline_proposal=baseline_proposal,
+                    baseline_authorization=baseline_authorization,
+                    registry=self.replanner.proposal_store.registry,
+                )
+                if (
+                    not decision.authority_auto_apply
+                    or decision.successor_candidate_id
+                    != str(state.get("autonomy_l2_successor_proposal_id") or "")
+                    or decision.decision_digest
+                    != str(state.get("autonomy_l2_decision_digest") or "")
+                ):
+                    raise ScientificAgentConversationStaleAuthority(
+                        "automatic authority reuse decision is stale"
+                    )
+                decision_payload = decision.model_dump(mode="json")
+                return self._approve_and_progress(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    decision=decision_payload,
+                    provider=provider,
+                    provider_binding_digest=provider_binding_digest,
+                    actor=actor,
+                    automatic_authority_reuse=True,
+                    authority_evaluation_digest=str(
+                        state.get("autonomy_l2_authority_evaluation_digest") or ""
+                    ),
+                    baseline_authorization=baseline_authorization,
                 )
             controller_execution_id = str(state.get("controller_execution_id") or "")
             controller_execution_digest = str(
@@ -3308,6 +3469,13 @@ class ScientificAgentConversationSessionService:
                 "autonomy_l2_baseline_controller_receipt_digest": result.proposal.replan_request.controller_receipt_digest,
                 "autonomy_l2_successor_proposal_id": decision.successor_candidate_id,
                 "autonomy_l2_successor_proposal_digest": decision.successor_proposal_digest,
+                "autonomy_l2_authority_relation": decision.authority_relation.value,
+                "autonomy_l2_semantic_boundary": decision.semantic_boundary.value,
+                "autonomy_l2_authority_evaluation_id": decision.authority_evaluation_id,
+                "autonomy_l2_authority_evaluation_digest": decision.authority_evaluation_digest,
+                "autonomy_l2_authority_auto_apply": decision.authority_auto_apply,
+                "autonomy_l2_fresh_permission_required": decision.fresh_permission_required,
+                "autonomy_l2_fresh_authorization_required": decision.fresh_authorization_required,
                 "autonomy_l2_reason_codes": list(decision.reason_codes),
             }
             decision_payload = decision.model_dump(mode="json")
@@ -3356,6 +3524,65 @@ class ScientificAgentConversationSessionService:
                 )
 
             successor = result.application.successor
+            if not decision.fresh_authorization_required:
+                # The successor is a strict subset of the verified grant and
+                # carries no semantic boundary.  Publish the new exact plan,
+                # then mint a proposal-bound authorization through the normal
+                # Permission/Controller chain without asking the user to
+                # repeat an already granted authority decision.
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="approval_required",
+                    reason_code="AUTONOMY_L2_AUTHORITY_WITHIN_GRANT",
+                    updates={
+                        **l2_updates,
+                        "run_id": clean_run,
+                        "proposal_id": successor.proposal_id,
+                        "proposal_digest": successor.proposal_digest,
+                        "authorization_id": "",
+                        "authorization_digest": "",
+                        "start_intent_id": "",
+                        "start_intent_digest": "",
+                        "controller_execution_id": "",
+                        "controller_execution_digest": "",
+                        "controller_status": "",
+                        "current_task_id": "",
+                        "authority_kind": "",
+                        "gate_id": "",
+                        "snapshot_id": "",
+                        "snapshot_digest": "",
+                        "remote_request_sha256": "",
+                        "resource_authority_status": "",
+                        "resource_authority_reason_codes": [],
+                        "review_projection": {},
+                        "autonomy_status": "eligible",
+                        "autonomy_stop_reason": "",
+                    },
+                    event_type="autonomy.l2.authority_reused",
+                    message="新的计划仍在已授予权限范围内，系统自动复用现有授权。",
+                    event_data={
+                        "proposal_id": successor.proposal_id,
+                        "proposal_digest": successor.proposal_digest,
+                        "authority_relation": decision.authority_relation.value,
+                        "semantic_boundary": decision.semantic_boundary.value,
+                        "authority_evaluation_digest": decision.authority_evaluation_digest,
+                        "phase": "autonomy_l2",
+                    },
+                )
+                return self._approve_and_progress(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    decision=decision_payload,
+                    provider=provider,
+                    provider_binding_digest=provider_binding_digest,
+                    actor=actor,
+                    automatic_authority_reuse=True,
+                    authority_evaluation_digest=decision.authority_evaluation_digest,
+                    baseline_authorization=result.baseline_authorization,
+                )
             # The publication is review-only.  Clear every live authority
             # binding before exposing the successor as a pending proposal.
             state = self._transition(

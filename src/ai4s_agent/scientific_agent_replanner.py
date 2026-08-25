@@ -122,6 +122,7 @@ class ReplannerL2FailureResult:
     proposal: AgentPlanRevisionProposal
     materiality_decision: Any
     application: ReplannerApplyResult | None = None
+    baseline_authorization: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -823,8 +824,10 @@ class ScientificAgentReplannerService:
         The caller supplies only the session's server-side Controller binding;
         all request fields, baseline authority bindings, and request IDs are
         derived here from a fresh read-only Controller snapshot.  Publication
-        is the only automatic L2 effect.  Authorization and execution remain
-        on the existing explicit approval path.
+        is the only automatic L2 effect.  A strict subset with no semantic
+        boundary reuses the verified grant through the existing
+        Permission/authorization/Controller chain; expansions and semantic
+        boundaries remain on the explicit approval path.
         """
 
         from ai4s_agent.scientific_agent_autonomy_l2 import (
@@ -921,9 +924,10 @@ class ScientificAgentReplannerService:
             revision,
             baseline_proposal=baseline.publication.proposal,
             baseline_authorization=baseline.authorization,
+            registry=self.proposal_store.registry,
         )
         application = None
-        if materiality.classification.value == "material":
+        if revision.successor_candidate is not None:
             application_request_id = (
                 "l2-controller-failure-apply-"
                 + _agent_digest(
@@ -941,11 +945,14 @@ class ScientificAgentReplannerService:
                     client_request_id=application_request_id,
                 ),
                 strict_controller_failure=True,
+                fresh_permission_required=materiality.fresh_permission_required,
+                fresh_authorization_required=materiality.fresh_authorization_required,
             )
         return ReplannerL2FailureResult(
             proposal=revision,
             materiality_decision=materiality,
             application=application,
+            baseline_authorization=authorization,
         )
 
     def apply_revision(
@@ -955,6 +962,8 @@ class ScientificAgentReplannerService:
         revision_id: str,
         request: AgentPlanRevisionApplicationRequest,
         strict_controller_failure: bool = False,
+        fresh_permission_required: bool = True,
+        fresh_authorization_required: bool = True,
     ) -> ReplannerApplyResult:
         clean_project = _safe_scope_id(project_id, field="project_id")
         application_request_digest = _agent_digest(
@@ -1031,6 +1040,8 @@ class ScientificAgentReplannerService:
                     revision=revision,
                     successor=publication.proposal,
                     client_request_id=request.client_request_id,
+                    fresh_permission_required=fresh_permission_required,
+                    fresh_authorization_required=fresh_authorization_required,
                 )
                 committed = self.store.publish_application(receipt)
                 return ReplannerApplyResult(
@@ -1100,6 +1111,8 @@ class ScientificAgentReplannerService:
                 revision=revision,
                 successor=publication.proposal,
                 client_request_id=request.client_request_id,
+                fresh_permission_required=fresh_permission_required,
+                fresh_authorization_required=fresh_authorization_required,
             )
             existing = self.store.publish_application(receipt)
             replayed = False
@@ -1116,6 +1129,8 @@ class ScientificAgentReplannerService:
         revision: AgentPlanRevisionProposal,
         successor: AgentExecutionPlanProposal,
         client_request_id: str,
+        fresh_permission_required: bool = True,
+        fresh_authorization_required: bool = True,
     ) -> AgentPlanRevisionApplicationReceipt:
         return AgentPlanRevisionApplicationReceipt(
             project_id=revision.project_id,
@@ -1132,6 +1147,8 @@ class ScientificAgentReplannerService:
             parent_proposal_id=revision.replan_request.baseline_proposal_id,
             supersedes_proposal_id=revision.replan_request.baseline_proposal_id,
             client_request_id=client_request_id,
+            fresh_permission_required=fresh_permission_required,
+            fresh_authorization_required=fresh_authorization_required,
             created_at=self.clock(),
         )
 

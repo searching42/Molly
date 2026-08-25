@@ -91,9 +91,12 @@ fewer records, fewer retries, or deleting a task. Any `EXPANSION`,
 automatic application and requires the next authority or human boundary
 defined by the runtime phase that consumes this primitive.
 
-## Scope boundary for this phase
+## Runtime integration boundary
 
-This phase only adds the typed models, canonical digests, deterministic
-comparison, semantic-boundary classification, frozen JSON schemas, and
-contract tests. Existing L1/L2 runtime behavior remains unchanged until a
-separate integration phase wires this primitive into the coordinator.
+The authority primitive is now consumed by the L2 failure-replan boundary.
+That integration projects the verified baseline and successor proposals into
+grants, records the relation/boundary evaluation, and only reuses authority
+for `SUBSET + NONE`. It still goes through the existing Permission,
+authorization, Gate, Controller, and verifier chain; it does not select
+provider-specific adapters or change Execution Agent behavior. Deterministic
+fast-path transitions remain a separate later phase.

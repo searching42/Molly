@@ -287,11 +287,22 @@ def _freeze_mapping_request_for_attempt(
     path: Path,
     proposed: FrozenOledLLMPaperMappingRequestArtifact,
 ) -> FrozenOledLLMPaperMappingRequestArtifact:
-    frozen = (
-        load_frozen_oled_llm_paper_mapping_request(path)
-        if path.exists() or path.is_symlink()
-        else proposed
-    )
+    if path.exists() or path.is_symlink():
+        # Revalidate the existing artifact, but retain its exact bytes for
+        # publication-manifest comparison.  Pydantic normalization (for
+        # example, sorting validated ontology alias lists) can change the
+        # serialized order even when the artifact is semantically identical;
+        # replay must bind to the immutable bytes that were originally frozen.
+        frozen_bytes = publication.read_artifact_bytes(
+            path,
+            max_bytes=_MAX_MAPPING_RESULT_BYTES,
+        )
+        frozen = FrozenOledLLMPaperMappingRequestArtifact.model_validate_json(
+            frozen_bytes
+        )
+    else:
+        frozen = proposed
+        frozen_bytes = immutable_json_bytes(frozen.model_dump(mode="json"))
     if compute_oled_mapping_attempt_identity(frozen) != (
         compute_oled_mapping_attempt_identity(proposed)
     ):
@@ -302,7 +313,7 @@ def _freeze_mapping_request_for_attempt(
         {
             "frozen_domain_mapping_request": (
                 path,
-                immutable_json_bytes(frozen.model_dump(mode="json")),
+                frozen_bytes,
             )
         }
     )

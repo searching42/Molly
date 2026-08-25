@@ -8,11 +8,56 @@
       ],
       "title": "AgentAutonomyL2MaterialityClass",
       "type": "string"
+    },
+    "AuthorityRelation": {
+      "description": "Relationship between a proposed authority scope and an existing grant.",
+      "enum": [
+        "SUBSET",
+        "EQUIVALENT",
+        "EXPANSION",
+        "INCOMPARABLE"
+      ],
+      "title": "AuthorityRelation",
+      "type": "string"
+    },
+    "SemanticBoundary": {
+      "description": "Human scientific boundaries independent of resource authority.",
+      "enum": [
+        "NONE",
+        "SCIENTIFIC_CONFIRMATION",
+        "GOAL_CHANGE",
+        "DATASET_CHANGE",
+        "EXTERNAL_SHARING_CHANGE",
+        "PUBLICATION",
+        "PROMOTION",
+        "IRREVERSIBLE_EFFECT"
+      ],
+      "title": "SemanticBoundary",
+      "type": "string"
     }
   },
   "additionalProperties": false,
-  "description": "Immutable, non-executable materiality projection for one revision.\n\nThis model is deliberately only a projection.  A serialized instance is\nnot trusted by a coordinator; the current verified revision and canonical\nplan diff must be recomputed before it can be used as a policy result.",
+  "description": "Immutable, non-executable authority projection for one revision.\n\nThis model is deliberately only a projection.  A serialized instance is\nnot trusted by a coordinator; the current verified revision, canonical plan\ndiff, and authority relation must be recomputed before it can be used as a\npolicy result.",
   "properties": {
+    "authority_auto_apply": {
+      "default": false,
+      "title": "Authority Auto Apply",
+      "type": "boolean"
+    },
+    "authority_evaluation_digest": {
+      "default": "",
+      "title": "Authority Evaluation Digest",
+      "type": "string"
+    },
+    "authority_evaluation_id": {
+      "default": "",
+      "title": "Authority Evaluation Id",
+      "type": "string"
+    },
+    "authority_relation": {
+      "$ref": "#/$defs/AuthorityRelation",
+      "default": "EQUIVALENT"
+    },
     "authorization_scope_equal": {
       "title": "Authorization Scope Equal",
       "type": "boolean"
@@ -113,10 +158,14 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "agent_autonomy_l2_materiality_decision.v1",
-      "default": "agent_autonomy_l2_materiality_decision.v1",
+      "const": "agent_autonomy_l2_materiality_decision.v2",
+      "default": "agent_autonomy_l2_materiality_decision.v2",
       "title": "Schema Version",
       "type": "string"
+    },
+    "semantic_boundary": {
+      "$ref": "#/$defs/SemanticBoundary",
+      "default": "NONE"
     },
     "successor_authorization_scope_digest": {
       "default": "",
