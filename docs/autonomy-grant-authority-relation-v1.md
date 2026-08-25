@@ -20,6 +20,21 @@ an immutable digest and includes:
 The grant contains no adapter, path, shell command, credential, or provider
 instruction. It is an authority description, not an execution request.
 
+`parameter_bounds` is a closed allowlist: an omitted parameter key means that
+the agent has no autonomous control over that parameter. Adding a new key is
+therefore an authority expansion. Bounds belonging only to a task that the
+candidate deletes are ignored because that task is no longer executable.
+
+For every retained task and budget dimension, the effective cap is:
+
+```text
+min(aggregate_cap,
+    explicit_per_task_cap if present else aggregate_cap)
+```
+
+Removing a per-task entry can consequently expand authority when the aggregate
+cap is wider than the original explicit cap.
+
 ## Authority relation
 
 `classify_authority_relation(grant, candidate)` compares complete canonical
@@ -47,10 +62,14 @@ current vocabulary is:
 `IRREVERSIBLE_EFFECT`.
 
 The classifier accepts explicit boundary values or canonical change evidence.
-Unknown explicit boundary values fail closed. A candidate can therefore be
-inside the grant while still requiring a human scientific decision, for
-example when a confirmed dataset replaces a raw dataset or a publication step
-is introduced.
+Structured change evidence must use the reviewed canonical dimensions
+`task`, `dependency`, `option`, `artifact`, `route_profile_resource`, `budget`,
+`gate`, or `semantic`; an unknown dimension fails closed. Explicit boundary
+evidence is merged monotonically with detected evidence: it can add a stronger
+human boundary but cannot downgrade one. For example, detected `PUBLICATION`
+plus explicit `NONE` remains `PUBLICATION`. A candidate can therefore be inside
+the grant while still requiring a human scientific decision, for example when a
+confirmed dataset replaces a raw dataset or a publication step is introduced.
 
 ## Automatic-application rule
 

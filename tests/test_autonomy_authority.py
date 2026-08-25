@@ -136,6 +136,34 @@ def test_lower_budget_deleted_task_and_narrower_parameters_are_subset() -> None:
     assert evaluation.auto_apply is True
 
 
+def test_missing_task_budget_cap_falls_back_to_aggregate_and_expands() -> None:
+    grant = _grant(
+        aggregate_budget={"max_gpu_hours": 10, "max_records": 5000},
+        per_task_budget={
+            "generate_candidates": {"max_records": 5000},
+            "train_model": {"max_gpu_hours": 2},
+        },
+    )
+    candidate = _clone(
+        grant,
+        # train_model remains allowed, but its explicit cap is removed.
+        per_task_budget={"generate_candidates": {"max_records": 5000}},
+    )
+
+    assert not authority_scope_is_subset(candidate, grant)
+    assert classify_authority_relation(grant, candidate) is AuthorityRelation.EXPANSION
+
+
+def test_new_parameter_key_is_a_closed_allowlist_expansion() -> None:
+    grant = _grant()
+    bounds = grant.model_dump(mode="json")["parameter_bounds"]
+    bounds["train_model.learning_rate"] = {"minimum": 0.0001, "maximum": 0.1}
+    candidate = _clone(grant, parameter_bounds=bounds)
+
+    assert not authority_scope_is_subset(candidate, grant)
+    assert classify_authority_relation(grant, candidate) is AuthorityRelation.EXPANSION
+
+
 def test_equivalent_scope_is_not_a_new_authority_action() -> None:
     grant = _grant()
     candidate = _clone(grant)
@@ -208,14 +236,35 @@ def test_semantic_boundary_blocks_subset_auto_apply() -> None:
     assert evaluation.auto_apply is False
 
 
+def test_explicit_none_cannot_downgrade_detected_boundary() -> None:
+    grant = _grant()
+    candidate = _clone(grant, max_retries=1)
+
+    evaluation = evaluate_authority(
+        grant,
+        candidate,
+        changes=["publication"],
+        semantic_boundary=SemanticBoundary.NONE,
+    )
+
+    assert evaluation.semantic_boundary is SemanticBoundary.PUBLICATION
+    assert evaluation.auto_apply is False
+
+
 def test_explicit_unknown_boundary_and_stale_digest_fail_closed() -> None:
     with pytest.raises(AuthorityPolicyError, match="unknown semantic boundary"):
         classify_semantic_boundary([{"boundary": "future_boundary"}])
+
+    unknown_change = [{"dimension": "future_dimension", "path": "future.value"}]
+    with pytest.raises(AuthorityPolicyError, match="unknown structured change dimension"):
+        classify_semantic_boundary(unknown_change)
 
     grant = _grant()
     forged = grant.model_construct(**{**grant.__dict__, "max_retries": 99})
     with pytest.raises(AuthorityPolicyError, match="digest"):
         classify_authority_relation(grant, forged)
+    with pytest.raises(AuthorityPolicyError, match="unknown structured change dimension"):
+        evaluate_authority(grant, _clone(grant, max_retries=1), changes=unknown_change)
 
 
 def test_lease_must_remain_inside_grant_window() -> None:

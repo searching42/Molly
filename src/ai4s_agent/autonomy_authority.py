@@ -24,6 +24,18 @@ from ai4s_agent.schemas import (
 
 
 AUTONOMY_AUTHORITY_POLICY_VERSION = "scientific-agent-autonomy-authority-policy.v1"
+KNOWN_AUTHORITY_CHANGE_DIMENSIONS = frozenset(
+    {
+        "task",
+        "dependency",
+        "option",
+        "artifact",
+        "route_profile_resource",
+        "budget",
+        "gate",
+        "semantic",
+    }
+)
 AUTONOMY_AUTHORITY_POLICY_MATERIAL: dict[str, Any] = {
     "schema_version": "scientific-agent-autonomy-authority-policy-material.v1",
     "policy_version": AUTONOMY_AUTHORITY_POLICY_VERSION,
@@ -31,8 +43,12 @@ AUTONOMY_AUTHORITY_POLICY_MATERIAL: dict[str, Any] = {
     "automatic_relations": [AuthorityRelation.SUBSET.value],
     "automatic_boundary": SemanticBoundary.NONE.value,
     "parameter_rule": "candidate bounds must be contained by grant bounds",
-    "budget_rule": "candidate budgets and retry/replan caps must not exceed grant",
+    "budget_rule": (
+        "candidate aggregate and effective per-task caps must not exceed grant; "
+        "missing task caps fall back to aggregate caps"
+    ),
     "scope_rule": "task, effect, resource, and external-io scopes use exact set containment",
+    "structured_change_dimensions": sorted(KNOWN_AUTHORITY_CHANGE_DIMENSIONS),
     "unknown_semantics": "fail_closed",
 }
 AUTONOMY_AUTHORITY_POLICY_DIGEST = _agent_digest(AUTONOMY_AUTHORITY_POLICY_MATERIAL)
@@ -72,9 +88,32 @@ def _verified_scope_digest(grant: AutonomyGrant) -> str:
 
 
 def _per_task_budget_subset(candidate: AutonomyGrant, grant: AutonomyGrant) -> bool:
-    for task_id, candidate_budget in candidate.per_task_budget.items():
-        grant_budget = grant.per_task_budget.get(task_id, grant.aggregate_budget)
-        if not _budget_subset(candidate_budget, grant_budget):
+    """Compare effective per-task caps for every task retained by candidate.
+
+    A task-specific omission does not remove the task's authority.  It falls
+    back to that grant's aggregate cap, so an omitted candidate entry can
+    widen a task from an explicit grant cap to the aggregate cap.
+    """
+
+    retained_tasks = set(candidate.allowed_tasks)
+    dimensions = set(candidate.aggregate_budget) | set(grant.aggregate_budget)
+    for task_id in retained_tasks:
+        dimensions.update(candidate.per_task_budget.get(task_id, {}))
+        dimensions.update(grant.per_task_budget.get(task_id, {}))
+
+    def effective_caps(scope: AutonomyGrant, task_id: str) -> dict[str, float]:
+        explicit = scope.per_task_budget.get(task_id, {})
+        caps: dict[str, float] = {}
+        for dimension in dimensions:
+            aggregate_cap = float(scope.aggregate_budget.get(dimension, float("inf")))
+            task_cap = float(explicit.get(dimension, aggregate_cap))
+            caps[dimension] = min(aggregate_cap, task_cap)
+        return caps
+
+    for task_id in retained_tasks:
+        candidate_caps = effective_caps(candidate, task_id)
+        grant_caps = effective_caps(grant, task_id)
+        if any(candidate_caps[key] > grant_caps[key] for key in dimensions):
             return False
     return True
 
@@ -122,23 +161,20 @@ def authority_scope_is_subset(candidate: AutonomyGrant, grant: AutonomyGrant) ->
         return False
     if not _set_subset(candidate.external_io_scopes, grant.external_io_scopes):
         return False
+    for parameter in set(candidate.parameter_bounds).difference(grant.parameter_bounds):
+        # Bounds for a task that the candidate deleted are no longer
+        # executable.  Every other new parameter key is an authority
+        # expansion: omitted grant bounds are not an implicit wildcard.
+        if _parameter_is_for_removed_task(parameter, candidate=candidate, grant=grant):
+            continue
+        return False
     for parameter, candidate_bound in candidate.parameter_bounds.items():
         if _parameter_is_for_removed_task(parameter, candidate=candidate, grant=grant):
             continue
         grant_bound = grant.parameter_bounds.get(parameter)
-        if grant_bound is None:
-            continue
         if not _as_parameter_bound(candidate_bound).is_subset_of(
             _as_parameter_bound(grant_bound)
         ):
-            return False
-    for parameter in set(grant.parameter_bounds).difference(candidate.parameter_bounds):
-        # An absent candidate bound is unbounded.  It is safe only when the
-        # grant also leaves that parameter unbounded, handled by the branch
-        # above; a grant bound therefore cannot silently be widened.
-        if _parameter_is_for_removed_task(parameter, candidate=candidate, grant=grant):
-            continue
-        if parameter not in candidate.parameter_bounds:
             return False
     if not _budget_subset(candidate.aggregate_budget, grant.aggregate_budget):
         return False
@@ -242,6 +278,12 @@ def _change_text(change: Any) -> tuple[str, SemanticBoundary | None]:
     if isinstance(change, str):
         return change.lower(), None
     if isinstance(change, Mapping):
+        if "dimension" in change:
+            dimension = str(change.get("dimension", "")).strip().lower()
+            if dimension not in KNOWN_AUTHORITY_CHANGE_DIMENSIONS:
+                raise AuthorityPolicyError(
+                    f"unknown structured change dimension: {dimension or '<empty>'}"
+                )
         explicit = change.get("semantic_boundary", change.get("boundary"))
         boundary = None if explicit in (None, "") else _normalize_boundary(explicit)
         text = " ".join(
@@ -258,10 +300,10 @@ def _change_text(change: Any) -> tuple[str, SemanticBoundary | None]:
 def classify_semantic_boundary(changes: Any = None) -> SemanticBoundary:
     """Derive the strongest explicit semantic boundary from change evidence.
 
-    Unknown dimensions are not silently converted into a scientific boundary;
-    they remain ``NONE`` here and must be rejected by the caller's canonical
-    change schema.  Explicit but unknown boundary names raise
-    ``AuthorityPolicyError``.
+    Structured changes must use the known canonical dimension roster; an
+    unknown dimension raises ``AuthorityPolicyError`` instead of silently
+    becoming ``NONE``.  Explicit but unknown boundary names raise the same
+    error.
     """
 
     if changes is None:
@@ -281,6 +323,14 @@ def classify_semantic_boundary(changes: Any = None) -> SemanticBoundary:
         for boundary, tokens in _BOUNDARY_TOKENS.items():
             if any(token in text for token in tokens):
                 observed.add(boundary)
+    for boundary in _BOUNDARY_PRIORITY:
+        if boundary in observed:
+            return boundary
+    return SemanticBoundary.NONE
+
+
+def _strongest_boundary(*boundaries: SemanticBoundary) -> SemanticBoundary:
+    observed = set(boundaries)
     for boundary in _BOUNDARY_PRIORITY:
         if boundary in observed:
             return boundary
@@ -332,11 +382,16 @@ def evaluate_authority(
     grant_digest = _verified_scope_digest(grant)
     candidate_digest = _verified_scope_digest(candidate)
     relation = classify_authority_relation(grant, candidate)
-    boundary = (
-        classify_semantic_boundary(changes)
+    detected_boundary = classify_semantic_boundary(changes)
+    explicit_boundary = (
+        SemanticBoundary.NONE
         if semantic_boundary in (None, "")
         else _normalize_boundary(semantic_boundary)
     )
+    # Explicit evidence can add a boundary, but can never downgrade one
+    # already detected from canonical changes (for example PUBLICATION ->
+    # NONE).  This merge is intentionally monotonic and fail-closed.
+    boundary = _strongest_boundary(detected_boundary, explicit_boundary)
     auto_apply = authority_can_auto_apply(relation, boundary)
     reasons = [
         {
@@ -369,6 +424,7 @@ __all__ = [
     "AUTONOMY_AUTHORITY_POLICY_MATERIAL",
     "AUTONOMY_AUTHORITY_POLICY_VERSION",
     "AuthorityPolicyError",
+    "KNOWN_AUTHORITY_CHANGE_DIMENSIONS",
     "authority_can_auto_apply",
     "authority_scope_is_subset",
     "can_auto_apply",
