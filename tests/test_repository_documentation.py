@@ -199,6 +199,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     failure_recovery = item_block(active_queue, "M3.5-AUT-FAILURE-RECOVERY")
     assert "State: `DONE`" in failure_recovery
     assert "Evidence: `I/T/—`" in failure_recovery
+    assert "Closed by: Draft PR #59" in failure_recovery
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1

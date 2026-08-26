@@ -250,7 +250,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - State: `DONE`
   - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-EXECUTION-V2`.
-  - Closed by: Draft PR `M3.5-AUT-FAILURE-RECOVERY` (implementation branch; PR number is assigned when the draft is opened).
+  - Closed by: Draft PR #59 (`M3.5-AUT-FAILURE-RECOVERY`).
   - Definition of Done: versioned server-derived failure observations classify typed failure and effect certainty independently; one recovery decision is bounded by the current AutonomyGrant, SemanticBoundary, logical-tool schemas, durable retry/replan aggregates, and the existing Permission / Authorization / StartIntent / Controller successor chain. Unknown effects fail closed with no provider retry or effect, provider calls are checkpointed at most once, immutable attempt receipts support crash/replay/concurrency reconciliation, and historical v1/v2 artifacts remain unchanged. This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
 
 - [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
