@@ -589,6 +589,32 @@ class ScientificAgentHarnessController:
             return self._inspect(execution)
         return self._historical_inspection(execution)
 
+    def _has_terminal_receipt(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> bool:
+        """Return whether this immutable execution already stopped terminally.
+
+        Recovery starts a fresh Controller execution.  Once that successor
+        changes the run-scoped StageState, re-verifying the predecessor's
+        original plan against the new stage would otherwise make the old
+        execution appear resumable (or fail with source drift).  A committed
+        terminal receipt is the durable boundary that lets read-only callers
+        project the predecessor as historical evidence instead.
+        """
+
+        try:
+            latest = self._latest_receipt(execution)
+        except Exception:
+            return False
+        if latest is None:
+            return False
+        status = getattr(latest.status_after, "value", latest.status_after)
+        return str(status).lower() in {
+            AgentHarnessControllerStatus.FAILED.value.lower(),
+            AgentHarnessControllerStatus.CANCELLED.value.lower(),
+        }
+
     def create(
         self,
         *,
@@ -749,11 +775,19 @@ class ScientificAgentHarnessController:
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
             )
+            terminal_fallback = False
             if self._is_current_controller_policy(execution):
-                execution = self.verify_execution(
-                    project_id=project_id,
-                    controller_execution_id=controller_execution_id,
-                )
+                try:
+                    execution = self.verify_execution(
+                        project_id=project_id,
+                        controller_execution_id=controller_execution_id,
+                    )
+                except ScientificAgentHarnessControllerVerificationError:
+                    if not self._has_terminal_receipt(execution):
+                        raise
+                    terminal_fallback = True
+            else:
+                terminal_fallback = True
             for key, value in _controller_telemetry_attributes(
                 execution,
                 operation="agent.controller.inspect",
@@ -761,10 +795,17 @@ class ScientificAgentHarnessController:
                 phase="completed",
             ).items():
                 inspect_span.set_attribute(key, value)
-            return ControllerAdvanceResult(
-                execution=execution,
-                inspection=self._read_only_inspection(execution),
-            )
+            try:
+                inspection = (
+                    self._historical_inspection(execution)
+                    if terminal_fallback
+                    else self._read_only_inspection(execution)
+                )
+            except ScientificAgentHarnessControllerVerificationError:
+                if not self._has_terminal_receipt(execution):
+                    raise
+                inspection = self._historical_inspection(execution)
+            return ControllerAdvanceResult(execution=execution, inspection=inspection)
 
     def verified_remote_publications(
         self, *, project_id: str, controller_execution_id: str
@@ -1036,7 +1077,12 @@ class ScientificAgentHarnessController:
             expected_execution_digest=expected_controller_execution_digest,
             allow_historical=True,
         ) as execution:
-            inspection = self._read_only_inspection(execution)
+            try:
+                inspection = self._read_only_inspection(execution)
+            except ScientificAgentHarnessControllerVerificationError:
+                if not self._has_terminal_receipt(execution):
+                    raise
+                inspection = self._historical_inspection(execution)
             option_schema: dict[str, Any] | None = None
             task_id = inspection.current_task_id
             if task_id:
@@ -1073,10 +1119,14 @@ class ScientificAgentHarnessController:
                 controller_execution_id=controller_execution_id,
             )
             if self._is_current_controller_policy(execution):
-                execution = self.verify_execution(
-                    project_id=project_id,
-                    controller_execution_id=controller_execution_id,
-                )
+                try:
+                    execution = self.verify_execution(
+                        project_id=project_id,
+                        controller_execution_id=controller_execution_id,
+                    )
+                except ScientificAgentHarnessControllerVerificationError:
+                    if not allow_historical or not self._has_terminal_receipt(execution):
+                        raise
             elif not allow_historical:
                 self._require_current_controller_policy(execution)
             if (
@@ -1858,8 +1908,21 @@ class ScientificAgentHarnessController:
             if stage.status == RunStatus.RUNNING:
                 return self._inspection(execution, AgentHarnessControllerStatus.RECOVERY_REQUIRED, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
             if stage.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
-                status = AgentHarnessControllerStatus.FAILED if stage.status == RunStatus.FAILED else AgentHarnessControllerStatus.CANCELLED
-                return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
+                # A freshly authorized recovery successor is allowed to adopt
+                # the failed task slot only when its immutable proposal was
+                # built from this exact failed StageState.  The predecessor
+                # execution remains terminal because it already has a
+                # committed Controller receipt; an unanchored/unknown local
+                # failure therefore still stops fail-closed.
+                if stage.status == RunStatus.FAILED and self._is_recovery_successor_stage_bound(
+                    execution=execution,
+                    task_id=task.task_id,
+                    stage=stage,
+                ):
+                    pass
+                else:
+                    status = AgentHarnessControllerStatus.FAILED if stage.status == RunStatus.FAILED else AgentHarnessControllerStatus.CANCELLED
+                    return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
             if stage.status == RunStatus.SUCCEEDED:
                 publications = [
                     item
@@ -1922,6 +1985,63 @@ class ScientificAgentHarnessController:
             if any(not item.approved for item in decisions.values()):
                 return self._inspection(execution, AgentHarnessControllerStatus.FAILED, slot, AgentHarnessControllerAction.STOP_GATE_REJECTED, facts)
         return self._inspection(execution, AgentHarnessControllerStatus.ACTIVE, slot, AgentHarnessControllerAction.EXECUTE_LOCAL_TASK, facts)
+
+    def _is_recovery_successor_stage_bound(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        task_id: str,
+        stage: Any,
+    ) -> bool:
+        """Return whether a new execution is explicitly bound to a failed stage.
+
+        StageState is scoped to a run rather than a Controller execution.  A
+        new, freshly authorized successor may therefore legitimately reuse a
+        failed task slot, but only when its immutable proposal observed the
+        exact failed StageState and the successor has not already dispatched an
+        effect.  This keeps an old execution (including crash/unknown-effect
+        windows) terminal while giving the trusted recovery applicator a
+        Controller-owned path to start the newly authorized plan.
+        """
+
+        del task_id
+        try:
+            if not execution.client_request_id.startswith(
+                "recovery-successor-controller-"
+            ):
+                return False
+            if self.control_store.list_harness_controller_action_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            ):
+                return False
+            if self.control_store.list_harness_local_dispatch_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            ) or self.control_store.list_harness_local_execution_publications(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            ):
+                return False
+            publication = self.proposal_store.read(
+                project_id=execution.project_id,
+                proposal_id=execution.proposal_id,
+                verify_current=False,
+            )
+            bindings = list(getattr(publication.observation, "source_bindings", ()))
+            current_digest = self._stage_digest(stage)
+            for binding in bindings:
+                if (
+                    getattr(binding, "source_id", "") == "stage_state"
+                    and bool(getattr(binding, "present", False))
+                    and getattr(binding, "source_digest", "") == current_digest
+                ):
+                    return True
+        except Exception:
+            # This helper is only an opt-in successor boundary.  Any missing
+            # or malformed authority must leave the Controller terminal.
+            return False
+        return False
 
     def _inspect_remote_action(self, execution: Any, slot: Any, facts: list[Any]):
         remote = self._remote_inspection_or_none(execution, slot)

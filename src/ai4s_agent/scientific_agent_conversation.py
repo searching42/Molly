@@ -109,10 +109,19 @@ from ai4s_agent.scientific_agent_replanner import (
     ReplannerL2FailureResult,
     ScientificAgentReplannerService,
 )
+from ai4s_agent.scientific_agent_failure_recovery_runtime import (
+    FailureRecoveryRuntimeEligibility,
+    FailureRecoveryRuntimeResult,
+    ScientificAgentFailureRecoveryRuntime,
+)
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
     AgentAutonomyActionClass,
+    AgentEffectCertainty,
+    AgentFailureClass,
     AgentAutonomyPolicyDecision,
+    AgentRecoveryAction,
+    AgentRecoveryOutcome,
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerAction,
     AgentHarnessControllerActionBoundaryClass,
@@ -144,6 +153,7 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
         "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
         "DETERMINISTIC_FASTPATH_STEP",
         "EXECUTION_AGENT_V2_STEP",
+        "RECOVERY_SUCCESSOR_COMMITTED",
     }
 )
 ACTIVE_SESSION_STATUSES = frozenset(
@@ -422,6 +432,8 @@ class ScientificAgentConversationSessionService:
         resource_authority_service: Any | None = None,
         result_projection_service: ScientificAgentResultProjectionService | None = None,
         replanner: ScientificAgentReplannerService | None = None,
+        failure_recovery_runtime: ScientificAgentFailureRecoveryRuntime | None = None,
+        failure_recovery_enabled: bool = False,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.projects = projects
@@ -436,6 +448,8 @@ class ScientificAgentConversationSessionService:
         self.resource_authority_service = resource_authority_service
         self.result_projection_service = result_projection_service
         self.replanner = replanner
+        self.failure_recovery_runtime = failure_recovery_runtime
+        self.failure_recovery_enabled = bool(failure_recovery_enabled and failure_recovery_runtime is not None)
         self.clock = clock
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
@@ -485,6 +499,27 @@ class ScientificAgentConversationSessionService:
             "controller_execution_digest": "",
             "controller_status": "",
             "current_task_id": "",
+            # Recovery fields are observer-only projections.  The immutable
+            # observation/decision/receipt and the Controller remain the
+            # authority; these fields only make a bounded continuation
+            # visible and replayable to Conversation clients.
+            "last_recovery_failure_id": "",
+            "last_recovery_failure_digest": "",
+            "last_recovery_failure_class": "",
+            "last_recovery_effect_certainty": "",
+            "last_recovery_decision_id": "",
+            "last_recovery_decision_digest": "",
+            "last_recovery_receipt_id": "",
+            "last_recovery_receipt_digest": "",
+            "last_recovery_action": "",
+            "last_recovery_outcome": "",
+            "last_recovery_retry_ordinal": 0,
+            "last_recovery_replan_ordinal": 0,
+            "recovery_provider_calls": 0,
+            "recovery_effect_count": 0,
+            "recovery_session_id": "",
+            "recovery_authority_epoch": "",
+            "recovery_question": "",
             "authority_kind": "",
             "gate_id": "",
             "snapshot_id": "",
@@ -695,6 +730,23 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_id",
                 "controller_status",
                 "current_task_id",
+                "last_recovery_failure_id",
+                "last_recovery_failure_digest",
+                "last_recovery_failure_class",
+                "last_recovery_effect_certainty",
+                "last_recovery_decision_id",
+                "last_recovery_decision_digest",
+                "last_recovery_receipt_id",
+                "last_recovery_receipt_digest",
+                "last_recovery_action",
+                "last_recovery_outcome",
+                "last_recovery_retry_ordinal",
+                "last_recovery_replan_ordinal",
+                "recovery_provider_calls",
+                "recovery_effect_count",
+                "recovery_session_id",
+                "recovery_authority_epoch",
+                "recovery_question",
                 "authority_kind",
                 "gate_id",
                 "snapshot_id",
@@ -787,6 +839,23 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest",
                 "controller_status",
                 "current_task_id",
+                "last_recovery_failure_id",
+                "last_recovery_failure_digest",
+                "last_recovery_failure_class",
+                "last_recovery_effect_certainty",
+                "last_recovery_decision_id",
+                "last_recovery_decision_digest",
+                "last_recovery_receipt_id",
+                "last_recovery_receipt_digest",
+                "last_recovery_action",
+                "last_recovery_outcome",
+                "last_recovery_retry_ordinal",
+                "last_recovery_replan_ordinal",
+                "recovery_provider_calls",
+                "recovery_effect_count",
+                "recovery_session_id",
+                "recovery_authority_epoch",
+                "recovery_question",
                 "authority_kind",
                 "gate_id",
                 "snapshot_id",
@@ -1073,6 +1142,72 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationSessionError(
                 "conversation resource authority projection is invalid"
             )
+        recovery_ids = (
+            "last_recovery_failure_id",
+            "last_recovery_decision_id",
+            "last_recovery_receipt_id",
+            "recovery_session_id",
+            "recovery_authority_epoch",
+        )
+        for field in recovery_ids:
+            value = str(result.get(field) or "")
+            if value and SESSION_ID_PATTERN.fullmatch(value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation recovery identity projection is invalid"
+                )
+        for field in (
+            "last_recovery_failure_digest",
+            "last_recovery_decision_digest",
+            "last_recovery_receipt_digest",
+        ):
+            value = str(result.get(field) or "")
+            if value and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation recovery digest projection is invalid"
+                )
+        if str(result.get("last_recovery_failure_class") or "") not in {
+            "",
+            *(item.value for item in AgentFailureClass),
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation recovery failure class projection is invalid"
+            )
+        if str(result.get("last_recovery_effect_certainty") or "") not in {
+            "",
+            *(item.value for item in AgentEffectCertainty),
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation recovery effect certainty projection is invalid"
+            )
+        if str(result.get("last_recovery_action") or "") not in {
+            "",
+            *(item.value for item in AgentRecoveryAction),
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation recovery action projection is invalid"
+            )
+        if str(result.get("last_recovery_outcome") or "") not in {
+            "",
+            *(item.value for item in AgentRecoveryOutcome),
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation recovery outcome projection is invalid"
+            )
+        for field in (
+            "last_recovery_retry_ordinal",
+            "last_recovery_replan_ordinal",
+            "recovery_provider_calls",
+            "recovery_effect_count",
+        ):
+            value = result.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ScientificAgentConversationSessionError(
+                    "conversation recovery count projection is invalid"
+                )
+        if not isinstance(result.get("recovery_question"), str):
+            raise ScientificAgentConversationSessionError(
+                "conversation recovery question projection is invalid"
+            )
         if result["project_id"] != project_id or result["conversation_id"] != conversation_id:
             raise ScientificAgentConversationSessionError("conversation session identity mismatch")
         return result
@@ -1154,6 +1289,19 @@ class ScientificAgentConversationSessionService:
                     "scientific_results",
                     "scientific_result_status",
                     "scientific_result_reason_code",
+                    "last_recovery_failure_id",
+                    "last_recovery_failure_class",
+                    "last_recovery_effect_certainty",
+                    "last_recovery_decision_id",
+                    "last_recovery_receipt_id",
+                    "last_recovery_action",
+                    "last_recovery_outcome",
+                    "last_recovery_retry_ordinal",
+                    "last_recovery_replan_ordinal",
+                    "recovery_provider_calls",
+                    "recovery_effect_count",
+                    "recovery_session_id",
+                    "recovery_authority_epoch",
                 }:
                     if key == "scientific_results":
                         safe_data[key] = list(state.get("result_projections") or [])
@@ -1595,6 +1743,33 @@ class ScientificAgentConversationSessionService:
             project_id=clean_project,
             conversation_id=clean_conversation,
         )
+        if (
+            self.failure_recovery_enabled
+            and self.controller is not None
+            and state.get("controller_execution_id")
+        ):
+            # A crash can leave the Conversation projection one revision
+            # behind the authoritative Controller.  Classify that turn as a
+            # recovery turn before the route resolves/suppresses a provider.
+            try:
+                current = self.controller.get(
+                    project_id=clean_project,
+                    controller_execution_id=str(state["controller_execution_id"]),
+                )
+                current_status = getattr(current.inspection.status, "value", current.inspection.status)
+                if str(current_status).lower() in {"failed", "recovery_required"}:
+                    return "recovery"
+            except (FileNotFoundError, ScientificAgentHarnessControllerError, ValueError):
+                pass
+        if self.failure_recovery_enabled and state.get("status") in {
+            "failed",
+            "recovery_required",
+        }:
+            # ``recovery_required`` is already a durable human/closed
+            # boundary.  Keep it out of ordinary planning even when a crash
+            # left the projection without a Controller binding; otherwise a
+            # later chat message could accidentally start a fresh run.
+            return "recovery"
         if state.get("status") in ACTIVE_SESSION_STATUSES:
             if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
                 return "paused"
@@ -1740,6 +1915,16 @@ class ScientificAgentConversationSessionService:
         )
         input_binding: dict[str, Any] | None = None
         if input_bundle_id:
+            if self.failure_recovery_enabled and (
+                state.get("status") in {"failed", "recovery_required"}
+                or state.get("controller_execution_id")
+            ):
+                # A recovery continuation is bound to the failed Controller's
+                # immutable input evidence.  Do not let a turn payload bind a
+                # new bundle before the runtime has even read that authority.
+                raise ScientificAgentConversationSessionError(
+                    "input bundles cannot be changed during failure recovery"
+                )
             try:
                 input_binding = self.bind_input_bundle(
                     project_id=clean_project,
@@ -1748,6 +1933,56 @@ class ScientificAgentConversationSessionService:
                 )
             except ScientificAgentRunInputBindingError:
                 raise
+        if self.failure_recovery_enabled and state.get("status") in {
+            "failed",
+            "recovery_required",
+        }:
+            if state.get("controller_execution_id") and state.get("proposal_id"):
+                return self._handle_existing_execution(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    provider=provider,
+                    provider_binding_digest=provider_binding_digest,
+                )
+            message = self._active_execution_message(state)
+            return ScientificAgentConversationTurnResult(
+                decision={
+                    "project_id": clean_project,
+                    "run_id": clean_run,
+                    "status": state.get("status") or "recovery_required",
+                    "decision": "recovery_required",
+                    "summary": message,
+                    "modeling_plan_payload": {},
+                    "questions": [],
+                    "pending_cited_target_evidence": [],
+                    "next_actions": ["use_the_separate_current_authority_operation"],
+                    "blocked_reasons": [
+                        str(state.get("reason_code") or "RECOVERY_REQUIRES_HUMAN")
+                    ],
+                    "requires_user_response": True,
+                    "executable": False,
+                },
+                assistant_message=message,
+                assistant_source="scientific_agent_session",
+                llm_used=False,
+                session=self.session_projection(state),
+            )
+        if (
+            self.failure_recovery_enabled
+            and state.get("status") == "failed"
+            and state.get("controller_execution_id")
+            and state.get("proposal_id")
+        ):
+            return self._handle_existing_execution(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                run_id=clean_run,
+                state=state,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
+            )
         if state.get("status") in ACTIVE_SESSION_STATUSES:
             messages = self._messages(
                 project_id=clean_project,
@@ -2378,6 +2613,7 @@ class ScientificAgentConversationSessionService:
                 "phase": "conversational_authority",
             },
         )
+        previous_proposal_id = str(state.get("proposal_id") or "")
         controller_result, state, _stop_reason = self._auto_progress(
             project_id=project_id,
             conversation_id=conversation_id,
@@ -2386,6 +2622,18 @@ class ScientificAgentConversationSessionService:
             provider=provider,
             provider_binding_digest=provider_binding_digest,
         )
+        if state.get("status") in {"approval_required", "plan_review"} and state.get(
+            "proposal_id"
+        ) != previous_proposal_id:
+            pending = self._read_pending_publication(state, project_id)
+            return self._plan_result(
+                decision=decision,
+                state=state,
+                publication=pending,
+                assistant_message=self._plan_summary(pending)["assistant_message"],
+                assistant_source="scientific_agent_failure_recovery",
+                llm_used=provider is not None,
+            )
         publication = self._read_active_publication(state, project_id)
         return ScientificAgentConversationTurnResult(
             decision=decision,
@@ -2576,6 +2824,18 @@ class ScientificAgentConversationSessionService:
             provider=provider,
             provider_binding_digest=provider_binding_digest,
         )
+        if state.get("status") in {"approval_required", "plan_review"} and state.get(
+            "proposal_id"
+        ) != proposal.proposal_id:
+            pending = self._read_pending_publication(state, project_id)
+            return self._plan_result(
+                decision=decision,
+                state=state,
+                publication=pending,
+                assistant_message=self._plan_summary(pending)["assistant_message"],
+                assistant_source="scientific_agent_failure_recovery",
+                llm_used=provider is not None,
+            )
         return ScientificAgentConversationTurnResult(
             decision=decision,
             assistant_message=self._active_execution_message(state),
@@ -2835,6 +3095,364 @@ class ScientificAgentConversationSessionService:
         }
 
     @staticmethod
+    def _recovery_observer_updates(
+        *,
+        runtime_result: FailureRecoveryRuntimeResult,
+        controller_result: ControllerAdvanceResult | None,
+    ) -> dict[str, Any]:
+        """Build a privacy-safe Conversation projection from recovery artifacts."""
+
+        observation = runtime_result.observation
+        recovery = runtime_result.recovery
+        updates: dict[str, Any] = {
+            "recovery_session_id": runtime_result.session_id,
+            "recovery_authority_epoch": runtime_result.authority_epoch,
+            "recovery_provider_calls": max(0, int(runtime_result.provider_calls_total)),
+            "recovery_effect_count": max(0, int(runtime_result.effect_count_total)),
+            "recovery_question": str(runtime_result.question or ""),
+        }
+        if observation is not None:
+            updates.update(
+                {
+                    "last_recovery_failure_id": observation.failure_id,
+                    "last_recovery_failure_digest": observation.failure_digest,
+                    "last_recovery_failure_class": (
+                        runtime_result.failure_class or observation.failure_class
+                    ).value,
+                    "last_recovery_effect_certainty": (
+                        runtime_result.effect_certainty or observation.effect_certainty
+                    ).value,
+                }
+            )
+        if recovery is not None:
+            receipt = recovery.receipt
+            updates.update(
+                {
+                    "last_recovery_decision_id": recovery.decision.decision_id,
+                    "last_recovery_decision_digest": recovery.decision.decision_digest,
+                    "last_recovery_receipt_id": receipt.receipt_id,
+                    "last_recovery_receipt_digest": receipt.receipt_digest,
+                    "last_recovery_action": receipt.recovery_action.value,
+                    "last_recovery_outcome": receipt.outcome.value,
+                    "last_recovery_retry_ordinal": int(receipt.retry_ordinal),
+                    "last_recovery_replan_ordinal": int(receipt.replan_ordinal),
+                }
+            )
+        if controller_result is not None:
+            execution = controller_result.execution
+            # A recovery RETRY_EXACT/TOOL_CALL creates a new proposal,
+            # authorization, StartIntent, and Controller execution.  Project
+            # every non-empty authoritative binding together; retaining the
+            # predecessor proposal would make the next Conversation turn
+            # read stale artifacts even though the successor was committed.
+            for field in (
+                "proposal_id",
+                "proposal_digest",
+                "authorization_id",
+                "authorization_digest",
+                "start_intent_id",
+                "start_intent_digest",
+                "controller_execution_id",
+                "execution_digest",
+            ):
+                value = str(getattr(execution, field, "") or "")
+                if value:
+                    updates[
+                        "controller_execution_digest"
+                        if field == "execution_digest"
+                        else "controller_execution_id"
+                        if field == "controller_execution_id"
+                        else field
+                    ] = value
+            status_value = getattr(
+                controller_result.inspection.status,
+                "value",
+                controller_result.inspection.status,
+            )
+            updates["controller_status"] = str(status_value or "")
+            updates["current_task_id"] = str(
+                getattr(controller_result.inspection, "current_task_id", "") or ""
+            )
+        return updates
+
+    def _apply_failure_recovery(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        state: dict[str, Any],
+        controller_result: ControllerAdvanceResult,
+        provider: LLMProvider | None,
+    ) -> tuple[ControllerAdvanceResult | None, dict[str, Any], str]:
+        """Consume exactly one recovery operation for the current FAILED state.
+
+        The runtime adapter owns eligibility/evidence and the foundation owns
+        all recovery decisions/effects.  This method only projects the result
+        and returns immediately; a successor is observed on a later bounded
+        coordinator invocation, so a failure cannot create an implicit loop.
+        """
+
+        runtime = self.failure_recovery_runtime
+        if not self.failure_recovery_enabled or runtime is None:
+            raise ScientificAgentConversationSessionError(
+                "failure recovery runtime is not configured"
+            )
+        runtime_result = runtime.continue_failed(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            run_id=str(state.get("run_id") or controller_result.execution.run_id),
+            state=state,
+            controller_result=controller_result,
+            provider=provider,
+        )
+        current_controller_result = (
+            runtime_result.controller_result
+            if isinstance(runtime_result.controller_result, ControllerAdvanceResult)
+            else controller_result
+        )
+        updates = self._recovery_observer_updates(
+            runtime_result=runtime_result,
+            controller_result=current_controller_result,
+        )
+        if runtime_result.eligibility is not FailureRecoveryRuntimeEligibility.ELIGIBLE:
+            reason = runtime_result.reason_code or "RECOVERY_EVIDENCE_UNAVAILABLE"
+            # All pre-foundation failures are durable human/closed boundaries;
+            # no provider, replan, or effect is allowed past this transition.
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="recovery_required",
+                reason_code=reason,
+                updates=updates,
+                event_type="failure_recovery.required",
+                message=runtime_result.question,
+                event_data={
+                    "controller_status": str(
+                        getattr(
+                            current_controller_result.inspection.status,
+                            "value",
+                            current_controller_result.inspection.status,
+                        )
+                    ),
+                    "current_task_id": current_controller_result.inspection.current_task_id,
+                    "last_recovery_failure_id": updates.get("last_recovery_failure_id", ""),
+                    "last_recovery_failure_class": updates.get("last_recovery_failure_class", ""),
+                    "last_recovery_effect_certainty": updates.get("last_recovery_effect_certainty", ""),
+                    "recovery_provider_calls": updates["recovery_provider_calls"],
+                    "recovery_effect_count": updates["recovery_effect_count"],
+                    "phase": "failure_recovery",
+                },
+            )
+            return current_controller_result, state, reason
+
+        recovery = runtime_result.recovery
+        if recovery is None:
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="recovery_required",
+                reason_code="RECOVERY_EVIDENCE_UNAVAILABLE",
+                updates=updates,
+                event_type="failure_recovery.required",
+                message="当前失败没有可验证的 recovery receipt，已停止自动恢复。",
+                event_data={"phase": "failure_recovery"},
+            )
+            return current_controller_result, state, "RECOVERY_EVIDENCE_UNAVAILABLE"
+
+        decision = recovery.decision
+        receipt = recovery.receipt
+        action = decision.recovery_action
+        if action is AgentRecoveryAction.ASK_USER:
+            reason = (
+                "RECOVERY_UNKNOWN_EFFECT"
+                if runtime_result.effect_certainty is AgentEffectCertainty.EFFECT_UNKNOWN
+                else "RECOVERY_BUDGET_EXHAUSTED"
+                if recovery is not None
+                and (
+                    (
+                        runtime_result.failure_class
+                        in {
+                            AgentFailureClass.TRANSIENT,
+                            AgentFailureClass.PARAMETER_RECOVERABLE,
+                            AgentFailureClass.ALTERNATIVE_TOOL_AVAILABLE,
+                        }
+                        and recovery.budget.retries_remaining <= 0
+                    )
+                    or (
+                        runtime_result.failure_class
+                        is AgentFailureClass.INPUT_EVIDENCE_INSUFFICIENT
+                        and recovery.budget.replans_remaining <= 0
+                    )
+                )
+                else "RECOVERY_REQUIRES_HUMAN"
+            )
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="recovery_required",
+                reason_code=reason,
+                updates=updates,
+                event_type="failure_recovery.ask_user",
+                message=(
+                    runtime_result.question
+                    or "当前失败需要显式的人类恢复决定；Molly 不会自动继续。"
+                ),
+                event_data={
+                    "last_recovery_action": action.value,
+                    "last_recovery_outcome": receipt.outcome.value,
+                    "last_recovery_retry_ordinal": receipt.retry_ordinal,
+                    "last_recovery_replan_ordinal": receipt.replan_ordinal,
+                    "recovery_provider_calls": updates["recovery_provider_calls"],
+                    "recovery_effect_count": updates["recovery_effect_count"],
+                    "phase": "failure_recovery",
+                },
+            )
+            return current_controller_result, state, reason
+        if action is AgentRecoveryAction.STOP:
+            reason = (
+                "RECOVERY_NONRECOVERABLE"
+                if runtime_result.failure_class is AgentFailureClass.NONRECOVERABLE
+                else "RECOVERY_BUDGET_EXHAUSTED"
+                if "BUDGET" in "_".join(decision.reason_codes)
+                else "RECOVERY_STOPPED"
+            )
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="failed",
+                reason_code=reason,
+                updates=updates,
+                event_type="failure_recovery.stopped",
+                message="当前失败无法在现有 authority 内安全恢复，已停止。",
+                event_data={
+                    "last_recovery_action": action.value,
+                    "last_recovery_outcome": receipt.outcome.value,
+                    "last_recovery_retry_ordinal": receipt.retry_ordinal,
+                    "last_recovery_replan_ordinal": receipt.replan_ordinal,
+                    "recovery_provider_calls": updates["recovery_provider_calls"],
+                    "recovery_effect_count": updates["recovery_effect_count"],
+                    "phase": "failure_recovery",
+                },
+            )
+            return current_controller_result, state, reason
+        if action is AgentRecoveryAction.REPLAN:
+            successor_id = str(receipt.successor_proposal_id or "")
+            successor_digest = str(receipt.successor_proposal_digest or "")
+            if not successor_id or not successor_digest:
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="recovery_required",
+                    reason_code="RECOVERY_REPLAN_UNAVAILABLE",
+                    updates=updates,
+                    event_type="failure_recovery.replan_unavailable",
+                    message="恢复规划没有发布可验证的 successor proposal，已停止。",
+                    event_data={"phase": "failure_recovery"},
+                )
+                return current_controller_result, state, "RECOVERY_REPLAN_UNAVAILABLE"
+            updates.update(
+                {
+                    "proposal_id": successor_id,
+                    "proposal_digest": successor_digest,
+                    "authorization_id": "",
+                    "authorization_digest": "",
+                    "start_intent_id": "",
+                    "start_intent_digest": "",
+                    "controller_execution_id": "",
+                    "controller_execution_digest": "",
+                    "controller_status": str(
+                        getattr(
+                            current_controller_result.inspection.status,
+                            "value",
+                            current_controller_result.inspection.status,
+                        )
+                    ),
+                    "current_task_id": current_controller_result.inspection.current_task_id,
+                }
+            )
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="approval_required",
+                reason_code="RECOVERY_REPLAN_REVIEW_REQUIRED",
+                updates=updates,
+                event_type="failure_recovery.replan_committed",
+                message="恢复产生了新的计划版本，等待显式审阅与授权。",
+                event_data={
+                    "proposal_id": successor_id,
+                    "proposal_digest": successor_digest,
+                    "last_recovery_action": action.value,
+                    "last_recovery_outcome": receipt.outcome.value,
+                    "last_recovery_retry_ordinal": receipt.retry_ordinal,
+                    "last_recovery_replan_ordinal": receipt.replan_ordinal,
+                    "phase": "failure_recovery",
+                },
+            )
+            return current_controller_result, state, "RECOVERY_REPLAN_REVIEW_REQUIRED"
+
+        # RETRY_EXACT and TOOL_CALL both carry a fully verified successor
+        # Controller in the runtime result.  Never infer effect from the
+        # function call; only the immutable receipt and reread snapshot count.
+        successor = runtime_result.controller_result
+        if not isinstance(successor, ControllerAdvanceResult):
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="recovery_required",
+                reason_code="RECOVERY_SUCCESSOR_STATE_UNAVAILABLE",
+                updates=updates,
+                event_type="failure_recovery.required",
+                message="恢复 successor 已提交，但当前 Controller 状态无法验证。",
+                event_data={"phase": "failure_recovery"},
+            )
+            return current_controller_result, state, "RECOVERY_SUCCESSOR_STATE_UNAVAILABLE"
+        successor_status = getattr(
+            successor.inspection.status,
+            "value",
+            successor.inspection.status,
+        )
+        if str(successor_status).lower() == AgentHarnessControllerStatus.FAILED.value:
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="failed",
+                reason_code="RECOVERY_SUCCESSOR_FAILED",
+                updates=updates,
+                event_type="failure_recovery.successor_failed",
+                message="恢复 successor 也已失败；下一次有界调用将重新读取该失败。",
+                event_data={
+                    "controller_status": str(successor_status),
+                    "current_task_id": successor.inspection.current_task_id,
+                    "phase": "failure_recovery",
+                },
+            )
+            return successor, state, "RECOVERY_SUCCESSOR_FAILED"
+        # Keep a resumable marker even when the reread is already SUCCEEDED;
+        # the next coordinator turn runs the existing terminal projection and
+        # no recovery call is hidden in this iteration.
+        state = self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="running",
+            reason_code="RECOVERY_SUCCESSOR_COMMITTED",
+            updates=updates,
+            event_type="failure_recovery.committed",
+            message="恢复 successor 已通过现有 authority chain 提交；下一次有界调用将继续读取 Controller。",
+            event_data={
+                "controller_status": str(successor_status),
+                "current_task_id": successor.inspection.current_task_id,
+                "last_recovery_action": action.value,
+                "last_recovery_outcome": receipt.outcome.value,
+                "last_recovery_retry_ordinal": receipt.retry_ordinal,
+                "last_recovery_replan_ordinal": receipt.replan_ordinal,
+                "recovery_provider_calls": updates["recovery_provider_calls"],
+                "recovery_effect_count": updates["recovery_effect_count"],
+                "phase": "failure_recovery",
+            },
+        )
+        return successor, state, "RECOVERY_SUCCESSOR_COMMITTED"
+
+    @staticmethod
     def _l1_human_state(
         *,
         action: AgentHarnessControllerAction,
@@ -3054,8 +3672,10 @@ class ScientificAgentConversationSessionService:
                     conversation_id=clean_conversation,
                     run_id=clean_run,
                     state=state,
-                    provider=None,
-                    provider_binding_digest="",
+                    provider=provider if self.failure_recovery_enabled else None,
+                    provider_binding_digest=(
+                        provider_binding_digest if self.failure_recovery_enabled else ""
+                    ),
                 )
 
             proposal_id = str(state.get("proposal_id") or "")
@@ -3799,6 +4419,21 @@ class ScientificAgentConversationSessionService:
         for step in range(MAX_AUTO_STEPS):
             inspection = controller_result.inspection
             status = inspection.status
+            if self.failure_recovery_enabled and status in {
+                AgentHarnessControllerStatus.FAILED,
+                AgentHarnessControllerStatus.RECOVERY_REQUIRED,
+            }:
+                # One and only one foundation invocation belongs to this
+                # coordinator iteration.  The returned successor is reread
+                # and projected, then the method returns without looping back
+                # into recovery.
+                return self._apply_failure_recovery(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    state=state,
+                    controller_result=controller_result,
+                    provider=provider,
+                )
             terminal_l1_updates: dict[str, Any] = {}
             if status in {
                 AgentHarnessControllerStatus.SUCCEEDED,
@@ -4768,6 +5403,27 @@ class ScientificAgentConversationSessionService:
 
     @staticmethod
     def _active_execution_message(state: dict[str, Any]) -> str:
+        if str(state.get("reason_code") or "").startswith("RECOVERY_"):
+            question = str(state.get("recovery_question") or "").strip()
+            if question and state.get("status") == "recovery_required":
+                return question
+            recovery_messages = {
+                "RECOVERY_SUCCESSOR_COMMITTED": (
+                    "恢复 successor 已提交；下一次有界调用将重新读取并验证当前 Controller。"
+                ),
+                "RECOVERY_SUCCESSOR_FAILED": (
+                    "恢复 successor 也已失败；下一次有界调用将重新读取该失败。"
+                ),
+                "RECOVERY_NONRECOVERABLE": "当前失败不可在现有 authority 内安全恢复，已停止。",
+                "RECOVERY_BUDGET_EXHAUSTED": "恢复预算已耗尽，未执行新的 provider 或 effect。",
+                "RECOVERY_UNKNOWN_EFFECT": "effect 结果未知，需要显式的人类处理；Molly 不会自动重试。",
+                "RECOVERY_AUTONOMY_GRANT_REQUIRED": "当前失败没有可验证的 server-issued AutonomyGrant，已停止自动恢复。",
+                "RECOVERY_AUTONOMY_GRANT_STALE": "当前 recovery authority 已过期，需要重新检查。",
+                "RECOVERY_REQUIRES_HUMAN": "当前失败需要显式的人类恢复决定；Molly 不会自动继续。",
+                "RECOVERY_REPLAN_REVIEW_REQUIRED": "恢复产生了新的计划版本，等待显式审阅与授权。",
+            }
+            if str(state.get("reason_code")) in recovery_messages:
+                return recovery_messages[str(state.get("reason_code"))]
         if state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP":
             return "当前确定性后继仍由 Harness Controller 管理；下一次有界 tick 或对话将重新读取并验证当前状态。"
         if state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS:
@@ -4884,10 +5540,70 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationStaleAuthority(
                 "active Controller execution digest no longer matches the session"
             )
+        current_status = getattr(
+            controller_result.inspection.status,
+            "value",
+            controller_result.inspection.status,
+        )
+        if self.failure_recovery_enabled and str(current_status).lower() in {
+            "failed",
+            "recovery_required",
+        }:
+            before_provider_calls = int(state.get("recovery_provider_calls") or 0)
+            controller_result, resumed_state, _stop_reason = self._auto_progress(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                state=state,
+                controller_result=controller_result,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
+            )
+            if resumed_state.get("status") in {"approval_required", "plan_review"}:
+                pending = self._read_pending_publication(resumed_state, project_id)
+                decision = {
+                    "project_id": project_id,
+                    "run_id": str(resumed_state.get("run_id") or run_id),
+                    "status": "recovery_replan_review",
+                    "decision": "recovery_replan_review",
+                    "summary": "恢复产生了新的计划版本，等待显式审阅与授权。",
+                    "modeling_plan_payload": {},
+                    "questions": [],
+                    "pending_cited_target_evidence": [],
+                    "next_actions": ["review_and_explicitly_authorize_successor_plan"],
+                    "blocked_reasons": [str(resumed_state.get("reason_code") or "RECOVERY_REPLAN_REVIEW_REQUIRED")],
+                    "requires_user_response": True,
+                    "executable": False,
+                }
+                return self._plan_result(
+                    decision=decision,
+                    state=resumed_state,
+                    publication=pending,
+                    assistant_message=self._plan_summary(pending)["assistant_message"],
+                    assistant_source="scientific_agent_failure_recovery",
+                    llm_used=int(resumed_state.get("recovery_provider_calls") or 0) > before_provider_calls,
+                )
+            if controller_result is None:
+                raise ScientificAgentConversationSessionError(
+                    "failure recovery did not return a Controller projection"
+                )
+            try:
+                active_publication = self._read_active_publication(resumed_state, project_id)
+            except ScientificAgentConversationStaleAuthority:
+                active_publication = publication
+            return self._active_execution_result(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                state=resumed_state,
+                publication=active_publication,
+                controller_result=controller_result,
+                llm_used=int(resumed_state.get("recovery_provider_calls") or 0) > before_provider_calls,
+            )
         resumable_reason = state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
         if resumable_reason and (
             provider is not None
             or state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP"
+            or state.get("reason_code") == "RECOVERY_SUCCESSOR_COMMITTED"
         ):
             llm_calls_before = self._observed_l1_llm_calls(
                 controller_result=controller_result

@@ -67,6 +67,14 @@ from ai4s_agent.scientific_agent_harness_controller import (
     ScientificAgentHarnessController,
 )
 from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerService
+from ai4s_agent.scientific_agent_failure_recovery import (
+    ScientificAgentRecoverySuccessorApplicator,
+)
+from ai4s_agent.scientific_agent_failure_recovery_runtime import (
+    ScientificAgentAutonomyGrantStore,
+    ScientificAgentFailureRecoveryRuntime,
+    ScientificAgentFailureRecoveryServiceFactory,
+)
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
@@ -301,6 +309,60 @@ def register_routes(
         execution_agent_store=execution_agent_store,
         tracer=harness_tracer,
     )
+    # Failure recovery is a server opt-in continuation.  Conversation only
+    # receives this fixed factory/runtime; it cannot supply a grant, actor,
+    # provider endpoint, or arbitrary successor callback from a request.
+    recovery_grant_store = ScientificAgentAutonomyGrantStore(storage=projects)
+    recovery_actor = str(app.config.get("AI4S_AGENT_AUTHORIZATION_OWNER") or "system").strip() or "system"
+    recovery_actor_source = "config:AI4S_AGENT_AUTHORIZATION_OWNER"
+    recovery_successor = ScientificAgentRecoverySuccessorApplicator(
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        controller=harness_controller,
+        registry=scientific_task_registry,
+        actor=recovery_actor,
+        actor_source=recovery_actor_source,
+    )
+    recovery_tool_schemas: dict[str, dict[str, Any]] = {}
+    recovery_tool_boundaries: dict[str, str] = {}
+    if scientific_task_registry is not None:
+        for task_spec in scientific_task_registry.list_tasks():
+            logical_id = str(getattr(task_spec, "scientific_tool_id", "") or "")
+            if not logical_id:
+                continue
+            recovery_tool_schemas[logical_id] = dict(getattr(task_spec, "option_schema", {}) or {})
+            recovery_tool_boundaries[logical_id] = (
+                "SCIENTIFIC_CONFIRMATION"
+                if getattr(task_spec, "gates", ())
+                else "NONE"
+            )
+    recovery_factory = ScientificAgentFailureRecoveryServiceFactory(
+        storage=projects,
+        controller=harness_controller,
+        replanner=replanner,
+        successor_applicator=recovery_successor,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        registry=scientific_task_registry,
+        tool_schemas=recovery_tool_schemas,
+        tool_semantic_boundaries=recovery_tool_boundaries,
+        actor=recovery_actor,
+        actor_source=recovery_actor_source,
+    )
+    recovery_runtime = ScientificAgentFailureRecoveryRuntime(
+        storage=projects,
+        controller=harness_controller,
+        grant_source=recovery_grant_store,
+        service_factory=recovery_factory,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        registry=scientific_task_registry,
+        store=recovery_factory.store,
+    )
+    app.extensions["scientific_agent_failure_recovery_grant_store"] = recovery_grant_store
+    app.extensions["scientific_agent_failure_recovery_successor"] = recovery_successor
+    app.extensions["scientific_agent_failure_recovery_service_factory"] = recovery_factory
+    app.extensions["scientific_agent_failure_recovery_runtime"] = recovery_runtime
     conversation_session_service = ScientificAgentConversationSessionService(
         projects=projects,
         conversations=conversations,
@@ -318,6 +380,10 @@ def register_routes(
         resource_authority_service=app.extensions["remote_resource_authority_service"],
         result_projection_service=result_projection_service,
         replanner=replanner,
+        failure_recovery_runtime=recovery_runtime,
+        failure_recovery_enabled=_as_bool(
+            app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")
+        ),
     )
     register_scientific_agent_conversation_routes(
         app,
