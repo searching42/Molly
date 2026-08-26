@@ -31,6 +31,10 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config.setdefault("AI4S_PROFILE", selected_profile())
+    app.config.setdefault(
+        "AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED",
+        os.environ.get("AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED", "false"),
+    )
     if scientific_task_registry is None:
         registry_id = os.environ.get("AI4S_SCIENTIFIC_TASK_REGISTRY", "").strip()
         if registry_id == "br1-private-real-tool-v3":
