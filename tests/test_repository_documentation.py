@@ -99,7 +99,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
     assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
     assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
-    assert "Current focus: M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor" in roadmap
+    assert "Current focus: M3.5-AUT-EXECUTION-V2 — Execution Agent v2" in roadmap
     assert "### M3.5-AUT-POLICY contract closure" in roadmap
     assert "### M3.5-AUT-L2 implementation closure" in roadmap
     assert "A new Controller action cannot inherit autonomous eligibility" in roadmap
@@ -163,8 +163,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-BR2-ACCEPT", "READY"),
         ("M3.5-AUT-AUTH", "DONE"),
         ("M3.5-AUT-AUTH-L2", "DONE"),
-        ("M3.5-AUT-FASTPATH", "READY"),
-        ("M3.5-AUT-EXECUTION-V2", "QUEUED"),
+        ("M3.5-AUT-FASTPATH", "DONE"),
+        ("M3.5-AUT-EXECUTION-V2", "READY"),
         ("M3.5-AUT-FAILURE-RECOVERY", "QUEUED"),
         ("M3.5-AUT-FEEDBACK", "QUEUED"),
         ("M3.5-AUT-LEASE", "QUEUED"),
@@ -187,7 +187,12 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "fresh real conversation acceptance has not been rerun" in br2_accept
     assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-AUTH")
     assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-AUTH-L2")
-    assert "Evidence: `—/—/—`" in item_block(active_queue, "M3.5-AUT-FASTPATH")
+    fastpath = item_block(active_queue, "M3.5-AUT-FASTPATH")
+    assert "Evidence: `I/T/—`" in fastpath
+    assert "Closed by: PR #57." in fastpath
+    assert "ADOPT_COMPLETED_TASK" in fastpath
+    assert "non-executable projection" in fastpath
+    assert "State: `READY`" in item_block(active_queue, "M3.5-AUT-EXECUTION-V2")
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1
