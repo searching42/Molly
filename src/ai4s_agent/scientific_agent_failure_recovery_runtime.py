@@ -37,6 +37,7 @@ from ai4s_agent.schemas import (
     AgentFailureClass,
     AgentFailureObservation,
     AgentTaskFailureEvidence,
+    AgentRecoveryAction,
     AutonomyGrant,
     SemanticBoundary,
     _agent_digest,
@@ -354,7 +355,40 @@ class ScientificAgentFailureRecoveryServiceFactory:
                 None,
             )
             if callable(candidate):
-                effect_reconciler = candidate
+                # The concrete applicator reconciles the Permission ->
+                # Authorization -> StartIntent -> Controller successor path.
+                # A REPLAN effect, however, belongs to the existing Replanner
+                # and must be replayed through its own request checkpoint.  A
+                # single generic callback would otherwise turn a crashed
+                # Replanner request into a second Controller successor.
+                def reconcile_effect(*, observation: Any, decision: Any) -> Any:
+                    action = getattr(
+                        getattr(decision, "recovery_action", None),
+                        "value",
+                        getattr(decision, "recovery_action", None),
+                    )
+                    if action == AgentRecoveryAction.REPLAN.value:
+                        method = getattr(
+                            self.replanner,
+                            "create_current_controller_failure_revision",
+                            None,
+                        )
+                        if not callable(method) or provider is None:
+                            raise FailureRecoveryEffectUnknown(
+                                "existing Replanner outcome is unknown"
+                            )
+                        return method(
+                            project_id=observation.project_id,
+                            run_id=observation.run_id,
+                            controller_execution_id=observation.controller_execution_id,
+                            controller_execution_digest=observation.controller_execution_digest,
+                            actor=self.actor,
+                            actor_source=self.actor_source,
+                            provider=provider,
+                        )
+                    return candidate(observation=observation, decision=decision)
+
+                effect_reconciler = reconcile_effect
         return ScientificAgentFailureRecoveryService(
             storage=self.storage,
             controller=self.controller,
