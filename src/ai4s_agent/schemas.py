@@ -9750,23 +9750,27 @@ AGENT_AUTONOMY_L2_MATERIALITY_REASON_CODES: tuple[str, ...] = (
     "AUTONOMY_L2_NO_MATERIAL_CHANGE",
     "AUTONOMY_L2_MATERIAL_PLAN_CHANGE",
     "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED",
+    "AUTONOMY_L2_AUTHORITY_WITHIN_GRANT",
+    "AUTONOMY_L2_AUTHORITY_EXPANSION",
+    "AUTONOMY_L2_SEMANTIC_BOUNDARY_REQUIRED",
     "AUTONOMY_L2_CONTROLLER_FAILED_NO_EXECUTABLE_CHANGE",
     "AUTONOMY_L2_DIFF_DIMENSION_UNRECOGNIZED",
 )
 
 
 class AgentAutonomyL2MaterialityDecision(BaseModel):
-    """Immutable, non-executable materiality projection for one revision.
+    """Immutable, non-executable authority projection for one revision.
 
     This model is deliberately only a projection.  A serialized instance is
-    not trusted by a coordinator; the current verified revision and canonical
-    plan diff must be recomputed before it can be used as a policy result.
+    not trusted by a coordinator; the current verified revision, canonical plan
+    diff, and authority relation must be recomputed before it can be used as a
+    policy result.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["agent_autonomy_l2_materiality_decision.v1"] = (
-        "agent_autonomy_l2_materiality_decision.v1"
+    schema_version: Literal["agent_autonomy_l2_materiality_decision.v2"] = (
+        "agent_autonomy_l2_materiality_decision.v2"
     )
     decision_id: str = ""
     policy_version: str
@@ -9788,6 +9792,11 @@ class AgentAutonomyL2MaterialityDecision(BaseModel):
     successor_projection_digest: str
     successor_authorization_scope_digest: str = ""
     authorization_scope_equal: bool
+    authority_relation: AuthorityRelation = AuthorityRelation.EQUIVALENT
+    semantic_boundary: SemanticBoundary = SemanticBoundary.NONE
+    authority_evaluation_id: str = ""
+    authority_evaluation_digest: str = ""
+    authority_auto_apply: bool = False
     classification: AgentAutonomyL2MaterialityClass
     material_change: bool
     current_authority_reuse_eligible: bool
@@ -9800,14 +9809,18 @@ class AgentAutonomyL2MaterialityDecision(BaseModel):
     @field_validator(
         "decision_id", "policy_version", "revision_id", "plan_diff_id",
         "baseline_proposal_id", "baseline_authorization_id", "successor_candidate_id",
+        "authority_evaluation_id",
     )
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(
             value,
             field=info.field_name,
-            allow_empty=info.field_name == "decision_id"
-            or info.field_name == "successor_candidate_id",
+            allow_empty=info.field_name in {
+                "decision_id",
+                "successor_candidate_id",
+                "authority_evaluation_id",
+            },
         )
 
     @field_validator(
@@ -9816,7 +9829,8 @@ class AgentAutonomyL2MaterialityDecision(BaseModel):
         "baseline_projection_digest", "baseline_authorization_digest",
         "baseline_authorization_scope_digest", "successor_proposal_digest",
         "successor_semantic_plan_digest", "successor_projection_digest",
-        "successor_authorization_scope_digest", "decision_digest",
+        "successor_authorization_scope_digest", "authority_evaluation_digest",
+        "decision_digest",
     )
     @classmethod
     def validate_digests(cls, value: str, info: Any) -> str:
@@ -9828,6 +9842,8 @@ class AgentAutonomyL2MaterialityDecision(BaseModel):
                 "successor_proposal_digest",
                 "successor_semantic_plan_digest",
                 "successor_authorization_scope_digest",
+                "authority_evaluation_id",
+                "authority_evaluation_digest",
                 "decision_digest",
             },
         )
@@ -9852,27 +9868,33 @@ class AgentAutonomyL2MaterialityDecision(BaseModel):
         material = self.classification is AgentAutonomyL2MaterialityClass.MATERIAL
         if self.material_change != material:
             raise ValueError("materiality class and material_change disagree")
+        expected_auto = (
+            self.authority_relation is AuthorityRelation.SUBSET
+            and self.semantic_boundary is SemanticBoundary.NONE
+        )
+        if self.authority_auto_apply != expected_auto:
+            raise ValueError("authority_auto_apply must be derived from relation and boundary")
         if self.classification is AgentAutonomyL2MaterialityClass.NON_MATERIAL:
-            if any(
-                (
-                    self.successor_candidate_id,
-                    self.successor_proposal_digest,
-                )
-            ):
-                raise ValueError("non-material decisions must not bind a successor")
-            if (
-                self.baseline_semantic_plan_digest
-                != self.successor_semantic_plan_digest
-                or self.baseline_projection_digest != self.successor_projection_digest
-            ):
-                raise ValueError("non-material decisions must preserve plan projections")
             if self.fresh_permission_required or self.fresh_authorization_required:
                 raise ValueError("non-material decisions must not require fresh authority")
+            if not self.authority_auto_apply:
+                if any((self.successor_candidate_id, self.successor_proposal_digest)):
+                    raise ValueError(
+                        "non-material successor decisions must be authority-auto-apply eligible"
+                    )
+                if (
+                    self.baseline_semantic_plan_digest
+                    != self.successor_semantic_plan_digest
+                    or self.baseline_projection_digest != self.successor_projection_digest
+                ):
+                    raise ValueError("non-material decisions without a successor must preserve plan projections")
         else:
             if not self.successor_candidate_id or not self.successor_proposal_digest:
                 raise ValueError("material decisions require a successor binding")
             if not self.fresh_permission_required or not self.fresh_authorization_required:
                 raise ValueError("material decisions require fresh authority")
+            if self.authority_auto_apply:
+                raise ValueError("authority-auto-apply decisions must not require fresh authority")
         if self.authorization_scope_equal != (
             self.baseline_authorization_scope_digest
             == self.successor_authorization_scope_digest
@@ -9938,6 +9960,10 @@ class AgentPlanRevisionApplicationReceipt(BaseModel):
     supersedes_proposal_id: str
     client_request_id: str
     status: Literal["applied"] = "applied"
+    # v1 is a historical exact contract.  It was only emitted for the
+    # pre-authority-aware application path, where a successor always needed a
+    # fresh Permission and Authorization decision.  Do not widen these fields
+    # in place: callers that need derived authority semantics use v2 below.
     fresh_permission_required: Literal[True] = True
     fresh_authorization_required: Literal[True] = True
     dispatched: Literal[False] = False
@@ -9986,6 +10012,58 @@ class AgentPlanRevisionApplicationReceipt(BaseModel):
         payload.pop("application_receipt_digest", None)
         payload.pop("created_at", None)
         return payload
+
+
+class AgentPlanRevisionApplicationReceiptV2(AgentPlanRevisionApplicationReceipt):
+    """Authority-bound successor application receipt.
+
+    The v2 receipt is emitted only after a serialized L2 authority decision has
+    been recomputed against the current immutable revision and baseline.  The
+    decision/evaluation and baseline authorization bindings make the derived
+    freshness flags part of the immutable receipt identity rather than caller
+    supplied options.
+    """
+
+    schema_version: Literal["agent_plan_revision_application_receipt.v2"] = (
+        "agent_plan_revision_application_receipt.v2"
+    )
+    fresh_permission_required: bool
+    fresh_authorization_required: bool
+    authority_decision_id: str
+    authority_decision_digest: str
+    authority_evaluation_id: str
+    authority_evaluation_digest: str
+    baseline_authorization_id: str
+    baseline_authorization_digest: str
+    authority_auto_apply: bool
+
+    @field_validator(
+        "authority_decision_id", "authority_evaluation_id", "baseline_authorization_id"
+    )
+    @classmethod
+    def validate_authority_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator(
+        "authority_decision_digest",
+        "authority_evaluation_digest",
+        "baseline_authorization_digest",
+    )
+    @classmethod
+    def validate_authority_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @model_validator(mode="after")
+    def bind_authority(self) -> "AgentPlanRevisionApplicationReceiptV2":
+        expected_fresh = not self.authority_auto_apply
+        if (
+            self.fresh_permission_required != expected_fresh
+            or self.fresh_authorization_required != expected_fresh
+        ):
+            raise ValueError(
+                "v2 application freshness must be derived from authority_auto_apply"
+            )
+        return self
 
 
 class AgentPlanProposal(BaseModel):
@@ -10480,6 +10558,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_revision_proposal": AgentPlanRevisionProposal,
     "agent_plan_revision_application_request": AgentPlanRevisionApplicationRequest,
     "agent_plan_revision_application_receipt": AgentPlanRevisionApplicationReceipt,
+    "agent_plan_revision_application_receipt_v2": AgentPlanRevisionApplicationReceiptV2,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

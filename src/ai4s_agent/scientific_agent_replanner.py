@@ -33,6 +33,7 @@ from ai4s_agent.schemas import (
     AgentPlanReplanRequest,
     AgentPlanReplanTriggerKind,
     AgentPlanRevisionApplicationReceipt,
+    AgentPlanRevisionApplicationReceiptV2,
     AgentPlanRevisionApplicationRequest,
     AgentPlanRevisionProposal,
     AgentReplanLLMResponse,
@@ -110,7 +111,7 @@ class ReplannerCreateResult:
 class ReplannerApplyResult:
     revision: AgentPlanRevisionProposal
     successor: AgentExecutionPlanProposal
-    receipt: AgentPlanRevisionApplicationReceipt
+    receipt: AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2
     replayed: bool = False
     dispatched: bool = False
 
@@ -122,6 +123,7 @@ class ReplannerL2FailureResult:
     proposal: AgentPlanRevisionProposal
     materiality_decision: Any
     application: ReplannerApplyResult | None = None
+    baseline_authorization: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -305,8 +307,9 @@ class ScientificAgentReplannerStore:
         )
 
     def publish_application(
-        self, receipt: AgentPlanRevisionApplicationReceipt
-    ) -> AgentPlanRevisionApplicationReceipt:
+        self,
+        receipt: AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2,
+    ) -> AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2:
         return self.publish_model(
             project_id=receipt.project_id,
             collection="agent_plan_revision_applications",
@@ -317,12 +320,45 @@ class ScientificAgentReplannerStore:
 
     def read_application(
         self, *, project_id: str, receipt_id: str
-    ) -> AgentPlanRevisionApplicationReceipt:
+    ) -> AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2:
+        # Application receipts are intentionally version-dispatched.  The v1
+        # contract remains historical and exact; authority-bound L2 receipts
+        # are v2.  Never validate a v2 payload through the v1 model (or vice
+        # versa), since that would erase the provenance distinction.
+        root = self._root(project_id, "agent_plan_revision_applications", create=False)
+        target = self._safe_child(root, _safe_scope_id(receipt_id, field="artifact_id"))
+        if target.is_symlink() or not target.is_dir():
+            raise FileNotFoundError("Replanner application not found")
+        try:
+            payload = json.loads(
+                _read_exact_bytes(
+                    target / "application_receipt.json",
+                    label="Replanner application receipt",
+                    max_bytes=_MAX_REPLANNER_BYTES,
+                )
+            )
+        except json.JSONDecodeError as exc:
+            raise ScientificAgentReplannerConflict(
+                "Replanner application receipt is invalid JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ScientificAgentReplannerConflict(
+                "Replanner application receipt must be an object"
+            )
+        schema_version = payload.get("schema_version")
+        if schema_version == "agent_plan_revision_application_receipt.v1":
+            model_type = AgentPlanRevisionApplicationReceipt
+        elif schema_version == "agent_plan_revision_application_receipt.v2":
+            model_type = AgentPlanRevisionApplicationReceiptV2
+        else:
+            raise ScientificAgentReplannerConflict(
+                "unknown Replanner application receipt schema version"
+            )
         return self.read_model(
             project_id=project_id,
             collection="agent_plan_revision_applications",
             artifact_id=receipt_id,
-            model_type=AgentPlanRevisionApplicationReceipt,
+            model_type=model_type,
             data_filename="application_receipt.json",
         )
 
@@ -823,8 +859,10 @@ class ScientificAgentReplannerService:
         The caller supplies only the session's server-side Controller binding;
         all request fields, baseline authority bindings, and request IDs are
         derived here from a fresh read-only Controller snapshot.  Publication
-        is the only automatic L2 effect.  Authorization and execution remain
-        on the existing explicit approval path.
+        is the only automatic L2 effect.  A strict subset with no semantic
+        boundary reuses the verified grant through the existing
+        Permission/authorization/Controller chain; expansions and semantic
+        boundaries remain on the explicit approval path.
         """
 
         from ai4s_agent.scientific_agent_autonomy_l2 import (
@@ -921,9 +959,10 @@ class ScientificAgentReplannerService:
             revision,
             baseline_proposal=baseline.publication.proposal,
             baseline_authorization=baseline.authorization,
+            registry=self.proposal_store.registry,
         )
         application = None
-        if materiality.classification.value == "material":
+        if revision.successor_candidate is not None:
             application_request_id = (
                 "l2-controller-failure-apply-"
                 + _agent_digest(
@@ -941,11 +980,13 @@ class ScientificAgentReplannerService:
                     client_request_id=application_request_id,
                 ),
                 strict_controller_failure=True,
+                authority_decision=materiality,
             )
         return ReplannerL2FailureResult(
             proposal=revision,
             materiality_decision=materiality,
             application=application,
+            baseline_authorization=authorization,
         )
 
     def apply_revision(
@@ -955,16 +996,23 @@ class ScientificAgentReplannerService:
         revision_id: str,
         request: AgentPlanRevisionApplicationRequest,
         strict_controller_failure: bool = False,
+        authority_decision: Any | None = None,
     ) -> ReplannerApplyResult:
         clean_project = _safe_scope_id(project_id, field="project_id")
-        application_request_digest = _agent_digest(
-            {
-                "schema_version": "agent_plan_revision_application_request_binding.v1",
-                "project_id": clean_project,
-                "revision_id": revision_id,
-                "request": request.model_dump(mode="json"),
-            }
-        )
+        authority_binding = self._authority_decision_binding(authority_decision)
+        request_binding: dict[str, Any] = {
+            "schema_version": (
+                "agent_plan_revision_application_request_binding.v2"
+                if authority_binding is not None
+                else "agent_plan_revision_application_request_binding.v1"
+            ),
+            "project_id": clean_project,
+            "revision_id": revision_id,
+            "request": request.model_dump(mode="json"),
+        }
+        if authority_binding is not None:
+            request_binding["authority"] = authority_binding
+        application_request_digest = _agent_digest(request_binding)
         with self.store.application_session(
             project_id=clean_project, revision_id=revision_id
         ), self.store.request_session(
@@ -978,6 +1026,10 @@ class ScientificAgentReplannerService:
                 raise ScientificAgentReplannerConflict("revision digest mismatch")
             if not revision.plan_diff.material_change or revision.successor_candidate is None:
                 raise ScientificAgentReplannerConflict("no-change revisions cannot be applied")
+            verified_authority_decision = self._verify_authority_decision_for_revision(
+                authority_decision,
+                revision,
+            )
             expected_receipt_id = "revision-application-" + _agent_digest(
                 {"project_id": clean_project, "revision_id": revision.revision_id}
             ).split(":", 1)[1][:32]
@@ -1003,6 +1055,7 @@ class ScientificAgentReplannerService:
                     revision=revision,
                     publication=publication,
                     receipt=existing_receipt,
+                    authority_decision=verified_authority_decision,
                 )
                 return ReplannerApplyResult(
                     revision=revision,
@@ -1026,11 +1079,13 @@ class ScientificAgentReplannerService:
                     revision=revision,
                     publication=publication,
                     receipt=None,
+                    authority_decision=verified_authority_decision,
                 )
                 receipt = self._application_receipt(
                     revision=revision,
                     successor=publication.proposal,
                     client_request_id=request.client_request_id,
+                    authority_decision=verified_authority_decision,
                 )
                 committed = self.store.publish_application(receipt)
                 return ReplannerApplyResult(
@@ -1100,6 +1155,7 @@ class ScientificAgentReplannerService:
                 revision=revision,
                 successor=publication.proposal,
                 client_request_id=request.client_request_id,
+                authority_decision=verified_authority_decision,
             )
             existing = self.store.publish_application(receipt)
             replayed = False
@@ -1116,8 +1172,9 @@ class ScientificAgentReplannerService:
         revision: AgentPlanRevisionProposal,
         successor: AgentExecutionPlanProposal,
         client_request_id: str,
-    ) -> AgentPlanRevisionApplicationReceipt:
-        return AgentPlanRevisionApplicationReceipt(
+        authority_decision: Any | None = None,
+    ) -> AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2:
+        common = dict(
             project_id=revision.project_id,
             revision_id=revision.revision_id,
             revision_digest=revision.revision_digest,
@@ -1134,6 +1191,90 @@ class ScientificAgentReplannerService:
             client_request_id=client_request_id,
             created_at=self.clock(),
         )
+        if authority_decision is None:
+            # Preserve the exact historical v1 contract for generic/manual
+            # application callers.  v1 freshness is intentionally always
+            # true; authority-derived flags belong to the versioned receipt
+            # below.
+            return AgentPlanRevisionApplicationReceipt(**common)
+        return AgentPlanRevisionApplicationReceiptV2(
+            **common,
+            fresh_permission_required=authority_decision.fresh_permission_required,
+            fresh_authorization_required=authority_decision.fresh_authorization_required,
+            authority_decision_id=authority_decision.decision_id,
+            authority_decision_digest=authority_decision.decision_digest,
+            authority_evaluation_id=authority_decision.authority_evaluation_id,
+            authority_evaluation_digest=authority_decision.authority_evaluation_digest,
+            baseline_authorization_id=authority_decision.baseline_authorization_id,
+            baseline_authorization_digest=authority_decision.baseline_authorization_digest,
+            authority_auto_apply=authority_decision.authority_auto_apply,
+        )
+
+    @staticmethod
+    def _authority_decision_binding(authority_decision: Any | None) -> dict[str, Any] | None:
+        if authority_decision is None:
+            return None
+        required = (
+            "decision_id",
+            "decision_digest",
+            "authority_evaluation_id",
+            "authority_evaluation_digest",
+            "baseline_authorization_id",
+            "baseline_authorization_digest",
+            "authority_auto_apply",
+            "fresh_permission_required",
+            "fresh_authorization_required",
+        )
+        try:
+            values = {name: getattr(authority_decision, name) for name in required}
+        except AttributeError as exc:
+            raise ScientificAgentReplannerConflict(
+                "application authority decision is incomplete"
+            ) from exc
+        return {
+            "schema_version": "agent_plan_revision_application_authority_binding.v1",
+            **values,
+        }
+
+    def _verify_authority_decision_for_revision(
+        self,
+        authority_decision: Any | None,
+        revision: AgentPlanRevisionProposal,
+    ) -> Any | None:
+        if authority_decision is None:
+            return None
+        from ai4s_agent.scientific_agent_autonomy_l2 import (
+            AutonomyL2MaterialityError,
+            verify_plan_revision_materiality_decision,
+        )
+        from ai4s_agent.schemas import AgentAutonomyL2MaterialityDecision
+
+        if not isinstance(authority_decision, AgentAutonomyL2MaterialityDecision):
+            raise ScientificAgentReplannerConflict(
+                "application authority decision has an unsupported schema"
+            )
+        try:
+            baseline = self.proposal_store.read(
+                project_id=revision.project_id,
+                proposal_id=revision.replan_request.baseline_proposal_id,
+                verify_current=False,
+            )
+            authorization = self.authorization_service.verify_authorization(
+                project_id=revision.project_id,
+                authorization_id=revision.replan_request.baseline_authorization_id,
+                verify_current=False,
+            )
+            return verify_plan_revision_materiality_decision(
+                authority_decision,
+                revision,
+                baseline_proposal=baseline.proposal,
+                baseline_authorization=authorization,
+                registry=self.proposal_store.registry,
+            )
+        except (AutonomyL2MaterialityError, ScientificAgentReplannerError, ValueError) as exc:
+            raise ScientificAgentReplannerConflict(
+                "application authority decision is not current for the immutable revision"
+            ) from exc
 
     @staticmethod
     def _successor_publication_request_digest(
@@ -1152,7 +1293,10 @@ class ScientificAgentReplannerService:
         *,
         revision: AgentPlanRevisionProposal,
         publication: ScientificAgentPlanPublication,
-        receipt: AgentPlanRevisionApplicationReceipt | None,
+        receipt: AgentPlanRevisionApplicationReceipt
+        | AgentPlanRevisionApplicationReceiptV2
+        | None,
+        authority_decision: Any | None = None,
     ) -> None:
         successor = revision.successor_candidate
         if (
@@ -1187,10 +1331,44 @@ class ScientificAgentReplannerService:
             raise ScientificAgentReplannerConflict(
                 "application receipt does not exactly bind the immutable revision and successor"
             )
+        if receipt is not None:
+            if authority_decision is None:
+                if receipt.schema_version != "agent_plan_revision_application_receipt.v1":
+                    raise ScientificAgentReplannerConflict(
+                        "authority-bound receipt requires its verified authority decision"
+                    )
+            else:
+                if receipt.schema_version != "agent_plan_revision_application_receipt.v2":
+                    raise ScientificAgentReplannerConflict(
+                        "authority application replay is missing its v2 receipt"
+                    )
+                expected = ScientificAgentReplannerService._authority_decision_binding(
+                    authority_decision
+                )
+                if not isinstance(receipt, AgentPlanRevisionApplicationReceiptV2):
+                    raise ScientificAgentReplannerConflict(
+                        "authority application replay receipt has the wrong schema"
+                    )
+                actual = {
+                    "schema_version": "agent_plan_revision_application_authority_binding.v1",
+                    "decision_id": receipt.authority_decision_id,
+                    "decision_digest": receipt.authority_decision_digest,
+                    "authority_evaluation_id": receipt.authority_evaluation_id,
+                    "authority_evaluation_digest": receipt.authority_evaluation_digest,
+                    "baseline_authorization_id": receipt.baseline_authorization_id,
+                    "baseline_authorization_digest": receipt.baseline_authorization_digest,
+                    "authority_auto_apply": receipt.authority_auto_apply,
+                    "fresh_permission_required": receipt.fresh_permission_required,
+                    "fresh_authorization_required": receipt.fresh_authorization_required,
+                }
+                if actual != expected:
+                    raise ScientificAgentReplannerConflict(
+                        "application receipt authority semantics do not match the verified decision"
+                    )
 
     def read_application(
         self, *, project_id: str, receipt_id: str
-    ) -> AgentPlanRevisionApplicationReceipt:
+    ) -> AgentPlanRevisionApplicationReceipt | AgentPlanRevisionApplicationReceiptV2:
         return self.store.read_application(project_id=project_id, receipt_id=receipt_id)
 
     def _verify_baseline(

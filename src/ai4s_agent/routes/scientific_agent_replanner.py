@@ -216,8 +216,8 @@ def register_scientific_agent_replanner_routes(
                     "applied": True,
                     "application_receipt": result.receipt.model_dump(mode="json"),
                     "successor_proposal": result.successor.model_dump(mode="json"),
-                    "fresh_permission_required": True,
-                    "fresh_authorization_required": True,
+                    "fresh_permission_required": result.receipt.fresh_permission_required,
+                    "fresh_authorization_required": result.receipt.fresh_authorization_required,
                     "dispatched": False,
                     "replayed": result.replayed,
                 }
@@ -242,8 +242,8 @@ def register_scientific_agent_replanner_routes(
                     "ok": True,
                     "applied": True,
                     "application_receipt": receipt.model_dump(mode="json"),
-                    "fresh_permission_required": True,
-                    "fresh_authorization_required": True,
+                    "fresh_permission_required": receipt.fresh_permission_required,
+                    "fresh_authorization_required": receipt.fresh_authorization_required,
                     "dispatched": False,
                 }
             )

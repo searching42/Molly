@@ -6,12 +6,14 @@ from dataclasses import replace
 import pytest
 
 from ai4s_agent.schemas import (
+    AGENT_EXECUTION_PLAN_PROPOSAL_V1,
     AgentHarnessControllerAction,
     AgentHarnessControllerStatus,
     AgentAutonomyL2MaterialityClass,
     AgentPlanAuthorizationRequest,
     AgentPlanDiffChange,
     AgentPlanFeedbackRequest,
+    AgentExecutionPlanProposal,
     AgentReplanLLMResponse,
     _agent_digest,
 )
@@ -23,9 +25,12 @@ from ai4s_agent.scientific_agent_autonomy_l2 import (
     AUTONOMY_L2_MATERIALITY_POLICY_VERSION,
     AUTONOMY_L2_REVIEWED_DIFF_DIMENSIONS,
     AutonomyL2MaterialityError,
+    _proposal_grant,
     classify_plan_revision_materiality,
     verify_plan_revision_materiality_decision,
 )
+from ai4s_agent.autonomy_authority import AuthorityRelation, evaluate_authority
+from ai4s_agent.planner import AtomicTaskRegistry
 from tests.test_scientific_agent_replanner import (
     CountingProvider,
     _baseline,
@@ -78,7 +83,61 @@ def _feedback_revision(tmp_path: Path, response: AgentReplanLLMResponse):
     return result.proposal, current_baseline, current_authorization, provider
 
 
-def test_l2_policy_materiality_is_empty_diff_based_and_deterministic(tmp_path: Path) -> None:
+def _recast_proposal_as_historical_v1(
+    proposal: AgentExecutionPlanProposal, *, count: int
+) -> AgentExecutionPlanProposal:
+    payload = proposal.model_dump(mode="json")
+    for field in ("planner_options", "effective_planner_options", "compiled_task_options"):
+        payload[field]["generate_candidates"]["count"] = count
+    payload["validated_llm_response"]["task_options"]["generate_candidates"]["count"] = count
+    payload.update(
+        {
+            "schema_version": AGENT_EXECUTION_PLAN_PROPOSAL_V1,
+            "authorization_scope_digest": "",
+            "semantic_plan_id": "",
+            "semantic_plan_digest": "",
+            "publication_id": "",
+            "proposal_id": "",
+            "proposal_digest": "",
+        }
+    )
+    return AgentExecutionPlanProposal.model_validate(payload)
+
+
+def test_historical_v1_baseline_does_not_expand_exact_option_authority(tmp_path: Path) -> None:
+    _revision, baseline, _authorization, _provider = _feedback_revision(
+        tmp_path,
+        AgentReplanLLMResponse(
+            rationale_summary="Use a smaller candidate set.",
+            option_patch={"generate_candidates": {"count": 4}},
+        ),
+    )
+    historical_baseline = _recast_proposal_as_historical_v1(baseline, count=8)
+    historical_candidate = _recast_proposal_as_historical_v1(baseline, count=4)
+    registry = AtomicTaskRegistry()
+    baseline_grant = _proposal_grant(
+        historical_baseline,
+        registry=registry,
+        baseline=True,
+        valid_from="1970-01-01T00:00:00Z",
+    )
+    candidate_grant = _proposal_grant(
+        historical_candidate,
+        registry=registry,
+        baseline=False,
+        valid_from="1970-01-01T00:00:00Z",
+    )
+    assert baseline_grant.parameter_bounds["generate_candidates.count"].allowed_values == [8]
+    evaluation = evaluate_authority(
+        baseline_grant,
+        candidate_grant,
+        changes=[{"dimension": "option", "path": "option.raw_planner_options"}],
+    )
+    assert evaluation.relation is AuthorityRelation.INCOMPARABLE
+    assert evaluation.auto_apply is False
+
+
+def test_l2_policy_uses_authority_relation_and_semantic_boundary(tmp_path: Path) -> None:
     revision, baseline, authorization, provider = _feedback_revision(
         tmp_path,
         AgentReplanLLMResponse(
@@ -92,10 +151,14 @@ def test_l2_policy_materiality_is_empty_diff_based_and_deterministic(tmp_path: P
         baseline_proposal=baseline,
         baseline_authorization=authorization,
     )
-    assert decision.classification is AgentAutonomyL2MaterialityClass.MATERIAL
-    assert decision.material_change is True
-    assert decision.fresh_permission_required is True
-    assert decision.fresh_authorization_required is True
+    assert decision.classification is AgentAutonomyL2MaterialityClass.NON_MATERIAL
+    assert decision.material_change is False
+    assert decision.fresh_permission_required is False
+    assert decision.fresh_authorization_required is False
+    assert decision.authority_relation.value == "SUBSET"
+    assert decision.semantic_boundary.value == "NONE"
+    assert decision.authority_auto_apply is True
+    assert decision.reason_codes == ["AUTONOMY_L2_AUTHORITY_WITHIN_GRANT"]
     assert decision.policy_version == AUTONOMY_L2_MATERIALITY_POLICY_VERSION
     assert decision.policy_digest == AUTONOMY_L2_MATERIALITY_POLICY_DIGEST
     assert decision.decision_digest == _agent_digest(decision.semantic_material())
@@ -139,6 +202,29 @@ def test_l2_no_change_is_non_material_and_does_not_bind_successor(tmp_path: Path
     assert decision.fresh_authorization_required is False
 
 
+def test_l2_semantic_boundary_requires_fresh_authority_even_for_subset(
+    tmp_path: Path,
+) -> None:
+    revision, baseline, authorization, _provider = _feedback_revision(
+        tmp_path,
+        AgentReplanLLMResponse(
+            rationale_summary="Pause after the bounded candidate run.",
+            stop_conditions=["pause after the bounded candidate run"],
+        ),
+    )
+    decision = classify_plan_revision_materiality(
+        revision,
+        baseline_proposal=baseline,
+        baseline_authorization=authorization,
+    )
+    assert decision.authority_relation.value == "SUBSET"
+    assert decision.semantic_boundary.value == "SCIENTIFIC_CONFIRMATION"
+    assert decision.authority_auto_apply is False
+    assert decision.classification is AgentAutonomyL2MaterialityClass.MATERIAL
+    assert decision.fresh_permission_required is True
+    assert decision.fresh_authorization_required is True
+
+
 def test_l2_serialized_decision_and_unknown_dimension_fail_closed(tmp_path: Path) -> None:
     revision, baseline, authorization, _provider = _feedback_revision(
         tmp_path,
@@ -153,7 +239,10 @@ def test_l2_serialized_decision_and_unknown_dimension_fail_closed(tmp_path: Path
         baseline_authorization=authorization,
     )
     forged = decision.model_copy(
-        update={"classification": AgentAutonomyL2MaterialityClass.NON_MATERIAL}
+        update={
+            "classification": AgentAutonomyL2MaterialityClass.MATERIAL,
+            "material_change": True,
+        }
     )
     with pytest.raises(AutonomyL2MaterialityError):
         verify_plan_revision_materiality_decision(
@@ -200,7 +289,7 @@ def test_l2_policy_dimension_roster_is_explicit() -> None:
     }
 
 
-def test_l2_failure_route_publishes_successor_without_reusing_authority(
+def test_l2_failure_route_reuses_subset_authority_without_user_reapproval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, client, service, state, current = _start_waiting_gate_session_with_client(
@@ -242,32 +331,39 @@ def test_l2_failure_route_publishes_successor_without_reusing_authority(
     )
     assert response.status_code == 200, response.get_json()
     body = response.get_json()
-    assert body["session"]["status"] == "approval_required"
-    assert body["session"]["autonomy_level"] == "L2"
-    assert body["session"]["autonomy_l2_materiality_class"] == "material"
-    assert body["session"]["authorization_id"] == ""
-    assert body["session"]["controller_execution_id"] == ""
+    assert body["session"]["status"] == "waiting_gate"
+    assert body["session"]["autonomy_level"] in {"L1", "L2"}
+    assert body["session"]["autonomy_l2_materiality_class"] == "non_material"
+    assert body["session"]["autonomy_l2_authority_relation"] == "SUBSET"
+    assert body["session"]["autonomy_l2_semantic_boundary"] == "NONE"
+    assert body["session"]["autonomy_l2_authority_auto_apply"] is True
+    assert body["session"]["authorization_id"] != state["authorization_id"]
+    assert body["session"]["controller_execution_id"]
+    assert body["session"]["controller_execution_id"] != state["controller_execution_id"]
+    application = service.replanner.read_application(
+        project_id="conversation-project",
+        receipt_id=(
+            "revision-application-"
+            + _agent_digest(
+                {
+                    "project_id": "conversation-project",
+                    "revision_id": body["decision"]["revision_id"],
+                }
+            ).split(":", 1)[1][:32]
+        ),
+    )
+    assert application.schema_version == "agent_plan_revision_application_receipt.v2"
+    assert application.fresh_permission_required is False
+    assert application.fresh_authorization_required is False
+    assert application.authority_decision_id == body["decision"]["decision_id"]
+    assert application.authority_decision_digest == body["decision"]["decision_digest"]
+    assert application.authority_evaluation_digest == body["decision"]["authority_evaluation_digest"]
+    assert application.baseline_authorization_id == state["authorization_id"]
+    assert application.baseline_authorization_digest == state["authorization_digest"]
     assert body["session"]["autonomy_l2_baseline_controller_execution_id"] == state["controller_execution_id"]
     assert body["session"]["autonomy_l2_baseline_authorization_id"] == state["authorization_id"]
     assert body["proposal"]["proposal_id"] != state["proposal_id"]
     assert body["decision"]["executable"] is False
-    replay = client.post(
-        "/api/projects/conversation-project/conversations/conversation-one/agent-session/replan",
-        json={
-            "run_id": state["run_id"],
-            "external_llm_approved": True,
-            "llm_provider": {
-                "provider": "stub",
-                "model": "stub",
-                "stub_response": {
-                    "rationale_summary": "This must not be called again.",
-                    "option_patch": {"generate_candidates": {"count": 999}},
-                },
-            },
-        },
-    )
-    assert replay.status_code == 200, replay.get_json()
-    assert replay.get_json()["proposal"]["proposal_id"] == body["proposal"]["proposal_id"]
 
 
 def test_l2_material_successor_receives_fresh_authority_after_conversational_approval(
@@ -333,7 +429,7 @@ def test_l2_material_successor_receives_fresh_authority_after_conversational_app
                 "model": "stub",
                 "stub_response": {
                     "rationale_summary": "Use a bounded smaller candidate set.",
-                    "option_patch": {"generate_candidates": {"count": 4}},
+                    "stop_conditions": ["pause after the bounded candidate run"],
                 },
             },
         },

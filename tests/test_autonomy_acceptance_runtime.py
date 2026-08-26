@@ -76,6 +76,7 @@ class _CountingRevisionProvider(StubLLMProvider):
             response={
                 "rationale_summary": "Use one bounded concurrent revision.",
                 "option_patch": {"generate_candidates": {"count": 4}},
+                "stop_conditions": ["pause after the bounded candidate run"],
             }
         )
         self.calls = 0
@@ -665,6 +666,7 @@ def test_l1_l2_handoff_starts_fresh_l1_budget_epoch(
                 "stub_response": {
                     "rationale_summary": "Use a bounded fresh L1 epoch.",
                     "option_patch": {"generate_candidates": {"count": 4}},
+                    "stop_conditions": ["pause after the bounded candidate run"],
                 },
             },
         },
@@ -838,6 +840,7 @@ def test_l2_concurrent_material_replan_publishes_one_successor(
             "stub_response": {
                 "rationale_summary": "Use a bounded concurrent revision.",
                 "option_patch": {"generate_candidates": {"count": 4}},
+                "stop_conditions": ["pause after the bounded candidate run"],
             },
         },
     }

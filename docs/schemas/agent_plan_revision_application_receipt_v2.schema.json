@@ -1,0 +1,86 @@
+{
+  "additionalProperties": false,
+  "description": "Authority-bound successor application receipt.\n\nThe v2 receipt is emitted only after a serialized L2 authority decision has\nbeen recomputed against the current immutable revision and baseline.  The\ndecision/evaluation and baseline authorization bindings make the derived\nfreshness flags part of the immutable receipt identity rather than caller\nsupplied options.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_revision_application_receipt.v2",
+      "default": "agent_plan_revision_application_receipt.v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "application_receipt_id": {
+      "default": "",
+      "title": "Application Receipt Id",
+      "type": "string"
+    },
+    "application_receipt_digest": {
+      "default": "",
+      "title": "Application Receipt Digest",
+      "type": "string"
+    },
+    "project_id": { "title": "Project Id", "type": "string" },
+    "revision_id": { "title": "Revision Id", "type": "string" },
+    "revision_digest": { "title": "Revision Digest", "type": "string" },
+    "baseline_proposal_id": { "title": "Baseline Proposal Id", "type": "string" },
+    "baseline_proposal_digest": { "title": "Baseline Proposal Digest", "type": "string" },
+    "successor_proposal_id": { "title": "Successor Proposal Id", "type": "string" },
+    "successor_proposal_digest": { "title": "Successor Proposal Digest", "type": "string" },
+    "successor_semantic_plan_id": { "title": "Successor Semantic Plan Id", "type": "string" },
+    "successor_semantic_plan_digest": { "title": "Successor Semantic Plan Digest", "type": "string" },
+    "plan_diff_id": { "title": "Plan Diff Id", "type": "string" },
+    "plan_diff_digest": { "title": "Plan Diff Digest", "type": "string" },
+    "parent_proposal_id": { "title": "Parent Proposal Id", "type": "string" },
+    "supersedes_proposal_id": { "title": "Supersedes Proposal Id", "type": "string" },
+    "client_request_id": { "title": "Client Request Id", "type": "string" },
+    "status": {
+      "const": "applied",
+      "default": "applied",
+      "title": "Status",
+      "type": "string"
+    },
+    "fresh_permission_required": { "title": "Fresh Permission Required", "type": "boolean" },
+    "fresh_authorization_required": { "title": "Fresh Authorization Required", "type": "boolean" },
+    "dispatched": {
+      "const": false,
+      "default": false,
+      "title": "Dispatched",
+      "type": "boolean"
+    },
+    "created_at": { "title": "Created At", "type": "string" },
+    "authority_decision_id": { "title": "Authority Decision Id", "type": "string" },
+    "authority_decision_digest": { "title": "Authority Decision Digest", "type": "string" },
+    "authority_evaluation_id": { "title": "Authority Evaluation Id", "type": "string" },
+    "authority_evaluation_digest": { "title": "Authority Evaluation Digest", "type": "string" },
+    "baseline_authorization_id": { "title": "Baseline Authorization Id", "type": "string" },
+    "baseline_authorization_digest": { "title": "Baseline Authorization Digest", "type": "string" },
+    "authority_auto_apply": { "title": "Authority Auto Apply", "type": "boolean" }
+  },
+  "required": [
+    "project_id",
+    "revision_id",
+    "revision_digest",
+    "baseline_proposal_id",
+    "baseline_proposal_digest",
+    "successor_proposal_id",
+    "successor_proposal_digest",
+    "successor_semantic_plan_id",
+    "successor_semantic_plan_digest",
+    "plan_diff_id",
+    "plan_diff_digest",
+    "parent_proposal_id",
+    "supersedes_proposal_id",
+    "client_request_id",
+    "fresh_permission_required",
+    "fresh_authorization_required",
+    "created_at",
+    "authority_decision_id",
+    "authority_decision_digest",
+    "authority_evaluation_id",
+    "authority_evaluation_digest",
+    "baseline_authorization_id",
+    "baseline_authorization_digest",
+    "authority_auto_apply"
+  ],
+  "title": "AgentPlanRevisionApplicationReceiptV2",
+  "type": "object"
+}

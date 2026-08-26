@@ -13,10 +13,6 @@ from ai4s_agent.scientific_agent_autonomy_l1 import (
     AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
     AUTONOMY_L1_RUNTIME_POLICY_VERSION,
 )
-from ai4s_agent.scientific_agent_autonomy_l2 import (
-    AUTONOMY_L2_MATERIALITY_POLICY_DIGEST,
-    AUTONOMY_L2_MATERIALITY_POLICY_VERSION,
-)
 from ai4s_agent.scientific_agent_autonomy_policy import (
     AUTONOMY_POLICY_DIGEST,
     AUTONOMY_POLICY_VERSION,
@@ -76,6 +72,11 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert manifest["restart_count"] == 1
 
     policies = manifest["policy_identities"]
+    # This directory is an immutable v1 runtime snapshot.  It predates the
+    # authority-aware L2 policy in the current source tree, so changing the
+    # checked-in identity here would falsely claim that the historical run
+    # executed v2.  A future v2 acceptance run must use a new acceptance ID
+    # and evidence directory bound to its own code head.
     assert policies == {
         "action_policy": {
             "version": AUTONOMY_POLICY_VERSION,
@@ -86,8 +87,8 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
             "digest": AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
         },
         "l2_materiality_policy": {
-            "version": AUTONOMY_L2_MATERIALITY_POLICY_VERSION,
-            "digest": AUTONOMY_L2_MATERIALITY_POLICY_DIGEST,
+            "version": "scientific-agent-autonomy-l2-materiality-policy.v1",
+            "digest": "sha256:d3c5196dd2e61cc84a613fce3c7a7741467d58a536658830c93fe3b25537e1af",
         },
     }
     for policy in policies.values():
