@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-FAILURE-RECOVERY-FOUNDATION — Failure taxonomy and bounded recovery contract
+> Current focus: M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -262,7 +262,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: the production Conversation/coordinator `FAILED` continuation invokes the foundation service with a server-published observation and current, digest-verified authority; automatic retry, logical-tool recovery, and replan successors all traverse the trusted Permission / Authorization / StartIntent / Controller chain; representative restart, duplicate, aggregate-concurrency, and exact-replay runtime evidence is captured. This item must not introduce a second Controller or execution authority.
 
 - [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-FAILURE-RECOVERY`.
   - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.

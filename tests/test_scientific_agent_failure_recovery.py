@@ -28,6 +28,7 @@ from ai4s_agent.scientific_agent_failure_recovery import (
     FailureRecoveryStale,
     FailureRecoveryStore,
     RecoverySuccessorApplicator,
+    ScientificAgentRecoverySuccessorApplicator,
     ScientificAgentFailureRecoveryService,
     classify_failure,
 )
@@ -84,6 +85,19 @@ class _FakeSuccessor(RecoverySuccessorApplicator):
             "effect_receipt_id": self.effect_receipt_id,
             "effect_receipt_digest": "sha256:" + "f" * 64,
         }
+
+
+def test_only_reviewed_concrete_successor_applicator_opts_into_authority_chain() -> None:
+    class PlainSuccessor(RecoverySuccessorApplicator):
+        def apply_recovery_successor(self, **kwargs):
+            return {}
+
+    assert RecoverySuccessorApplicator.recovery_authority_chain_verified is False
+    assert PlainSuccessor.recovery_authority_chain_verified is False
+    assert (
+        ScientificAgentRecoverySuccessorApplicator.recovery_authority_chain_verified
+        is True
+    )
 
 
 class _ConcurrentReplanner:

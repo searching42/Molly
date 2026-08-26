@@ -937,6 +937,12 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
     authoritative artifact, never accepted from recovery/LLM input.
     """
 
+    # This is the reviewed production implementation of the full
+    # Permission → Authorization → StartIntent → Controller chain.  Keep the
+    # base class fail-closed so every other implementation must opt in
+    # explicitly after proving the same provenance guarantees.
+    recovery_authority_chain_verified = True
+
     def __init__(
         self,
         *,
