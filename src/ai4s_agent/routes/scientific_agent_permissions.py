@@ -90,6 +90,7 @@ def register_scientific_agent_permission_routes(
     resource_authority_policy_store: RemoteResourceAuthorityPolicyStore,
     registry: AtomicTaskRegistry | None = None,
     tracer: HarnessTracer | None = None,
+    autonomy_grant_issuer: Any | None = None,
 ) -> None:
     control_store = AgentPlanControlStore(storage=projects)
     resource_authorities = RemoteResourceAuthorityService(
@@ -109,6 +110,7 @@ def register_scientific_agent_permission_routes(
                 task_id=task_id,
             )
         ),
+        autonomy_grant_issuer=autonomy_grant_issuer,
         tracer=tracer,
     )
     app.extensions["scientific_agent_plan_control_store"] = control_store

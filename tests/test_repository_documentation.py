@@ -167,8 +167,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-FASTPATH", "DONE"),
         ("M3.5-AUT-EXECUTION-V2", "DONE"),
         ("M3.5-AUT-FAILURE-RECOVERY-FOUNDATION", "DONE"),
-        ("M3.5-AUT-FAILURE-RECOVERY", "READY"),
-        ("M3.5-AUT-FEEDBACK", "QUEUED"),
+        ("M3.5-AUT-FAILURE-RECOVERY", "DONE"),
+        ("M3.5-AUT-FEEDBACK", "READY"),
         ("M3.5-AUT-LEASE", "QUEUED"),
         ("M3.5-UI", "DEFERRED"),
         ("M3.5-V1-ACCEPT", "DEFERRED"),
@@ -205,9 +205,10 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Evidence: `I/T/—`" in failure_recovery_foundation
     assert "Closed by: Draft PR #59" in failure_recovery_foundation
     failure_recovery = item_block(active_queue, "M3.5-AUT-FAILURE-RECOVERY")
-    assert "State: `READY`" in failure_recovery
-    assert "Evidence: `—/—/—`" in failure_recovery
+    assert "State: `DONE`" in failure_recovery
+    assert "Evidence: `I/T/—`" in failure_recovery
     assert "Conversation/coordinator `FAILED` continuation" in failure_recovery
+    assert "Closed by: Draft PR #60" in failure_recovery
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1

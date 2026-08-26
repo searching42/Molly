@@ -39,6 +39,7 @@ _POLL_SECONDS = 0.75
 _AUTHORITY_TURN_MODES = frozenset(
     {"approval", "dataset_gate_approval", "gate_approval", "remote_approval"}
 )
+_RECOVERY_TURN_MODES = frozenset({"recovery"})
 
 
 def _json_object() -> dict[str, Any]:
@@ -191,6 +192,17 @@ def register_scientific_agent_conversation_routes(
                     providers=llm_providers,
                     role=CONTROL_PLANE_ROLE,
                 )
+            elif turn_mode in _RECOVERY_TURN_MODES:
+                # The recovery runtime owns server-role provider resolution
+                # after its locked, authoritative FAILED snapshot.  Keep the
+                # route boundary provider-free so it cannot resolve/lease a
+                # provider before that check (and cannot pass a request
+                # temporary provider into recovery).
+                resolution = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
             else:
                 try:
                     resolution = resolve_llm_provider_payload(
@@ -200,7 +212,10 @@ def register_scientific_agent_conversation_routes(
                         role=CONTROL_PLANE_ROLE,
                     )
                 except (LLMProviderError, ValueError) as exc:
-                    if turn_mode not in _AUTHORITY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
+                    if (
+                        turn_mode not in _AUTHORITY_TURN_MODES
+                        and turn_mode not in _RECOVERY_TURN_MODES
+                    ) or not _approval_provider_fallback_allowed(exc):
                         raise
                     resolution = resolve_llm_provider_payload(
                         {"llm_provider": None},
@@ -228,7 +243,10 @@ def register_scientific_agent_conversation_routes(
             try:
                 result = run_turn(resolution)
             except (LLMProviderError, ValueError) as exc:
-                if turn_mode not in _AUTHORITY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
+                if (
+                    turn_mode not in _AUTHORITY_TURN_MODES
+                    and turn_mode not in _RECOVERY_TURN_MODES
+                ) or not _approval_provider_fallback_allowed(exc):
                     raise
                 fallback = resolve_llm_provider_payload(
                     {"llm_provider": None},
@@ -310,26 +328,41 @@ def register_scientific_agent_conversation_routes(
             run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
             if not run_id:
                 run_id = f"conversation-{conversation_id}"
-            try:
-                resolution = resolve_llm_provider_payload(
-                    payload,
-                    settings=llm_settings,
-                    providers=llm_providers,
-                    role=CONTROL_PLANE_ROLE,
-                )
-            except (LLMProviderError, ValueError) as exc:
-                # Remote observation and adoption are deterministic Controller
-                # authority.  If an LLM is unavailable, still allow a tick to
-                # observe a worker that remains remote-running; the service
-                # will stop safely before any Execution Agent data is sent.
-                if not _approval_provider_fallback_allowed(exc):
-                    raise
+            turn_mode = service.classify_turn(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            if turn_mode in _RECOVERY_TURN_MODES:
+                # A tick can enter the same FAILED continuation path as a
+                # conversation turn.  The runtime, not this route, resolves
+                # the server-owned provider after the authoritative boundary.
                 resolution = resolve_llm_provider_payload(
                     {"llm_provider": None},
                     settings=llm_settings,
                     providers=llm_providers,
-                    role=CONTROL_PLANE_ROLE,
                 )
+            else:
+                try:
+                    resolution = resolve_llm_provider_payload(
+                        payload,
+                        settings=llm_settings,
+                        providers=llm_providers,
+                        role=CONTROL_PLANE_ROLE,
+                    )
+                except (LLMProviderError, ValueError) as exc:
+                    # Remote observation and adoption are deterministic
+                    # Controller authority.  If an LLM is unavailable, still
+                    # allow a tick to observe a worker that remains
+                    # remote-running; the service will stop safely before any
+                    # Execution Agent data is sent.
+                    if not _approval_provider_fallback_allowed(exc):
+                        raise
+                    resolution = resolve_llm_provider_payload(
+                        {"llm_provider": None},
+                        settings=llm_settings,
+                        providers=llm_providers,
+                        role=CONTROL_PLANE_ROLE,
+                    )
             with resolution.provider_context as provider:
                 result = service.tick(
                     project_id=project_id,

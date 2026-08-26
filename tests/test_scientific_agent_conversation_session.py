@@ -571,6 +571,49 @@ def test_paused_execution_agent_resumes_on_a_mutating_tick_without_new_chat(
     ]
 
 
+def test_failure_recovery_flag_does_not_supply_provider_to_active_tick(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opting into recovery must not change ordinary ACTIVE tick semantics."""
+
+    monkeypatch.setenv("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "true")
+    _app, _client, service, state, controller_result = (
+        _start_waiting_gate_session_with_client(tmp_path, monkeypatch)
+    )
+    controller_result = _auto_controller_result(controller_result)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    monkeypatch.setattr(
+        service.controller,
+        "get",
+        lambda **_kwargs: controller_result,
+    )
+    provider_calls: list[object] = []
+
+    def unexpected_execution_agent_call(*_args, **_kwargs):
+        provider_calls.append(_kwargs.get("provider"))
+        raise AssertionError("ACTIVE tick must not invoke the Execution Agent provider")
+
+    monkeypatch.setattr(
+        service.execution_agent,
+        "create_proposal",
+        unexpected_execution_agent_call,
+    )
+    result = service.tick(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        run_id="conversation-run",
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "request-injected"}),
+    )
+    assert provider_calls == []
+    assert result.session["status"] in {"running", "waiting_gate", "succeeded"}
+
+
 def test_invocation_bound_pauses_and_resumes_on_the_next_tick(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

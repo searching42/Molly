@@ -814,6 +814,47 @@ class FailureRecoveryStore:
         except (ValidationError, ValueError) as exc:
             raise FailureRecoveryConflict("failure observation failed strict validation") from exc
 
+    def find_observation_for_controller(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+        controller_execution_digest: str,
+        inspection_digest: str,
+    ) -> AgentFailureObservation | None:
+        """Find the immutable observation for one exact Controller snapshot.
+
+        Conversation state is only a projection and can be lost in the crash
+        window after observation publication.  Rebuilding the candidate from
+        the Controller and scanning this server-owned collection lets a
+        resumed coordinator recover the original failure ID instead of
+        minting a second observation.  A conflicting match is fail-closed.
+        """
+
+        try:
+            root = self._project_root(project_id, create=False)
+            collection = root / "observations"
+        except FileNotFoundError:
+            return None
+        if not collection.exists():
+            return None
+        if collection.is_symlink() or not collection.is_dir():
+            raise FailureRecoveryConflict("recovery observation collection is unsafe")
+        matches: list[AgentFailureObservation] = []
+        for path in sorted(collection.iterdir(), key=lambda item: item.name):
+            if path.is_symlink() or not path.is_file():
+                raise FailureRecoveryConflict("recovery observation collection contains unsafe entry")
+            observation = self.read_observation(project_id=project_id, failure_id=path.name)
+            if (
+                observation.controller_execution_id == controller_execution_id
+                and observation.controller_execution_digest == controller_execution_digest
+                and observation.inspection_digest == inspection_digest
+            ):
+                matches.append(observation)
+        if len(matches) > 1:
+            raise FailureRecoveryConflict("Controller snapshot has conflicting failure observations")
+        return matches[0] if matches else None
+
     def publish_decision(self, decision: AgentRecoveryDecision, *, project_id: str = "") -> AgentRecoveryDecision:
         """Publish a decision when its project scope is supplied explicitly.
 
@@ -1368,10 +1409,6 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
             or baseline_authorization.proposal_digest != baseline_publication.proposal.proposal_digest
             or baseline_authorization.authorization_id != execution.authorization_id
             or baseline_authorization.authorization_digest != execution.authorization_digest
-            or baseline_authorization.permission_decision_id
-            != execution.permission_decision_id
-            or baseline_authorization.permission_decision_digest
-            != execution.permission_decision_digest
             or baseline_start_intent.start_intent_id != execution.start_intent_id
             or baseline_start_intent.start_intent_digest != execution.start_intent_digest
             or baseline_start_intent.proposal_id
@@ -1382,10 +1419,6 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
             != baseline_authorization.authorization_id
             or baseline_start_intent.authorization_digest
             != baseline_authorization.authorization_digest
-            or baseline_start_intent.permission_decision_id
-            != baseline_authorization.permission_decision_id
-            or baseline_start_intent.permission_decision_digest
-            != baseline_authorization.permission_decision_digest
         ):
             raise FailureRecoveryStale("baseline authority chain binding is stale")
         try:
@@ -1457,6 +1490,11 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
                 ),
                 actor=baseline_actor,
                 actor_source=baseline_actor_source,
+                # The successor consumes the predecessor's already-issued
+                # autonomy grant.  It must not mint a new grant while
+                # rebuilding the Permission -> Authorization -> StartIntent
+                # chain for a recovery effect.
+                issue_autonomy_grant=False,
             )
             verified_authorization = self.authorization_service.verify_authorization(
                 project_id=observation.project_id,
@@ -1566,6 +1604,32 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
                 }
             )
         return details
+
+    def reconcile_recovery_successor(
+        self,
+        *,
+        observation: AgentFailureObservation,
+        decision: AgentRecoveryDecision,
+    ) -> Mapping[str, Any]:
+        """Replay the deterministic successor request after a crash window.
+
+        The recovery store calls this hook only when ``effect_started.json``
+        exists but the recovery receipt is not yet committed.  All request
+        identities in :meth:`apply_recovery_successor` are derived from the
+        immutable failure/decision pair, and the underlying proposal,
+        authorization, StartIntent, and Controller stores are no-replace.
+        Replaying the concrete applicator therefore discovers the committed
+        successor without minting a second effect.  Keeping this method on
+        the reviewed applicator avoids giving a caller an arbitrary
+        reconciliation callback.
+        """
+
+        return self.apply_recovery_successor(
+            observation=observation,
+            decision=decision,
+            controller=self.controller,
+            registry=self.registry,
+        )
 
 
 # Public aliases used by integrations that describe this component as the
@@ -2021,8 +2085,15 @@ class ScientificAgentFailureRecoveryService:
                 existing = self.store.read_observation(project_id=observation.project_id, failure_id=observation.failure_id)
             except FileNotFoundError:
                 existing = None
-            if existing is not None and existing.model_dump(mode="json") != observation.model_dump(mode="json"):
-                raise FailureRecoveryConflict("failure ID is bound to different observation bytes")
+            if existing is not None:
+                # ``created_at`` is audit metadata and is intentionally
+                # excluded from the immutable observation digest.  A process
+                # crash after the first publication must therefore replay the
+                # exact existing observation rather than treating a fresh
+                # clock value as conflicting bytes.
+                if existing.semantic_material() != observation.semantic_material():
+                    raise FailureRecoveryConflict("failure ID is bound to different observation bytes")
+                return existing
             self.store.publish_observation(observation)
         return observation
 
@@ -2090,7 +2161,16 @@ class ScientificAgentFailureRecoveryService:
             "dispatch_remote_task",
             "recover_remote_task",
         }:
-            raise FailureRecoveryDecisionInvalid("Controller is at a Gate or remote authority boundary")
+            # A remote recovery-required snapshot is itself an ambiguous
+            # effect boundary.  Permit only the deterministic UNKNOWN_EFFECT
+            # observation to reach the policy so it can emit ASK_USER with
+            # zero provider/effect; all other remote/Gate actions remain
+            # explicit human boundaries.
+            if not (
+                str(next_action) == "recover_remote_task"
+                and observation.effect_certainty is AgentEffectCertainty.EFFECT_UNKNOWN
+            ):
+                raise FailureRecoveryDecisionInvalid("Controller is at a Gate or remote authority boundary")
         return True
 
     def _verify_tool_catalog(self, observation: AgentFailureObservation) -> None:
@@ -2513,6 +2593,25 @@ class ScientificAgentFailureRecoveryService:
         execution = getattr(value, "execution", None)
         if execution is not None and getattr(execution, "controller_execution_id", ""):
             result.setdefault("successor_controller_execution_id", execution.controller_execution_id)
+        # The existing Replanner returns a bounded L2 result whose immutable
+        # successor/application receipt is nested under ``application``.  The
+        # recovery receipt must still carry that exact publication provenance;
+        # otherwise Conversation cannot project the new proposal after a
+        # recovery REPLAN and a replay would look like an effect-less call.
+        application = getattr(value, "application", None)
+        if application is not None:
+            successor = getattr(application, "successor", None)
+            if successor is not None:
+                result.setdefault("successor_proposal_id", getattr(successor, "proposal_id", ""))
+                result.setdefault("successor_proposal_digest", getattr(successor, "proposal_digest", ""))
+            application_receipt = getattr(application, "receipt", None)
+            if application_receipt is not None:
+                receipt_id = getattr(application_receipt, "application_receipt_id", "")
+                receipt_digest = getattr(application_receipt, "application_receipt_digest", "")
+                if receipt_id and receipt_digest:
+                    result.setdefault("effect_receipt_id", receipt_id)
+                    result.setdefault("effect_receipt_digest", receipt_digest)
+                    result.setdefault("outcome", AgentRecoveryOutcome.COMMITTED.value)
         return result
 
     @staticmethod
