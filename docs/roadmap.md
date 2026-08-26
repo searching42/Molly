@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance
+> Current focus: M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -115,7 +115,21 @@ M3.5-BR2-RUNTIME — Real MinerU runtime closure
         ↓
 M3.5-BR2-MAPPING — Contextual mapping and evidence binding
         ↓
-M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance
+M3.5-BR2-ACCEPT — Conversation-driven BR2 implementation and crash-safe publication
+        ↓
+M3.5-AUT-AUTH — Grant-based autonomy authority model
+        ↓
+M3.5-AUT-AUTH-L2 — Authority-aware L2 provenance and application
+        ↓
+M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor
+        ↓
+M3.5-AUT-EXECUTION-V2 — Execution Agent v2
+        ↓
+M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery
+        ↓
+M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant
+        ↓
+M3.5-AUT-LEASE — Active-time accounting and autonomy lease
         ↓
 M3.5-UI — Minimal unified UI
         ↓
@@ -184,25 +198,68 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: deterministic extraction, LLM contextual mapping, schema validation, and evidence binding produce a confirmation-ready candidate raw dataset with privacy-safe provenance.
   - Closed by: PR #50, [acceptance README](evidence/br2-contextual-mapping-v1/README.md), [acceptance manifest](evidence/br2-contextual-mapping-v1/acceptance_manifest.json), and [mapping summary](evidence/br2-contextual-mapping-v1/mapping_summary.json).
 
-- [ ] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
+- [x] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
+  - State: `DONE`
+  - Evidence: `I/T/—`
+  - Dependency: after `M3.5-BR2-MAPPING`.
+  - Closed by: PR #51.
+  - Definition of Done: the BR2 conversation path and confined crash-safe publication are implemented and covered by repository tests; no training, generation, Top-N, or experimental validation is included.
+  - Acceptance boundary: fresh real conversation acceptance was not rerun for this state update, so no `V` evidence is claimed.
+
+- [x] **M3.5-AUT-AUTH — Grant-based autonomy authority model**
+  - State: `DONE`
+  - Evidence: `I/T/—`
+  - Dependency: after `M3.5-AUT-L2`.
+  - Closed by: PR #54.
+  - Definition of Done: bounded autonomy authority is represented by an explicit grant and relation policy; authority does not create a second execution authority, and historical exact-option v1 authorization remains readable and unchanged.
+
+- [x] **M3.5-AUT-AUTH-L2 — Authority-aware L2 provenance and application**
+  - State: `DONE`
+  - Evidence: `I/T/—`
+  - Dependency: after `M3.5-AUT-AUTH`.
+  - Closed by: PR #55.
+  - Definition of Done: L2 uses `AuthorityRelation` and independent `SemanticBoundary` classification; historical v1 uses exact option authority, scope-aware v2 uses the registered schema range, and authority-aware application preserves `agent_plan_revision_application_receipt.v2` provenance.
+
+- [ ] **M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor**
   - State: `READY`
   - Evidence: `—/—/—`
-  - Dependency: after `M3.5-BR2-MAPPING`.
-  - Target PR: #51.
-  - Definition of Done: the real PDF conversation path reaches the human confirmation Gate and `WAITING_USER`; no training, generation, Top-N, or experimental validation is included.
+  - Dependency: after `M3.5-AUT-AUTH-L2` and the minimal golden-path regression guard.
+  - Definition of Done: when the current verified Controller state has exactly one legal, authorized, argument-free deterministic successor with no semantic boundary, the server may skip the Execution Agent LLM call. The path creates no authority, never executes effects directly, never bypasses Controller, does not choose scientific branches or parameters, does not approve Gates, does not handle `UNKNOWN_EFFECT`, retry, or replan, and does not become a second state machine.
+
+- [ ] **M3.5-AUT-EXECUTION-V2 — Execution Agent v2**
+  - State: `QUEUED`
+  - Evidence: `—/—/—`
+  - Dependency: after `M3.5-AUT-FASTPATH`.
+  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+
+- [ ] **M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery**
+  - State: `QUEUED`
+  - Evidence: `—/—/—`
+  - Dependency: after `M3.5-AUT-EXECUTION-V2`.
+  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+
+- [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
+  - State: `QUEUED`
+  - Evidence: `—/—/—`
+  - Dependency: after `M3.5-AUT-FAILURE-RECOVERY`.
+  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+
+- [ ] **M3.5-AUT-LEASE — Active-time accounting and autonomy lease**
+  - State: `QUEUED`
+  - Evidence: `—/—/—`
+  - Dependency: after `M3.5-AUT-FEEDBACK`.
+  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
 
 - [ ] **M3.5-UI — Minimal unified UI authority-preservation closure**
   - State: `DEFERRED`
   - Evidence: `—/—/—`
-  - Dependency: after `M3.5-AUT-ACCEPT` and `M3.5-BR2-ACCEPT`.
-  - Target PR: #52.
+  - Dependency: after `M3.5-AUT-LEASE` and `M3.5-BR2-ACCEPT`.
   - Definition of Done: the minimal UI consumes existing conversation/session, proposal, permission, authorization, Controller state, Gate, result projection, inspection, and trace links without becoming state or execution authority.
 
 - [ ] **M3.5-V1-ACCEPT — Molly v1 final representative acceptance**
   - State: `DEFERRED`
   - Evidence: `—/—/—`
   - Dependency: after BR1, accepted Autonomy L1/L2, accepted BR2 backend, observability acceptance, and minimal UI closure.
-  - Target PR: #53.
   - Definition of Done: repository-owner review binds representative BR1 and BR2 evidence, restart/recovery, exact replay, privacy, authority preservation, and integrated observability to the exact final review HEAD.
 
 ### M3.5-AUT-POLICY contract closure
