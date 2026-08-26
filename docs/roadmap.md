@@ -243,7 +243,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - State: `DONE`
   - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-FASTPATH`.
-  - Closed by: PR #<pending>.
+  - Closed by: PR #58.
   - Definition of Done: a strict versioned `TOOL_CALL` / `ASK_USER` / `REPLAN` response and proposal contract is server-validated against a small logical scientific-tool catalog; each logical tool exposes a closed JSON Schema with bounded arguments and no physical adapter, path, host, credential, command, or worker fields; a deterministic non-executable compiler recomputes current Controller evidence, registered options, `AutonomyGrant` relation, and `SemanticBoundary`; only `SUBSET + NONE` with an exact current Controller-compatible operation may continue, and all application remains through the existing Permission / Authorization / Controller chain. v1 proposal/receipt artifacts remain byte-compatible and replayable; v2 makes at most one provider call and does not retry unknown outcomes. The deterministic fast path remains ahead of v2, while `ASK_USER`, semantic boundaries, Gate/remote authority, `REPLAN`, and unsupported/future actions remain non-executable and fail closed. The production Conversation integration is server-opt-in through `AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED` so historical v1 callers retain their exact contract.
 
 - [ ] **M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery**
