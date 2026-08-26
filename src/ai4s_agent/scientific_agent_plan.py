@@ -1389,6 +1389,7 @@ class AgentExecutionPlanCompiler:
         client_request_id: str | None = None,
         invocation_id: str | None = None,
         schema_version: str = AGENT_EXECUTION_PLAN_PROPOSAL_V2,
+        skip_satisfied_dependencies: bool = False,
     ) -> AgentExecutionPlanProposal:
         parsed = response if isinstance(response, AgentExecutionPlanLLMResponse) else AgentExecutionPlanLLMResponse.model_validate(response)
         if invocation.observation_digest != observation.observation_digest:
@@ -1442,11 +1443,60 @@ class AgentExecutionPlanCompiler:
             run_plan = expand_run_plan(
                 run_id=observation.run_id,
                 requested_tasks=requested_tasks,
-                available_artifacts=selected_artifacts,
+                available_artifacts=(
+                    [item.artifact_id for item in observation.available_artifacts]
+                    if skip_satisfied_dependencies
+                    else selected_artifacts
+                ),
                 registry=self.registry,
+                skip_satisfied_dependencies=skip_satisfied_dependencies,
             )
         except ValueError as exc:
             raise ScientificAgentPlanError("registered task dependency expansion failed") from exc
+        compiled_task_ids = {task.task_id for task in run_plan.tasks}
+        available_for_reuse = {
+            item.artifact_id for item in observation.available_artifacts
+        }
+        reused_completed_dependency_ids = sorted(
+            {
+                dependency_id
+                for task in run_plan.tasks
+                for dependency_id in self.registry.get(task.task_id).depends_on
+                if skip_satisfied_dependencies
+                and dependency_id not in compiled_task_ids
+                and set(self.registry.get(dependency_id).output_artifacts).issubset(
+                    available_for_reuse
+                )
+            }
+        )
+        reused_completed_dependency_artifact_ids = sorted(
+            {
+                artifact_id
+                for dependency_id in reused_completed_dependency_ids
+                for artifact_id in self.registry.get(dependency_id).output_artifacts
+            }
+        )
+        if reused_completed_dependency_artifact_ids:
+            # A dependency is adoptable only when every output is still a
+            # verified, exact artifact produced by that dependency.  The
+            # resulting IDs are provenance for Authorization, never an
+            # execution capability or a permission to discover new files.
+            for artifact_id in reused_completed_dependency_artifact_ids:
+                artifact = available_by_id.get(artifact_id)
+                if (
+                    artifact is None
+                    or artifact.verification_state not in {"registered", "verified"}
+                    or not artifact.content_digest
+                    or (
+                        artifact.producer_task_id is not None
+                        and artifact.producer_task_id
+                        not in reused_completed_dependency_ids
+                    )
+                ):
+                    raise ScientificAgentPlanError(
+                        "reused dependency output is not an exact verified artifact: "
+                        f"{artifact_id}"
+                    )
         expanded_tools = {
             tool.task_id: tool
             for tool in observation.tool_catalog.tools
@@ -1771,6 +1821,10 @@ class AgentExecutionPlanCompiler:
             questions=questions,
             required_gates=required_gates,
             missing_artifacts=list(run_plan.missing_artifacts),
+            reused_completed_dependency_ids=reused_completed_dependency_ids,
+            reused_completed_dependency_artifact_ids=(
+                reused_completed_dependency_artifact_ids
+            ),
             llm_invocation=metadata,
             client_request_id=clean_client_request_id,
             invocation_id=clean_invocation_id,
@@ -2727,6 +2781,9 @@ class ScientificAgentPlanProposalStore:
                 # v1 artifact as v2 would make every legacy publication
                 # unverifiable.
                 schema_version=proposal.schema_version,
+                skip_satisfied_dependencies=bool(
+                    proposal.reused_completed_dependency_ids
+                ),
             )
         except (ScientificAgentPlanError, ValueError) as exc:
             raise ScientificAgentPlanError("proposal is not a deterministic registry compilation") from exc

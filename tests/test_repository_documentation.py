@@ -164,8 +164,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-AUTH", "DONE"),
         ("M3.5-AUT-AUTH-L2", "DONE"),
         ("M3.5-AUT-FASTPATH", "DONE"),
-        ("M3.5-AUT-EXECUTION-V2", "READY"),
-        ("M3.5-AUT-FAILURE-RECOVERY", "QUEUED"),
+        ("M3.5-AUT-EXECUTION-V2", "DONE"),
+        ("M3.5-AUT-FAILURE-RECOVERY", "READY"),
         ("M3.5-AUT-FEEDBACK", "QUEUED"),
         ("M3.5-AUT-LEASE", "QUEUED"),
         ("M3.5-UI", "DEFERRED"),
@@ -192,7 +192,10 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Closed by: PR #57." in fastpath
     assert "ADOPT_COMPLETED_TASK" in fastpath
     assert "non-executable projection" in fastpath
-    assert "State: `READY`" in item_block(active_queue, "M3.5-AUT-EXECUTION-V2")
+    execution_v2 = item_block(active_queue, "M3.5-AUT-EXECUTION-V2")
+    assert "State: `DONE`" in execution_v2
+    assert "Evidence: `I/T/—`" in execution_v2
+    assert "Closed by: PR #58." in execution_v2
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1

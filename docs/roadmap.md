@@ -239,14 +239,15 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: when the current verified Controller state has exactly one legal, authorized, argument-free deterministic successor with no semantic boundary, the server may skip the Execution Agent LLM call. The path creates no authority, never executes effects directly, never bypasses Controller, does not choose scientific branches or parameters, does not approve Gates, does not handle `UNKNOWN_EFFECT`, retry, or replan, and does not become a second state machine.
   - Implementation note: v1 reviews only `ADOPT_COMPLETED_TASK` after verified local publication; all other and future Controller actions remain on the existing Execution Agent or human/fail-closed paths. The deterministic decision is a recomputed, non-executable projection.
 
-- [ ] **M3.5-AUT-EXECUTION-V2 — Execution Agent v2**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-EXECUTION-V2 — Execution Agent v2**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-FASTPATH`.
-  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+  - Closed by: PR #58.
+  - Definition of Done: a strict versioned `TOOL_CALL` / `ASK_USER` / `REPLAN` response and proposal contract is server-validated against a small logical scientific-tool catalog; each logical tool exposes a closed JSON Schema with bounded arguments and no physical adapter, path, host, credential, command, or worker fields; a deterministic non-executable compiler recomputes current Controller evidence, registered options, `AutonomyGrant` relation, and `SemanticBoundary`; only `SUBSET + NONE` may continue, either through the unchanged exact Controller operation or through a server-created exact bounded successor whose Permission / Authorization / StartIntent / Controller provenance is fully bound. All effect application remains through the existing Permission / Authorization / Controller chain. v1 proposal/receipt artifacts remain byte-compatible and replayable; v2 makes at most one provider call and does not retry unknown outcomes. The deterministic fast path remains ahead of v2, while `ASK_USER`, semantic boundaries, Gate/remote authority, `REPLAN`, and unsupported/future actions remain non-executable and fail closed. The production Conversation integration is server-opt-in through `AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED` so historical v1 callers retain their exact contract.
 
 - [ ] **M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-EXECUTION-V2`.
   - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.

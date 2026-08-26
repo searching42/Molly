@@ -1779,15 +1779,55 @@ class ScientificAgentAuthorizationService:
         proposal = publication.proposal
         observation = publication.observation
         artifacts_by_id = {item.artifact_id: item for item in observation.available_artifacts}
-        artifact_bindings = [
-            AgentAuthorizationArtifactBinding(
+        reused_artifact_producers = {
+            artifact_id: dependency_id
+            for dependency_id in proposal.reused_completed_dependency_ids
+            for artifact_id in self.registry.get(dependency_id).output_artifacts
+            if artifact_id in proposal.reused_completed_dependency_artifact_ids
+        }
+
+        def artifact_binding(
+            artifact_id: str,
+            *,
+            expected_producer_task_id: str | None = None,
+        ) -> AgentAuthorizationArtifactBinding:
+            artifact = artifacts_by_id.get(artifact_id)
+            if (
+                artifact is None
+                or artifact.verification_state not in {"registered", "verified"}
+                or not artifact.content_digest
+            ):
+                raise ScientificAgentAuthorizationVerificationError(
+                    "authorization artifact binding is not currently verified: "
+                    f"{artifact_id}"
+                )
+            return AgentAuthorizationArtifactBinding(
                 artifact_id=artifact_id,
-                content_digest=artifacts_by_id[artifact_id].content_digest,
-                trust_class=artifacts_by_id[artifact_id].trust_class,
-                verification_state=artifacts_by_id[artifact_id].verification_state,
-                producer_task_id=artifacts_by_id[artifact_id].producer_task_id,
+                content_digest=artifact.content_digest,
+                trust_class=artifact.trust_class,
+                verification_state=artifact.verification_state,
+                # Older observation builders may not carry producer metadata
+                # for a registered artifact.  For successor reuse the
+                # compiler's reviewed dependency roster is the authoritative
+                # producer binding; an explicit conflicting observation is
+                # rejected rather than silently widened.
+                producer_task_id=(
+                    expected_producer_task_id
+                    if expected_producer_task_id is not None
+                    else artifact.producer_task_id
+                ),
             )
+
+        artifact_bindings = [
+            artifact_binding(artifact_id)
             for artifact_id in proposal.selected_artifacts
+        ]
+        reused_dependency_artifact_bindings = [
+            artifact_binding(
+                artifact_id,
+                expected_producer_task_id=reused_artifact_producers.get(artifact_id),
+            )
+            for artifact_id in proposal.reused_completed_dependency_artifact_ids
         ]
         profiles_by_id = {
             item.profile_id: item for item in observation.logical_execution_profiles
@@ -1863,6 +1903,7 @@ class ScientificAgentAuthorizationService:
             compiled_task_options=proposal.compiled_task_options,
             dispatch_intents=proposal.dispatch_intents,
             artifact_bindings=artifact_bindings,
+            reused_dependency_artifact_bindings=reused_dependency_artifact_bindings,
             profile_bindings=profile_bindings,
             limits=proposal.limits,
             stop_conditions=proposal.stop_conditions,

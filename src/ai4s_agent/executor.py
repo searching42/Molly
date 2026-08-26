@@ -3507,6 +3507,12 @@ class RunPlanExecutor:
                 self._register(project_id, run_id, "property_catalog", self._relative(run_dir, Path(catalog)))
                 artifact_paths["property_catalog"] = catalog
             self._register(project_id, run_id, "cleaning_rules", result_rel)
+            # The Controller output-evidence path consumes the same in-memory
+            # artifact roster that the Registry publication updates.  Keep the
+            # derived result binding in both places so an exact successor
+            # execution can verify every declared output before publishing its
+            # completion receipt.
+            artifact_paths["cleaning_rules"] = str(result_path)
             return
         if task_id == "check_trainability":
             self._register(project_id, run_id, "trainability_report", result_rel)

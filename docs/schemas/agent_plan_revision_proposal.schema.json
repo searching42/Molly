@@ -262,6 +262,20 @@
           "title": "Missing Artifacts",
           "type": "array"
         },
+        "reused_completed_dependency_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reused Completed Dependency Ids",
+          "type": "array"
+        },
+        "reused_completed_dependency_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reused Completed Dependency Artifact Ids",
+          "type": "array"
+        },
         "status": {
           "const": "review_required",
           "default": "review_required",

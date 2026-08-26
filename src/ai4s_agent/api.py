@@ -10,6 +10,10 @@ from ai4s_agent.control_plane_events import ControlPlaneEventProjector
 from ai4s_agent.dataset_workflow import DatasetWorkflowService
 from ai4s_agent.execution_agent import ExecutionAgentService
 from ai4s_agent.execution_agent_store import ExecutionAgentStore
+from ai4s_agent.execution_agent_v2 import (
+    ExecutionAgentV2Service,
+    ExecutionAgentV2Store,
+)
 from ai4s_agent.agent_run_inspection import AgentRunInspectionService
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import build_harness_observability
@@ -242,9 +246,17 @@ def register_routes(
         store=execution_agent_store,
         tracer=harness_tracer,
     )
+    execution_agent_v2_store = ExecutionAgentV2Store(storage=projects)
+    execution_agent_v2 = ExecutionAgentV2Service(
+        controller=harness_controller,
+        store=execution_agent_v2_store,
+        registry=scientific_task_registry,
+        tracer=harness_tracer,
+    )
     register_execution_agent_routes(
         app,
         service=execution_agent,
+        v2_service=execution_agent_v2,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
     )
@@ -297,6 +309,11 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         controller=harness_controller,
         execution_agent=execution_agent,
+        execution_agent_v2=(
+            execution_agent_v2
+            if _as_bool(app.config.get("AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED"))
+            else None
+        ),
         input_binding_service=input_binding_service,
         resource_authority_service=app.extensions["remote_resource_authority_service"],
         result_projection_service=result_projection_service,

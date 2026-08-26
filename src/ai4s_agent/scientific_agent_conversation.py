@@ -32,6 +32,17 @@ from ai4s_agent.execution_agent import (
     ExecutionAgentStale,
 )
 from ai4s_agent.execution_agent_store import ExecutionAgentStoreError
+from ai4s_agent.execution_agent_v2 import (
+    AgentToolCallApplicationRequestV2,
+    AgentToolCallProposalRequestV2,
+    ExecutionAgentV2Conflict,
+    ExecutionAgentV2DecisionInvalid,
+    ExecutionAgentV2LLMOutcomeUnknown,
+    ExecutionAgentV2LLMResponseInvalid,
+    ExecutionAgentV2LLMUnavailable,
+    ExecutionAgentV2Stale,
+    LogicalToolCompilationError,
+)
 from ai4s_agent.scientific_agent_autonomy_l1 import (
     AUTONOMY_L1_PER_INVOCATION_MAX_STEPS,
     AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
@@ -132,6 +143,7 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
         "EXECUTION_AGENT_PAUSED",
         "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
         "DETERMINISTIC_FASTPATH_STEP",
+        "EXECUTION_AGENT_V2_STEP",
     }
 )
 ACTIVE_SESSION_STATUSES = frozenset(
@@ -405,6 +417,7 @@ class ScientificAgentConversationSessionService:
         authorization_service: ScientificAgentAuthorizationService,
         controller: ScientificAgentHarnessController,
         execution_agent: ExecutionAgentService,
+        execution_agent_v2: Any | None = None,
         input_binding_service: ScientificAgentRunInputBindingService | None = None,
         resource_authority_service: Any | None = None,
         result_projection_service: ScientificAgentResultProjectionService | None = None,
@@ -418,6 +431,7 @@ class ScientificAgentConversationSessionService:
         self.authorization_service = authorization_service
         self.controller = controller
         self.execution_agent = execution_agent
+        self.execution_agent_v2 = execution_agent_v2
         self.input_binding_service = input_binding_service
         self.resource_authority_service = resource_authority_service
         self.result_projection_service = result_projection_service
@@ -2658,6 +2672,16 @@ class ScientificAgentConversationSessionService:
                 project_id=execution.project_id,
                 controller_execution_id=execution.controller_execution_id,
             )
+            v2_counter = getattr(
+                getattr(self.execution_agent_v2, "store", None),
+                "count_llm_calls_for_controller_execution",
+                None,
+            )
+            if callable(v2_counter):
+                llm_calls += v2_counter(
+                    project_id=execution.project_id,
+                    controller_execution_id=execution.controller_execution_id,
+                )
         except (ExecutionAgentStoreError, OSError, ValueError) as exc:
             raise AutonomyL1EvidenceError(
                 "L1 Execution Agent evidence could not be verified"
@@ -4325,6 +4349,213 @@ class ScientificAgentConversationSessionService:
                 inspection.inspection_digest,
                 str(state.get("revision") or 0),
             )
+            if self.execution_agent_v2 is not None:
+                try:
+                    v2_proposal_result = self.execution_agent_v2.create_proposal(
+                        project_id=project_id,
+                        controller_execution_id=(
+                            controller_result.execution.controller_execution_id
+                        ),
+                        request=AgentToolCallProposalRequestV2(
+                            expected_controller_execution_digest=(
+                                controller_result.execution.execution_digest
+                            ),
+                            client_request_id=request_id,
+                            external_llm_approved=True,
+                            llm_provider=None,
+                        ),
+                        provider=provider,
+                        provider_binding_digest=provider_binding_digest,
+                    )
+                    v2_proposal = v2_proposal_result.publication.proposal
+                    v2_applied = self.execution_agent_v2.apply_proposal(
+                        project_id=project_id,
+                        controller_execution_id=(
+                            controller_result.execution.controller_execution_id
+                        ),
+                        tool_call_proposal_id=v2_proposal.tool_call_proposal_id,
+                        request=AgentToolCallApplicationRequestV2(
+                            expected_tool_call_proposal_digest=(
+                                v2_proposal.tool_call_proposal_digest
+                            ),
+                            client_request_id=_request_id(
+                                "conversation-execution-agent-v2-apply",
+                                project_id,
+                                conversation_id,
+                                v2_proposal.tool_call_proposal_digest,
+                            ),
+                        ),
+                    )
+                except ExecutionAgentV2LLMOutcomeUnknown:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="unknown",
+                        reason_code="EXECUTION_AGENT_V2_LLM_OUTCOME_UNKNOWN",
+                        updates=self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="unknown_outcome",
+                            stop_reason="AUTONOMY_L1_LLM_OUTCOME_UNKNOWN",
+                        ),
+                        event_type="run.failed",
+                    )
+                    return controller_result, state, "llm_unknown"
+                except ExecutionAgentV2LLMUnavailable:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="unknown",
+                        reason_code="EXECUTION_AGENT_V2_LLM_UNAVAILABLE",
+                        updates=self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="provider_unavailable",
+                            stop_reason="AUTONOMY_L1_PROVIDER_UNAVAILABLE",
+                        ),
+                        event_type="run.failed",
+                    )
+                    return controller_result, state, "llm_unavailable"
+                except (
+                    ExecutionAgentV2LLMResponseInvalid,
+                    ExecutionAgentV2DecisionInvalid,
+                    LogicalToolCompilationError,
+                ):
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="failed",
+                        reason_code="EXECUTION_AGENT_V2_DECISION_INVALID",
+                        updates=self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason="EXECUTION_AGENT_V2_DECISION_INVALID",
+                        ),
+                        event_type="run.failed",
+                    )
+                    return controller_result, state, "v2_decision_invalid"
+                except ExecutionAgentV2Stale:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="stale_authority",
+                        reason_code="EXECUTION_AGENT_V2_STALE_AUTHORITY",
+                        updates=self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason="EXECUTION_AGENT_V2_STALE_AUTHORITY",
+                        ),
+                        event_type="run.failed",
+                    )
+                    return controller_result, state, "stale"
+                except ExecutionAgentV2Conflict:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="stale_authority",
+                        reason_code="EXECUTION_AGENT_V2_CONFLICT",
+                        updates=self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason="EXECUTION_AGENT_V2_CONFLICT",
+                        ),
+                        event_type="run.failed",
+                    )
+                    return controller_result, state, "conflict"
+
+                post_attempt_budget = self._l1_budget_snapshot(
+                    controller_result=controller_result
+                )
+                if (
+                    v2_applied.application_receipt.outcome
+                    == AgentToolCallApplicationOutcome.APPLIED
+                ):
+                    controller_result = v2_applied.controller_result or self.controller.get(
+                        project_id=project_id,
+                        controller_execution_id=(
+                            controller_result.execution.controller_execution_id
+                        ),
+                    )
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="running",
+                        reason_code="EXECUTION_AGENT_V2_STEP",
+                        updates={
+                            "controller_status": controller_result.inspection.status.value,
+                            "current_task_id": controller_result.inspection.current_task_id,
+                            **self._l1_projection_updates(
+                                decision=policy_decision,
+                                snapshot=post_attempt_budget,
+                                status="eligible",
+                            ),
+                        },
+                        event_type="execution_agent.v2.applied",
+                        message="Execution Agent v2 已提交一个经服务器校验的逻辑工具决策；仍由 Harness Controller 执行。",
+                        event_data={
+                            "controller_status": controller_result.inspection.status.value,
+                            "current_task_id": controller_result.inspection.current_task_id,
+                            "decision_type": v2_proposal.decision_type.value,
+                            "logical_tool_id": v2_proposal.selected_tool_id,
+                            "authority_relation": v2_proposal.authority_relation.value,
+                            "semantic_boundary": v2_proposal.semantic_boundary.value,
+                            "authority_auto_apply": v2_proposal.authority_auto_apply,
+                            "execution_agent_version": "v2",
+                            "execution_agent_llm_skipped": False,
+                        },
+                    )
+                    continue
+
+                classification = v2_proposal.classification.value
+                if v2_proposal.decision_type.value == "ASK_USER":
+                    boundary_status = "needs_clarification"
+                    boundary_reason = "EXECUTION_AGENT_V2_USER_INPUT_REQUIRED"
+                    stop_reason = "EXECUTION_AGENT_V2_USER_INPUT_REQUIRED"
+                elif classification == "REQUIRE_AUTHORITY":
+                    boundary_status = "approval_required"
+                    boundary_reason = "EXECUTION_AGENT_V2_AUTHORITY_REQUIRED"
+                    stop_reason = "EXECUTION_AGENT_V2_AUTHORITY_REQUIRED"
+                else:
+                    boundary_status = "needs_clarification"
+                    boundary_reason = "EXECUTION_AGENT_V2_REPLAN_DEFERRED"
+                    stop_reason = "EXECUTION_AGENT_V2_REPLAN_DEFERRED"
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status=boundary_status,
+                    reason_code=boundary_reason,
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=post_attempt_budget,
+                            status="human_boundary",
+                            stop_reason=stop_reason,
+                        ),
+                    },
+                    event_type="execution_agent.v2.boundary",
+                    message=(
+                        "Execution Agent v2 已提出需要额外用户或 authority 操作的决策；"
+                        "未调用 Controller effect。"
+                    ),
+                    event_data={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "decision_type": v2_proposal.decision_type.value,
+                        "logical_tool_id": v2_proposal.selected_tool_id,
+                        "authority_relation": v2_proposal.authority_relation.value,
+                        "semantic_boundary": v2_proposal.semantic_boundary.value,
+                        "authority_auto_apply": v2_proposal.authority_auto_apply,
+                        "execution_agent_version": "v2",
+                        "execution_agent_llm_skipped": not v2_proposal_result.llm_used,
+                    },
+                )
+                return controller_result, state, boundary_reason
+
             try:
                 proposal_result = self.execution_agent.create_proposal(
                     project_id=project_id,
