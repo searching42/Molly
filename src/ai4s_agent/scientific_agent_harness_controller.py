@@ -3860,8 +3860,19 @@ class ScientificAgentHarnessController:
                 raise ScientificAgentHarnessControllerVerificationError(
                     "non-execution authority changed after Controller start"
                 )
+        # A successor may intentionally regenerate an artifact ID that was
+        # present in the baseline run.  Freeze only the artifact IDs that the
+        # exact Authorization actually binds as inputs.  Other registered
+        # artifacts are either outputs/reused provenance or unrelated project
+        # state; output contents remain bound by the task output contract,
+        # executor verification, and Controller receipts below.
+        authorized_input_ids = {
+            binding.artifact_id for binding in authorization.artifact_bindings
+        }
         original_artifacts = {
-            item.artifact_id: item for item in publication.observation.available_artifacts
+            item.artifact_id: item
+            for item in publication.observation.available_artifacts
+            if item.artifact_id in authorized_input_ids
         }
         current_artifacts = {
             item.artifact_id: item for item in current_observation.available_artifacts

@@ -2030,6 +2030,7 @@ def expand_run_plan(
     requested_tasks: list[str],
     available_artifacts: list[str] | None = None,
     registry: AtomicTaskRegistry | None = None,
+    skip_satisfied_dependencies: bool = False,
 ) -> RunPlan:
     task_registry = registry or AtomicTaskRegistry()
     pre_existing_artifacts = set(available_artifacts or [])
@@ -2178,7 +2179,16 @@ def expand_run_plan(
             unresolved_requirements.append(required)
             missing_artifacts.add(required)
 
-        dependencies.extend(spec.depends_on)
+        if skip_satisfied_dependencies:
+            dependencies.extend(
+                dependency
+                for dependency in spec.depends_on
+                if not set(task_registry.get(dependency).output_artifacts).issubset(
+                    pre_existing_artifacts
+                )
+            )
+        else:
+            dependencies.extend(spec.depends_on)
 
         dedup_dependencies: list[str] = []
         for dep in dependencies:

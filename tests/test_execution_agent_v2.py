@@ -487,6 +487,110 @@ def test_v2_valid_tool_call_is_one_provider_call_and_binds_compiler(tmp_path: Pa
     assert proposal.server_compiled_operation.value == "controller_advance"
 
 
+def test_v2_create_apply_ignores_advancing_wall_clock(tmp_path: Path) -> None:
+    storage, controller, current = _generate_controller_fixture(tmp_path)
+    ticks = 0
+
+    def advancing_clock() -> str:
+        nonlocal ticks
+        ticks += 1
+        return f"2026-08-01T00:00:{ticks:02d}Z"
+
+    service = ExecutionAgentV2Service(
+        controller=controller,
+        store=ExecutionAgentV2Store(storage=storage),
+        clock=advancing_clock,
+    )
+    proposal_result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        request=_proposal_request(current.execution.execution_digest, "proposal-v2-advancing-clock"),
+        provider=CountingStubProvider(
+            response={
+                "decision_type": "TOOL_CALL",
+                "tool_id": "generate_candidates",
+                "arguments": {"count": 8, "seed": 0},
+                "expected_outcome": "Generate a bounded deterministic candidate set.",
+                "confidence": 0.82,
+            }
+        ),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    proposal = proposal_result.publication.proposal
+    applied = service.apply_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        tool_call_proposal_id=proposal.tool_call_proposal_id,
+        request=AgentToolCallApplicationRequestV2(
+            expected_tool_call_proposal_digest=proposal.tool_call_proposal_digest,
+            client_request_id="application-v2-advancing-clock",
+        ),
+    )
+    assert ticks > 1
+    assert proposal_result.publication.observation.created_at != applied.application_receipt.created_at
+    assert applied.application_receipt.outcome.value == "applied"
+
+
+def test_v2_response_checkpoint_reuses_frozen_context_and_rejects_changed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, controller, current = _clean_controller_fixture(tmp_path)
+    service = _v2_service(storage, controller)
+    request = _proposal_request(
+        current.execution.execution_digest,
+        "proposal-v2-response-checkpoint",
+    )
+    provider = CountingStubProvider(response=_tool_call_response())
+
+    def fail_publication(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("simulate crash after response checkpoint")
+
+    monkeypatch.setattr(service.store, "publish_v2_proposal", fail_publication)
+    with pytest.raises(RuntimeError, match="response checkpoint"):
+        service.create_proposal(
+            project_id="project-1",
+            controller_execution_id=current.execution.controller_execution_id,
+            request=request,
+            provider=provider,
+            provider_binding_digest=_agent_digest({"provider": "stub"}),
+        )
+    assert provider.calls == 1
+
+    changed_inspection = type(current.inspection).model_validate(
+        {
+            **current.inspection.model_dump(mode="json"),
+            "next_action": AgentHarnessControllerAction.WAIT_FOR_GATE.value,
+            "inspection_digest": "",
+        }
+    )
+    monkeypatch.setattr(
+        controller,
+        "read_execution_agent_snapshot",
+        lambda **_kwargs: replace(current, inspection=changed_inspection),
+    )
+
+    class ExplodingProvider(StubLLMProvider):
+        def __init__(self) -> None:
+            super().__init__(response=_tool_call_response())
+            self.calls = 0
+
+        def complete_json(self, **kwargs: Any):
+            self.calls += 1
+            raise AssertionError("frozen response recovery must not call the provider")
+
+    recovering_provider = ExplodingProvider()
+    with pytest.raises(ExecutionAgentV2Stale):
+        service.create_proposal(
+            project_id="project-1",
+            controller_execution_id=current.execution.controller_execution_id,
+            request=request,
+            provider=recovering_provider,
+            provider_binding_digest=_agent_digest({"provider": "stub"}),
+        )
+    assert recovering_provider.calls == 0
+
+
 def test_v2_generate_candidates_reaches_controller_once_and_replays(
     tmp_path: Path,
 ) -> None:
@@ -619,6 +723,63 @@ def test_v2_gate_boundary_is_server_human_boundary_without_effect(
     ) == 0
 
 
+def test_v2_changed_gated_option_requires_fresh_gate_without_effect(
+    tmp_path: Path,
+) -> None:
+    storage, controller, current = _generate_controller_fixture(tmp_path)
+    service = _v2_service(storage, controller)
+    provider = CountingStubProvider(
+        response={
+            "decision_type": "TOOL_CALL",
+            "tool_id": "generate_candidates",
+            "arguments": {"count": 16, "seed": 0},
+            "expected_outcome": "Generate a bounded deterministic candidate set.",
+            "confidence": 0.82,
+        }
+    )
+    result = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        request=_proposal_request(
+            current.execution.execution_digest,
+            "proposal-v2-gated-successor",
+        ),
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    assert provider.calls == 1
+    assert result.publication.proposal.compilation is not None
+    assert result.publication.proposal.compilation.authority_relation is AuthorityRelation.SUBSET
+    assert result.publication.proposal.compilation.controller_options_match is False
+    assert result.publication.proposal.classification is AgentExecutionV2Classification.REQUIRE_HUMAN
+    assert result.publication.proposal.fresh_permission_required is True
+    assert result.publication.proposal.fresh_authorization_required is True
+
+    before = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+    )
+    applied = service.apply_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        tool_call_proposal_id=result.publication.proposal.tool_call_proposal_id,
+        request=AgentToolCallApplicationRequestV2(
+            expected_tool_call_proposal_digest=result.publication.proposal.tool_call_proposal_digest,
+            client_request_id="application-v2-gated-successor",
+        ),
+    )
+    after = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+    )
+    assert applied.application_receipt.outcome.value == "user_action_required"
+    assert applied.application_receipt.controller_create_called is False
+    assert applied.application_receipt.fresh_permission_required is True
+    assert applied.application_receipt.fresh_authorization_required is True
+    assert applied.application_receipt.dispatch_occurred is False
+    assert len(after) == len(before)
+
+
 def test_conversation_routes_non_deterministic_step_to_v2_and_counts_one_call(
     tmp_path: Path,
 ) -> None:
@@ -694,7 +855,7 @@ def test_conversation_routes_non_deterministic_step_to_v2_and_counts_one_call(
     assert sum(item.dispatch_occurred for item in receipts) == 1
 
 
-def test_v2_changed_options_are_not_silently_rewritten_or_applied(tmp_path: Path) -> None:
+def test_v2_bounded_option_successor_reaches_controller_exactly_once(tmp_path: Path) -> None:
     storage, controller, current = _clean_controller_fixture(tmp_path)
     service = _v2_service(storage, controller)
     arguments = _tool_call_response()["arguments"]
@@ -712,9 +873,9 @@ def test_v2_changed_options_are_not_silently_rewritten_or_applied(tmp_path: Path
     assert proposal.compilation is not None
     assert proposal.compilation.authority_relation is AuthorityRelation.SUBSET
     assert proposal.compilation.controller_options_match is False
-    assert proposal.classification is AgentExecutionV2Classification.DEFERRED
+    assert proposal.classification is AgentExecutionV2Classification.AUTO_APPLY
 
-    before = controller.control_store.list_harness_controller_action_receipts(
+    baseline_before = controller.control_store.list_harness_controller_action_receipts(
         project_id="project-1",
         controller_execution_id=current.execution.controller_execution_id,
     )
@@ -727,14 +888,51 @@ def test_v2_changed_options_are_not_silently_rewritten_or_applied(tmp_path: Path
             client_request_id="application-v2-2",
         ),
     )
-    after = controller.control_store.list_harness_controller_action_receipts(
+    assert applied.application_receipt.outcome.value == "applied"
+    assert applied.application_receipt.controller_advance_called is False
+    assert applied.application_receipt.controller_create_called is True
+    assert applied.application_receipt.successor_proposal_id
+    assert applied.application_receipt.successor_authorization_id
+    assert applied.application_receipt.successor_start_intent_id
+    assert applied.application_receipt.successor_controller_execution_id
+    assert applied.application_receipt.successor_authority_evaluation_id
+    assert applied.application_receipt.dispatch_occurred is True
+    assert applied.controller_result is not None
+    assert applied.controller_result.execution.controller_execution_id != current.execution.controller_execution_id
+    assert applied.controller_result.execution.proposal_id == applied.application_receipt.successor_proposal_id
+    successor_authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=applied.application_receipt.successor_authorization_id,
+        verify_current=False,
+    )
+    assert successor_authorization.compiled_task_options["clean_dataset"]["min_nonempty"] == 2
+    baseline_after = controller.control_store.list_harness_controller_action_receipts(
         project_id="project-1",
         controller_execution_id=current.execution.controller_execution_id,
     )
-    assert applied.application_receipt.outcome.value == "user_action_required"
-    assert applied.application_receipt.controller_advance_called is False
-    assert applied.application_receipt.dispatch_occurred is False
-    assert len(after) == len(before)
+    after = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=applied.application_receipt.successor_controller_execution_id,
+    )
+    assert len(baseline_after) == len(baseline_before)
+    assert len(after) == 1
+
+    replay = service.apply_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        tool_call_proposal_id=proposal.tool_call_proposal_id,
+        request=AgentToolCallApplicationRequestV2(
+            expected_tool_call_proposal_digest=proposal.tool_call_proposal_digest,
+            client_request_id="application-v2-2",
+        ),
+    )
+    replay_after = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=applied.application_receipt.successor_controller_execution_id,
+    )
+    assert replay.application_receipt.application_receipt_id == applied.application_receipt.application_receipt_id
+    assert len(replay_after) == len(after)
+    assert provider.calls == 1
 
 
 def test_v2_terminal_human_boundary_does_not_call_provider(tmp_path: Path) -> None:

@@ -49,6 +49,9 @@ from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     AgentAutonomyActionClass,
     AgentAutonomyPolicyDecision,
+    AgentAuthorizationMode,
+    AGENT_EXECUTION_PLAN_PROPOSAL_V2,
+    AgentExecutionPlanLLMResponse,
     AgentExecutionPlanProposal,
     AgentExecutionServerCompiledOperation,
     AgentHarnessAuthorityClass,
@@ -57,6 +60,9 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerInspection,
     AgentHarnessControllerStatus,
+    AgentHarnessControllerStartRequest,
+    AgentLLMInvocationMetadata,
+    AgentPlanAuthorizationRequest,
     AgentPlanAuthorization,
     AgentToolCallApplicationOutcome,
     AuthorityEvaluation,
@@ -84,6 +90,7 @@ from ai4s_agent.scientific_agent_autonomy_policy import (
     classify_current_controller_inspection,
 )
 from ai4s_agent.scientific_agent_plan import (
+    AgentExecutionPlanCompiler,
     PlannerOptionCompiler,
     ScientificAgentPlanError,
     build_scientific_tool_catalog,
@@ -99,6 +106,17 @@ EXECUTION_AGENT_V2_PROMPT_VERSION = "scientific-agent-execution-selection.v4"
 EXECUTION_AGENT_V2_POLICY_VERSION = "scientific-agent-execution-agent-policy.v2"
 EXECUTION_AGENT_V2_REQUEST_CHECKPOINT_VERSION = (
     "execution_agent_v2_request_checkpoint.v1"
+)
+EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION = (
+    "execution_agent_v2_context_checkpoint.v1"
+)
+_EXECUTION_AGENT_V2_SYSTEM_PROMPT = (
+    "You are a bounded scientific Execution Agent v2. Choose exactly one "
+    "decision_type: TOOL_CALL, ASK_USER, or REPLAN. For TOOL_CALL copy one "
+    "logical tool_id from the catalog and provide only arguments allowed by "
+    "its closed JSON Schema. Do not provide backend, path, host, credential, "
+    "command, adapter, shell, or execution claims. Do not approve authority, "
+    "retry, recover, or mutate a plan. Return strict JSON only; no chain of thought."
 )
 EXECUTION_AGENT_V2_APPLICATION_CHECKPOINT_VERSION = (
     "execution_agent_v2_application_checkpoint.v1"
@@ -735,6 +753,12 @@ class AgentToolCallProposalV2(BaseModel):
                 raise ValueError("v2 compilation authority projection mismatch")
         elif self.compilation is not None:
             raise ValueError("non-tool v2 decisions must not contain a compilation")
+        expected_fresh = self.classification is not AgentExecutionV2Classification.AUTO_APPLY
+        if (
+            self.fresh_permission_required != expected_fresh
+            or self.fresh_authorization_required != expected_fresh
+        ):
+            raise ValueError("v2 proposal freshness is not derived from its classification")
         if self.source_bindings_digest != _agent_digest(self.source_bindings):
             raise ValueError("v2 source binding digest mismatch")
         expected = _agent_digest(self.semantic_material())
@@ -791,8 +815,25 @@ class AgentToolCallApplicationReceiptV2(BaseModel):
     controller_decision_digest: str = ""
     controller_receipt_id: str = ""
     controller_receipt_digest: str = ""
+    # A bounded logical option change creates a new exact plan/authority/
+    # Controller successor.  The original Controller execution fields above
+    # remain the immutable v2 decision baseline; these optional fields bind the
+    # actual successor effect without changing the Controller API.
+    successor_proposal_id: str = ""
+    successor_proposal_digest: str = ""
+    successor_permission_decision_id: str = ""
+    successor_permission_decision_digest: str = ""
+    successor_authorization_id: str = ""
+    successor_authorization_digest: str = ""
+    successor_authority_evaluation_id: str = ""
+    successor_authority_evaluation_digest: str = ""
+    successor_start_intent_id: str = ""
+    successor_start_intent_digest: str = ""
+    successor_controller_execution_id: str = ""
+    successor_controller_execution_digest: str = ""
     side_effect_attempted: bool
     controller_advance_called: bool
+    controller_create_called: bool = False
     dispatch_occurred: bool
     outcome: AgentToolCallApplicationOutcome
     reason_codes: list[str]
@@ -803,20 +844,26 @@ class AgentToolCallApplicationReceiptV2(BaseModel):
     @field_validator(
         "application_receipt_id", "project_id", "tool_call_proposal_id", "controller_execution_id", "selected_tool_id",
         "compilation_id", "authority_evaluation_id", "baseline_authorization_id", "controller_decision_id", "controller_receipt_id",
+        "successor_proposal_id", "successor_permission_decision_id", "successor_authorization_id",
+        "successor_authority_evaluation_id",
+        "successor_start_intent_id", "successor_controller_execution_id",
     )
     @classmethod
     def validate_ids(cls, value: str, info: Any) -> str:
-        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"application_receipt_id", "selected_tool_id", "compilation_id", "authority_evaluation_id", "controller_decision_id", "controller_receipt_id"})
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"application_receipt_id", "selected_tool_id", "compilation_id", "authority_evaluation_id", "controller_decision_id", "controller_receipt_id", "successor_proposal_id", "successor_permission_decision_id", "successor_authorization_id", "successor_authority_evaluation_id", "successor_start_intent_id", "successor_controller_execution_id"})
 
     @field_validator(
         "application_receipt_digest", "tool_call_proposal_digest", "controller_execution_digest", "arguments_digest",
         "tool_catalog_digest", "compiler_digest", "compilation_digest", "authority_evaluation_digest",
         "baseline_authorization_digest", "before_inspection_digest", "after_inspection_digest",
         "controller_decision_digest", "controller_receipt_digest", "source_bindings_digest",
+        "successor_proposal_digest", "successor_permission_decision_digest", "successor_authorization_digest",
+        "successor_authority_evaluation_digest",
+        "successor_start_intent_digest", "successor_controller_execution_digest",
     )
     @classmethod
     def validate_digests(cls, value: str, info: Any) -> str:
-        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"application_receipt_digest", "arguments_digest", "compiler_digest", "compilation_digest", "authority_evaluation_digest", "controller_decision_digest", "controller_receipt_digest"})
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"application_receipt_digest", "arguments_digest", "compiler_digest", "compilation_digest", "authority_evaluation_digest", "controller_decision_digest", "controller_receipt_digest", "successor_proposal_digest", "successor_permission_decision_digest", "successor_authorization_digest", "successor_authority_evaluation_digest", "successor_start_intent_digest", "successor_controller_execution_digest"})
 
     @field_validator("compiler_version")
     @classmethod
@@ -843,14 +890,44 @@ class AgentToolCallApplicationReceiptV2(BaseModel):
 
     @model_validator(mode="after")
     def validate_receipt(self) -> "AgentToolCallApplicationReceiptV2":
-        if self.fresh_permission_required != (not self.authority_auto_apply) or self.fresh_authorization_required != (not self.authority_auto_apply):
-            raise ValueError("v2 receipt freshness must be derived from authority auto-apply")
-        if self.controller_advance_called and not self.side_effect_attempted:
+        # ``authority_auto_apply`` is the relation projection only.  A
+        # SUBSET+NONE candidate can still stop at a Gate/human boundary, so
+        # freshness is false only for an actually applied auto-authorized
+        # Controller transition.
+        expected_fresh = not (
+            self.authority_auto_apply
+            and self.outcome is AgentToolCallApplicationOutcome.APPLIED
+        )
+        if self.fresh_permission_required != expected_fresh or self.fresh_authorization_required != expected_fresh:
+            raise ValueError("v2 receipt freshness is not bound to the application outcome")
+        if (self.controller_advance_called or self.controller_create_called) and not self.side_effect_attempted:
             raise ValueError("Controller call must be recorded as a side-effect attempt")
-        if self.dispatch_occurred and not self.controller_advance_called:
+        if self.dispatch_occurred and not (
+            self.controller_advance_called or self.controller_create_called
+        ):
             raise ValueError("dispatch cannot occur without the Controller call")
         if self.source_bindings_digest != _agent_digest(self.source_bindings):
             raise ValueError("v2 receipt source binding digest mismatch")
+        successor_fields = (
+            self.successor_proposal_id,
+            self.successor_proposal_digest,
+            self.successor_permission_decision_id,
+            self.successor_permission_decision_digest,
+            self.successor_authorization_id,
+            self.successor_authorization_digest,
+            self.successor_authority_evaluation_id,
+            self.successor_authority_evaluation_digest,
+            self.successor_start_intent_id,
+            self.successor_start_intent_digest,
+            self.successor_controller_execution_id,
+            self.successor_controller_execution_digest,
+        )
+        if any(successor_fields) and not all(successor_fields):
+            raise ValueError("v2 successor provenance must be complete or absent")
+        if any(successor_fields) and not (
+            self.controller_advance_called or self.controller_create_called
+        ):
+            raise ValueError("v2 successor provenance requires a Controller call")
         expected = _agent_digest(self.semantic_material())
         if self.application_receipt_digest and self.application_receipt_digest != expected:
             raise ValueError("v2 receipt digest mismatch")
@@ -963,6 +1040,17 @@ class _V2ApplicationSession:
     request_dir: Path
 
 
+@dataclass(frozen=True)
+class _V2BoundedSuccessorResult:
+    proposal: AgentExecutionPlanProposal
+    authorization: AgentPlanAuthorization
+    authorization_decision: Any
+    start_intent: Any
+    controller_result: ControllerAdvanceResult
+    authority_evaluation: AuthorityEvaluation
+    controller_advance_called: bool
+
+
 class ExecutionAgentV2Store(ExecutionAgentStore):
     """Version-isolated checkpoints/publications for v2."""
 
@@ -1028,6 +1116,7 @@ class ExecutionAgentV2Store(ExecutionAgentStore):
                     "v2 request reservation binding is invalid"
                 )
             started = self.read_marker(request_dir / "llm_request_started.json")
+            context = self.read_marker(request_dir / "llm_context_committed.json")
             response = self.read_marker(request_dir / "llm_response_committed.json")
             rejected = self.read_marker(request_dir / "llm_response_rejected.json")
             proposal = self.read_marker(request_dir / "proposal_committed.json")
@@ -1039,6 +1128,17 @@ class ExecutionAgentV2Store(ExecutionAgentStore):
             ):
                 raise ExecutionAgentStoreVerificationError(
                     "v2 response evidence lacks its provider-call checkpoint"
+                )
+            if started is not None and (
+                context is None
+                or context.get("context_schema_version")
+                != EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION
+                or not isinstance(context.get("context_digest"), str)
+                or not context.get("context_digest")
+                or started.get("context_digest") != context.get("context_digest")
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "v2 provider-call checkpoint lacks its frozen context binding"
                 )
             if started is None:
                 continue
@@ -1357,6 +1457,7 @@ def execution_agent_v2_policy_digest(catalog: AgentExecutionV2ToolCatalog) -> st
 def execution_agent_v2_prompt_digest(*, observation_digest: str, tool_catalog_digest: str, catalog: AgentExecutionV2ToolCatalog) -> str:
     return _agent_digest({
         "prompt_version": EXECUTION_AGENT_V2_PROMPT_VERSION,
+        "system_prompt": _EXECUTION_AGENT_V2_SYSTEM_PROMPT,
         "observation_digest": observation_digest,
         "tool_catalog_digest": tool_catalog_digest,
         "response_schema_digest": _agent_digest(AgentExecutionLLMResponseV2.model_json_schema()),
@@ -1365,21 +1466,62 @@ def execution_agent_v2_prompt_digest(*, observation_digest: str, tool_catalog_di
     })
 
 
-def build_execution_v2_messages(*, observation: AgentExecutionV2Observation, tool_catalog: AgentExecutionV2ToolCatalog) -> list[dict[str, str]]:
-    system = (
-        "You are a bounded scientific Execution Agent v2. Choose exactly one "
-        "decision_type: TOOL_CALL, ASK_USER, or REPLAN. For TOOL_CALL copy one "
-        "logical tool_id from the catalog and provide only arguments allowed by "
-        "its closed JSON Schema. Do not provide backend, path, host, credential, "
-        "command, adapter, shell, or execution claims. Do not approve authority, "
-        "retry, recover, or mutate a plan. Return strict JSON only; no chain of thought."
+def _v2_context_digest(
+    *,
+    observation: AgentExecutionV2Observation,
+    catalog: AgentExecutionV2ToolCatalog,
+    policy: AgentAutonomyPolicyDecision,
+    authorization: AgentPlanAuthorization,
+    prompt_digest: str,
+) -> str:
+    """Digest the frozen, non-wall-clock v2 decision context.
+
+    ``created_at`` is retained in the durable context checkpoint for audit, but
+    it is deliberately absent from the identity material.  A production clock
+    may advance between provider completion, crash recovery, and application;
+    that must not turn an unchanged authoritative state into a false stale
+    proposal.
+    """
+
+    return _agent_digest(
+        {
+            "schema_version": EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION,
+            "observation_digest": observation.observation_digest,
+            "observation_semantic_material": observation.semantic_material(),
+            "tool_catalog_id": catalog.tool_catalog_id,
+            "tool_catalog_digest": catalog.tool_catalog_digest,
+            "autonomy_policy_version": policy.policy_version,
+            "autonomy_policy_digest": policy.policy_digest,
+            "autonomy_policy_decision_id": policy.decision_id,
+            "autonomy_policy_decision_digest": policy.decision_digest,
+            "baseline_authorization_id": authorization.authorization_id,
+            "baseline_authorization_digest": authorization.authorization_digest,
+            "controller_execution_id": observation.controller_execution_id,
+            "controller_execution_digest": observation.controller_execution_digest,
+            "prompt_digest": prompt_digest,
+        }
     )
+
+
+def _v2_observation_semantically_matches(
+    current: AgentExecutionV2Observation,
+    frozen: AgentExecutionV2Observation,
+) -> bool:
+    """Compare authoritative observation material without comparing a clock."""
+
+    return (
+        current.observation_digest == frozen.observation_digest
+        and current.semantic_material() == frozen.semantic_material()
+    )
+
+
+def build_execution_v2_messages(*, observation: AgentExecutionV2Observation, tool_catalog: AgentExecutionV2ToolCatalog) -> list[dict[str, str]]:
     payload = {
         "observation": observation.model_dump(mode="json"),
         "tool_catalog": tool_catalog.model_dump(mode="json"),
     }
     return [
-        {"role": "system", "content": system},
+        {"role": "system", "content": _EXECUTION_AGENT_V2_SYSTEM_PROMPT},
         {"role": "user", "content": _agent_canonical_bytes(payload).decode("utf-8")},
     ]
 
@@ -1611,11 +1753,36 @@ def _proposal_decision_identity(
     return f"execution-decision-v2-{digest.split(':', 1)[1][:32]}", digest
 
 
+def _requires_fresh_gate(
+    *,
+    response: AgentExecutionLLMResponseV2,
+    compilation: LogicalToolCompilation | None,
+    catalog: AgentExecutionV2ToolCatalog,
+    authorization: AgentPlanAuthorization,
+) -> bool:
+    """Return whether a changed logical call would cross a Gate boundary."""
+
+    if (
+        response.decision_type is not AgentExecutionV2DecisionType.TOOL_CALL
+        or compilation is None
+        or compilation.controller_options_match
+    ):
+        return False
+    tool = catalog.get(response.tool_id)
+    return bool(
+        tool.required_gates
+        and not set(tool.required_gates).issubset(
+            authorization.preauthorized_operational_gates
+        )
+    )
+
+
 def _classification_for(
     response: AgentExecutionLLMResponseV2,
     compilation: LogicalToolCompilation | None,
     *,
     policy: AgentAutonomyPolicyDecision,
+    requires_fresh_gate: bool = False,
 ) -> AgentExecutionV2Classification:
     if policy.classification is not AgentAutonomyActionClass.AUTO_CONTINUE:
         return AgentExecutionV2Classification.REQUIRE_HUMAN
@@ -1627,10 +1794,10 @@ def _classification_for(
         return AgentExecutionV2Classification.FAIL_CLOSED
     if compilation.semantic_boundary is not SemanticBoundary.NONE:
         return AgentExecutionV2Classification.REQUIRE_HUMAN
-    if compilation.authority_auto_apply and compilation.controller_options_match:
-        return AgentExecutionV2Classification.AUTO_APPLY
+    if requires_fresh_gate:
+        return AgentExecutionV2Classification.REQUIRE_HUMAN
     if compilation.authority_auto_apply:
-        return AgentExecutionV2Classification.DEFERRED
+        return AgentExecutionV2Classification.AUTO_APPLY
     return AgentExecutionV2Classification.REQUIRE_AUTHORITY
 
 
@@ -1707,6 +1874,112 @@ class ExecutionAgentV2Service:
         )
         return snapshot, authorization, baseline, catalog, policy, observation, baseline_grant
 
+    def _freeze_v2_context(
+        self,
+        *,
+        session: _V2RequestSession,
+        project_id: str,
+        controller_execution_id: str,
+        observation: AgentExecutionV2Observation,
+        catalog: AgentExecutionV2ToolCatalog,
+        policy: AgentAutonomyPolicyDecision,
+        authorization: AgentPlanAuthorization,
+        prompt_digest: str,
+    ) -> tuple[AgentExecutionV2Observation, AgentExecutionV2ToolCatalog, str]:
+        """Commit and re-verify the exact context used by one provider call."""
+
+        context_digest = _v2_context_digest(
+            observation=observation,
+            catalog=catalog,
+            policy=policy,
+            authorization=authorization,
+            prompt_digest=prompt_digest,
+        )
+        path = session.request_dir / "llm_context_committed.json"
+        existing = self.store.read_marker(path)
+        if existing is None:
+            self.store._write_v2_marker(
+                session,
+                "llm_context_committed.json",
+                "LLM_CONTEXT_COMMITTED",
+                {
+                    "context_schema_version": EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION,
+                    "context_digest": context_digest,
+                    "project_id": project_id,
+                    "controller_execution_id": controller_execution_id,
+                    "controller_execution_digest": observation.controller_execution_digest,
+                    "observation": observation.model_dump(mode="json"),
+                    "observation_digest": observation.observation_digest,
+                    "tool_catalog": catalog.model_dump(mode="json"),
+                    "tool_catalog_id": catalog.tool_catalog_id,
+                    "tool_catalog_digest": catalog.tool_catalog_digest,
+                    "prompt_messages": build_execution_v2_messages(
+                        observation=observation,
+                        tool_catalog=catalog,
+                    ),
+                    "prompt_digest": prompt_digest,
+                    "autonomy_policy_version": policy.policy_version,
+                    "autonomy_policy_digest": policy.policy_digest,
+                    "autonomy_policy_decision_id": policy.decision_id,
+                    "autonomy_policy_decision_digest": policy.decision_digest,
+                    "baseline_authorization_id": authorization.authorization_id,
+                    "baseline_authorization_digest": authorization.authorization_digest,
+                },
+            )
+            return observation, catalog, context_digest
+
+        try:
+            if (
+                existing.get("context_schema_version")
+                != EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION
+                or existing.get("status") != "LLM_CONTEXT_COMMITTED"
+                or existing.get("project_id") != project_id
+                or existing.get("controller_execution_id") != controller_execution_id
+                or existing.get("controller_execution_digest")
+                != observation.controller_execution_digest
+                or existing.get("prompt_digest") != prompt_digest
+                or existing.get("context_digest") != context_digest
+                or existing.get("observation_digest") != observation.observation_digest
+                or existing.get("tool_catalog_id") != catalog.tool_catalog_id
+                or existing.get("tool_catalog_digest") != catalog.tool_catalog_digest
+                or existing.get("autonomy_policy_version") != policy.policy_version
+                or existing.get("autonomy_policy_digest") != policy.policy_digest
+                or existing.get("autonomy_policy_decision_id") != policy.decision_id
+                or existing.get("autonomy_policy_decision_digest") != policy.decision_digest
+                or existing.get("baseline_authorization_id") != authorization.authorization_id
+                or existing.get("baseline_authorization_digest") != authorization.authorization_digest
+            ):
+                raise ExecutionAgentV2Stale("v2 frozen context no longer matches current authority")
+            frozen_observation = AgentExecutionV2Observation.model_validate(
+                existing["observation"]
+            )
+            frozen_catalog = AgentExecutionV2ToolCatalog.model_validate(
+                existing["tool_catalog"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, ExecutionAgentV2Error):
+                raise
+            raise ExecutionAgentV2DecisionInvalid("v2 frozen context checkpoint is invalid") from exc
+        if not _v2_observation_semantically_matches(observation, frozen_observation):
+            raise ExecutionAgentV2Stale("v2 frozen observation is stale")
+        if frozen_catalog.model_dump(mode="json") != catalog.model_dump(mode="json"):
+            raise ExecutionAgentV2Stale("v2 frozen logical tool catalog is stale")
+        if existing.get("prompt_messages") != build_execution_v2_messages(
+            observation=frozen_observation,
+            tool_catalog=frozen_catalog,
+        ):
+            raise ExecutionAgentV2Stale("v2 frozen prompt context is stale")
+        frozen_digest = _v2_context_digest(
+            observation=frozen_observation,
+            catalog=frozen_catalog,
+            policy=policy,
+            authorization=authorization,
+            prompt_digest=prompt_digest,
+        )
+        if frozen_digest != context_digest:
+            raise ExecutionAgentV2Stale("v2 frozen context digest is stale")
+        return frozen_observation, frozen_catalog, context_digest
+
     def create_proposal(
         self,
         *,
@@ -1756,6 +2029,21 @@ class ExecutionAgentV2Service:
                 execution_id=controller_execution_id,
                 expected_digest=request.expected_controller_execution_digest,
             )
+            prompt_digest = execution_agent_v2_prompt_digest(
+                observation_digest=observation.observation_digest,
+                tool_catalog_digest=catalog.tool_catalog_digest,
+                catalog=catalog,
+            )
+            observation, catalog, context_digest = self._freeze_v2_context(
+                session=session,
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+                observation=observation,
+                catalog=catalog,
+                policy=policy,
+                authorization=authorization,
+                prompt_digest=prompt_digest,
+            )
             response_checkpoint = self.store.read_marker(session.request_dir / "llm_response_committed.json")
             llm_used = False
             provider_metadata = {
@@ -1768,9 +2056,30 @@ class ExecutionAgentV2Service:
             }
             if response_checkpoint is not None:
                 try:
+                    if (
+                        response_checkpoint.get("status") != "LLM_RESPONSE_COMMITTED"
+                        or response_checkpoint.get("context_schema_version")
+                        != EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION
+                        or response_checkpoint.get("context_digest") != context_digest
+                        or response_checkpoint.get("prompt_digest") != prompt_digest
+                        or response_checkpoint.get("observation_digest")
+                        != observation.observation_digest
+                        or response_checkpoint.get("tool_catalog_digest")
+                        != catalog.tool_catalog_digest
+                    ):
+                        raise ExecutionAgentV2Stale(
+                            "v2 response checkpoint is bound to a different frozen context"
+                        )
                     response = AgentExecutionLLMResponseV2.model_validate(response_checkpoint["parsed_llm_response"])
+                    response_digest = _agent_digest(response.model_dump(mode="json"))
+                    if response_checkpoint.get("parsed_llm_response_digest") != response_digest:
+                        raise ExecutionAgentV2DecisionInvalid(
+                            "v2 response checkpoint digest mismatch"
+                        )
                     provider_metadata = {key: str(response_checkpoint[key]) for key in provider_metadata}
                 except (KeyError, ValueError, TypeError) as exc:
+                    if isinstance(exc, ExecutionAgentV2Error):
+                        raise
                     raise ExecutionAgentV2DecisionInvalid("v2 response checkpoint is invalid") from exc
             elif policy.classification is not AgentAutonomyActionClass.AUTO_CONTINUE or snapshot.inspection.next_action in {
                 AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
@@ -1790,12 +2099,18 @@ class ExecutionAgentV2Service:
             else:
                 if provider is None:
                     raise ExecutionAgentV2LLMUnavailable("execution_agent_v2_llm_unavailable")
-                prompt_digest = execution_agent_v2_prompt_digest(
-                    observation_digest=observation.observation_digest,
-                    tool_catalog_digest=catalog.tool_catalog_digest,
-                    catalog=catalog,
+                self.store._write_v2_marker(
+                    session,
+                    "llm_request_started.json",
+                    "LLM_REQUEST_STARTED",
+                    {
+                        "context_schema_version": EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION,
+                        "context_digest": context_digest,
+                        "observation_digest": observation.observation_digest,
+                        "tool_catalog_digest": catalog.tool_catalog_digest,
+                        "prompt_digest": prompt_digest,
+                    },
                 )
-                self.store._write_v2_marker(session, "llm_request_started.json", "LLM_REQUEST_STARTED", {"prompt_digest": prompt_digest})
                 try:
                     invocation = provider.complete_json(
                         messages=build_execution_v2_messages(observation=observation, tool_catalog=catalog),
@@ -1826,6 +2141,10 @@ class ExecutionAgentV2Service:
                         **provider_metadata,
                         "parsed_llm_response": response.model_dump(mode="json"),
                         "parsed_llm_response_digest": _agent_digest(response.model_dump(mode="json")),
+                        "context_schema_version": EXECUTION_AGENT_V2_CONTEXT_CHECKPOINT_VERSION,
+                        "context_digest": context_digest,
+                        "observation_digest": observation.observation_digest,
+                        "tool_catalog_digest": catalog.tool_catalog_digest,
                         "prompt_digest": prompt_digest,
                     },
                 )
@@ -1843,7 +2162,17 @@ class ExecutionAgentV2Service:
                 )
             else:
                 compilation = None
-            classification = _classification_for(response, compilation, policy=policy)
+            classification = _classification_for(
+                response,
+                compilation,
+                policy=policy,
+                requires_fresh_gate=_requires_fresh_gate(
+                    response=response,
+                    compilation=compilation,
+                    catalog=catalog,
+                    authorization=authorization,
+                ),
+            )
             decision_id, decision_digest = _proposal_decision_identity(
                 response=response, observation=observation, catalog=catalog, policy=policy
             )
@@ -1874,8 +2203,12 @@ class ExecutionAgentV2Service:
                 authority_relation=compilation.authority_relation if compilation else AuthorityRelation.INCOMPARABLE,
                 semantic_boundary=compilation.semantic_boundary if compilation else SemanticBoundary.NONE,
                 authority_auto_apply=compilation.authority_auto_apply if compilation else False,
-                fresh_permission_required=not (compilation.authority_auto_apply if compilation else False),
-                fresh_authorization_required=not (compilation.authority_auto_apply if compilation else False),
+                fresh_permission_required=(
+                    classification is not AgentExecutionV2Classification.AUTO_APPLY
+                ),
+                fresh_authorization_required=(
+                    classification is not AgentExecutionV2Classification.AUTO_APPLY
+                ),
                 baseline_authorization_id=authorization.authorization_id,
                 baseline_authorization_digest=authorization.authorization_digest,
                 controller_action=snapshot.inspection.next_action,
@@ -1905,7 +2238,7 @@ class ExecutionAgentV2Service:
             expected_digest=publication.proposal.controller_execution_digest,
         )
         snapshot, authorization, baseline, catalog, policy, observation, _grant = current
-        if observation.model_dump(mode="json") != publication.observation.model_dump(mode="json"):
+        if not _v2_observation_semantically_matches(observation, publication.observation):
             raise ExecutionAgentV2Stale("v2 observation is stale")
         if catalog.model_dump(mode="json") != publication.tool_catalog.model_dump(mode="json"):
             raise ExecutionAgentV2Stale("v2 logical tool catalog is stale")
@@ -1921,7 +2254,17 @@ class ExecutionAgentV2Service:
                 baseline_proposal=baseline,
                 registry=self.registry,
             )
-        expected_classification = _classification_for(response, compilation, policy=policy)
+        expected_classification = _classification_for(
+            response,
+            compilation,
+            policy=policy,
+            requires_fresh_gate=_requires_fresh_gate(
+                response=response,
+                compilation=compilation,
+                catalog=catalog,
+                authorization=authorization,
+            ),
+        )
         decision_id, decision_digest = _proposal_decision_identity(response=response, observation=observation, catalog=catalog, policy=policy)
         if decision_id != publication.proposal.decision_id or decision_digest != publication.proposal.decision_digest:
             raise ExecutionAgentV2Stale("v2 decision identity is stale")
@@ -1943,6 +2286,440 @@ class ExecutionAgentV2Service:
         )
         return "execution-agent-v2-advance-" + identity.split(":", 1)[1][:32]
 
+    @staticmethod
+    def _bounded_successor_request_id(
+        *,
+        proposal: AgentToolCallProposalV2,
+        compilation: LogicalToolCompilation,
+    ) -> str:
+        identity = _agent_digest(
+            {
+                "schema_version": "execution-agent-v2-bounded-successor.v1",
+                "tool_call_proposal_id": proposal.tool_call_proposal_id,
+                "tool_call_proposal_digest": proposal.tool_call_proposal_digest,
+                "arguments_digest": compilation.arguments_digest,
+                "compilation_digest": compilation.compilation_digest,
+            }
+        )
+        return "execution-agent-v2-successor-" + identity.split(":", 1)[1][:32]
+
+    @staticmethod
+    def _bounded_successor_authorization_request_id(
+        *,
+        successor_proposal: AgentExecutionPlanProposal,
+        authority_evaluation: AuthorityEvaluation,
+    ) -> str:
+        identity = _agent_digest(
+            {
+                "schema_version": "execution-agent-v2-bounded-successor-authorization.v1",
+                "successor_proposal_id": successor_proposal.proposal_id,
+                "successor_proposal_digest": successor_proposal.proposal_digest,
+                "authority_evaluation_id": authority_evaluation.evaluation_id,
+                "authority_evaluation_digest": authority_evaluation.evaluation_digest,
+            }
+        )
+        return "execution-agent-v2-successor-authorization-" + identity.split(":", 1)[1][:32]
+
+    @staticmethod
+    def _bounded_successor_controller_request_id(start_intent_digest: str) -> str:
+        identity = _agent_digest(
+            {
+                "schema_version": "execution-agent-v2-bounded-successor-controller.v1",
+                "start_intent_digest": start_intent_digest,
+            }
+        )
+        return "execution-agent-v2-successor-controller-" + identity.split(":", 1)[1][:32]
+
+    def _read_bounded_successor_publication(
+        self,
+        *,
+        session: _V2ApplicationSession,
+        project_id: str,
+        baseline: AgentExecutionPlanProposal,
+        successor_request_id: str,
+    ) -> Any | None:
+        marker = self.store.read_marker(
+            session.application_root / "successor_proposal_committed.json"
+        )
+        if marker is None:
+            return None
+        if (
+            marker.get("status") != "SUCCESSOR_PROPOSAL_COMMITTED"
+            or marker.get("successor_request_id") != successor_request_id
+            or marker.get("baseline_proposal_id") != baseline.proposal_id
+            or marker.get("baseline_proposal_digest") != baseline.proposal_digest
+        ):
+            raise ExecutionAgentV2Conflict(
+                "v2 bounded successor checkpoint is bound to another proposal"
+            )
+        successor_id = marker.get("successor_proposal_id")
+        successor_digest = marker.get("successor_proposal_digest")
+        if not isinstance(successor_id, str) or not isinstance(successor_digest, str):
+            raise ExecutionAgentV2DecisionInvalid(
+                "v2 bounded successor checkpoint is incomplete"
+            )
+        try:
+            publication = self.controller.proposal_store.read(
+                project_id=project_id,
+                proposal_id=successor_id,
+                verify_current=False,
+            )
+        except (FileNotFoundError, ScientificAgentPlanError) as exc:
+            raise ExecutionAgentV2Stale(
+                "v2 bounded successor publication is missing"
+            ) from exc
+        if (
+            publication.proposal.proposal_id != successor_id
+            or publication.proposal.proposal_digest != successor_digest
+            or publication.proposal.schema_version != AGENT_EXECUTION_PLAN_PROPOSAL_V2
+        ):
+            raise ExecutionAgentV2Conflict(
+                "v2 bounded successor publication checkpoint mismatch"
+            )
+        return publication
+
+    def _continue_bounded_successor_controller(
+        self,
+        *,
+        project_id: str,
+        controller_result: ControllerAdvanceResult,
+        target_task_id: str,
+    ) -> tuple[ControllerAdvanceResult, bool]:
+        """Use the existing Controller continuation for predecessor adoption.
+
+        ``Controller.create`` intentionally performs one transition.  A new
+        exact successor may therefore first reconcile already-completed
+        predecessor tasks before reaching the logical task selected by v2.
+        Only the reviewed Controller-level adoption and the selected local
+        task are allowed here; no adapter or executor is called by v2.
+        """
+
+        controller_advance_called = False
+        for _ in range(16):
+            if (
+                controller_result.receipt is not None
+                and controller_result.receipt.task_id == target_task_id
+                and controller_result.receipt.dispatch_occurred
+            ):
+                return controller_result, controller_advance_called
+            action = controller_result.inspection.next_action
+            if action not in {
+                AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
+                AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+            }:
+                raise ExecutionAgentV2Conflict(
+                    "bounded successor reached an unsupported Controller boundary"
+                )
+            request_seed = _agent_digest(
+                {
+                    "schema_version": "execution-agent-v2-successor-controller-continuation.v1",
+                    "controller_execution_id": controller_result.execution.controller_execution_id,
+                    "controller_execution_digest": controller_result.execution.execution_digest,
+                    "inspection_digest": controller_result.inspection.inspection_digest,
+                    "target_task_id": target_task_id,
+                    "action": action.value,
+                }
+            )
+            controller_advance_called = True
+            controller_result = self.controller.advance(
+                project_id=project_id,
+                controller_execution_id=controller_result.execution.controller_execution_id,
+                request=AgentHarnessControllerAdvanceRequest(
+                    expected_controller_execution_digest=controller_result.execution.execution_digest,
+                    client_request_id=(
+                        "execution-agent-v2-successor-continue-"
+                        + request_seed.split(":", 1)[1][:32]
+                    ),
+                ),
+                expected_inspection_digest=controller_result.inspection.inspection_digest,
+            )
+        raise ExecutionAgentV2Conflict(
+            "bounded successor did not reach its selected Controller task"
+        )
+
+    def _apply_bounded_successor(
+        self,
+        *,
+        session: _V2ApplicationSession,
+        project_id: str,
+        proposal: AgentToolCallProposalV2,
+        response: AgentExecutionLLMResponseV2,
+        compilation: LogicalToolCompilation,
+        baseline_authorization: AgentPlanAuthorization,
+        baseline: AgentExecutionPlanProposal,
+    ) -> _V2BoundedSuccessorResult:
+        """Publish and start one exact scope-safe plan successor.
+
+        The logical compiler remains non-executable.  This method only turns a
+        server-validated SUBSET/NONE candidate into a new ordinary plan
+        publication and sends it through the existing Permission,
+        Authorization, StartIntent, and Controller.create chain.
+        """
+
+        if baseline.schema_version != AGENT_EXECUTION_PLAN_PROPOSAL_V2:
+            raise ExecutionAgentV2Conflict(
+                "historical v1 exact authority cannot reuse a bounded successor"
+            )
+        if not compilation.authority_auto_apply or compilation.controller_options_match:
+            raise ExecutionAgentV2Conflict(
+                "bounded successor requires a changed SUBSET/NONE option set"
+            )
+
+        successor_request_id = self._bounded_successor_request_id(
+            proposal=proposal,
+            compilation=compilation,
+        )
+        plan_store = self.controller.proposal_store
+        baseline_publication = plan_store.read(
+            project_id=project_id,
+            proposal_id=baseline.proposal_id,
+            verify_current=False,
+        )
+        if baseline_publication.proposal.model_dump(mode="json") != baseline.model_dump(mode="json"):
+            raise ExecutionAgentV2Stale("v2 baseline plan publication changed")
+
+        baseline_options = _current_authorized_options(
+            baseline_authorization,
+            compilation.task_id,
+        )
+        candidate_options = dict(baseline_options)
+        candidate_options.update(response.arguments)
+        successor_task_options = {
+            key: dict(value)
+            for key, value in baseline.validated_llm_response.task_options.items()
+        }
+        successor_task_options[response.tool_id] = candidate_options
+        successor_response = baseline.validated_llm_response.model_copy(
+            update={"task_options": successor_task_options}
+        )
+        successor_output_digest = _agent_digest(
+            successor_response.model_dump(mode="json")
+        )
+        successor_invocation_id = (
+            "execution-agent-v2-successor-invocation-"
+            + _agent_digest(
+                {
+                    "proposal_id": proposal.tool_call_proposal_id,
+                    "proposal_digest": proposal.tool_call_proposal_digest,
+                    "output_digest": successor_output_digest,
+                }
+            ).split(":", 1)[1][:32]
+        )
+
+        publication = self._read_bounded_successor_publication(
+            session=session,
+            project_id=project_id,
+            baseline=baseline,
+            successor_request_id=successor_request_id,
+        )
+        if publication is None:
+            builder = getattr(plan_store, "observation_builder", None)
+            if builder is None:
+                raise ExecutionAgentV2DecisionInvalid(
+                    "bounded successor requires the verified plan observation builder"
+                )
+            try:
+                current_observation = builder.build(
+                    project_id=project_id,
+                    run_id=baseline.run_id,
+                    goal=baseline.goal,
+                    user_constraints=list(baseline.user_constraints),
+                )
+                invocation = AgentLLMInvocationMetadata(
+                    provider="server:execution-agent-v2",
+                    model="bounded-successor-compiler.v1",
+                    prompt_version=baseline.llm_invocation.prompt_version,
+                    response_id=successor_invocation_id,
+                    observation_digest=current_observation.observation_digest,
+                    tool_catalog_digest=current_observation.tool_catalog.catalog_digest,
+                    validated_output_digest=successor_output_digest,
+                )
+                successor = AgentExecutionPlanCompiler(
+                    registry=self.registry,
+                    resource_authority_policy_store=getattr(
+                        plan_store, "resource_authority_policy_store", None
+                    ),
+                ).compile(
+                    observation=current_observation,
+                    response=successor_response,
+                    invocation=invocation,
+                    created_at=self.clock(),
+                    client_request_id=successor_request_id,
+                    invocation_id=successor_invocation_id,
+                    schema_version=AGENT_EXECUTION_PLAN_PROPOSAL_V2,
+                    skip_satisfied_dependencies=True,
+                )
+                successor_request_digest = _agent_digest(
+                    {
+                        "schema_version": "execution-agent-v2-successor-publication.v1",
+                        "baseline_proposal_id": baseline.proposal_id,
+                        "baseline_proposal_digest": baseline.proposal_digest,
+                        "successor_request_id": successor_request_id,
+                        "successor_response_digest": successor_output_digest,
+                        "authority_evaluation_digest": compilation.authority_evaluation_digest,
+                    }
+                )
+                publication = plan_store.publish(
+                    observation=current_observation,
+                    catalog=current_observation.tool_catalog,
+                    llm_response=successor_response,
+                    proposal=successor,
+                    request_digest=successor_request_digest,
+                )
+            except (ScientificAgentPlanError, TypeError, ValueError) as exc:
+                raise ExecutionAgentV2DecisionInvalid(
+                    "bounded successor plan compilation failed closed"
+                ) from exc
+            self.store._write_v2_application_checkpoint(
+                session,
+                "successor_proposal_committed.json",
+                "SUCCESSOR_PROPOSAL_COMMITTED",
+                {
+                    "baseline_proposal_id": baseline.proposal_id,
+                    "baseline_proposal_digest": baseline.proposal_digest,
+                    "successor_request_id": successor_request_id,
+                    "successor_proposal_id": publication.proposal.proposal_id,
+                    "successor_proposal_digest": publication.proposal.proposal_digest,
+                },
+            )
+        successor = publication.proposal
+        if successor.schema_version != AGENT_EXECUTION_PLAN_PROPOSAL_V2:
+            raise ExecutionAgentV2Conflict("bounded successor must use the v2 plan schema")
+        if (
+            successor.validated_llm_response.task_options.get(response.tool_id)
+            != candidate_options
+        ):
+            raise ExecutionAgentV2Conflict(
+                "bounded successor options are not exactly the logical decision"
+            )
+
+        baseline_grant = _proposal_grant(
+            baseline,
+            registry=self.registry,
+            baseline=True,
+            valid_from=baseline_authorization.created_at,
+        )
+        successor_grant = _proposal_grant(
+            successor,
+            registry=self.registry,
+            baseline=False,
+            valid_from=baseline_authorization.created_at,
+        )
+        changes = [
+            {
+                "dimension": "option",
+                "path": f"option.{key}",
+                "before": baseline_options.get(key),
+                "after": value,
+            }
+            for key, value in sorted(response.arguments.items())
+        ]
+        try:
+            authority_evaluation = evaluate_authority(
+                baseline_grant,
+                successor_grant,
+                changes=changes,
+                semantic_boundary=SemanticBoundary.NONE,
+            )
+        except AuthorityPolicyError as exc:
+            raise ExecutionAgentV2DecisionInvalid(
+                "bounded successor authority evaluation failed closed"
+            ) from exc
+        if (
+            authority_evaluation.relation is not compilation.authority_relation
+            or authority_evaluation.semantic_boundary is not compilation.semantic_boundary
+            or authority_evaluation.auto_apply is not compilation.authority_auto_apply
+        ):
+            raise ExecutionAgentV2Conflict(
+                "bounded successor authority evaluation disagrees with the v2 decision"
+            )
+
+        authorization_request_id = self._bounded_successor_authorization_request_id(
+            successor_proposal=successor,
+            authority_evaluation=authority_evaluation,
+        )
+        requested_gates = sorted(
+            set(baseline_authorization.preauthorized_operational_gates).intersection(
+                successor.required_gates
+            )
+        )
+        if not baseline_authorization.actor or not baseline_authorization.actor_source:
+            raise ExecutionAgentV2DecisionInvalid(
+                "bounded successor is missing the verified baseline actor binding"
+            )
+        approved = self.controller.authorization_service.approve_and_start(
+            project_id=project_id,
+            proposal_id=successor.proposal_id,
+            request=AgentPlanAuthorizationRequest(
+                expected_proposal_digest=successor.proposal_digest,
+                authorization_mode=baseline_authorization.authorization_mode,
+                requested_preauthorized_gate_ids=requested_gates,
+                confirmed=True,
+                client_request_id=authorization_request_id,
+                note=(
+                    "Automatic bounded-authority successor reuse under "
+                    "AuthorityRelation.SUBSET and SemanticBoundary.NONE; "
+                    f"baseline_authorization={baseline_authorization.authorization_digest}; "
+                    f"evaluation={authority_evaluation.evaluation_digest}."
+                ),
+            ),
+            actor=baseline_authorization.actor,
+            actor_source=baseline_authorization.actor_source,
+        )
+        self.store._write_v2_application_checkpoint(
+            session,
+            "successor_authority_committed.json",
+            "SUCCESSOR_AUTHORITY_COMMITTED",
+            {
+                "successor_proposal_id": successor.proposal_id,
+                "successor_proposal_digest": successor.proposal_digest,
+                "authority_evaluation_id": authority_evaluation.evaluation_id,
+                "authority_evaluation_digest": authority_evaluation.evaluation_digest,
+                "permission_decision_id": approved.authorization_decision.decision_id,
+                "permission_decision_digest": approved.authorization_decision.decision_digest,
+                "authorization_id": approved.authorization.authorization_id,
+                "authorization_digest": approved.authorization.authorization_digest,
+                "start_intent_id": approved.start_intent.start_intent_id,
+                "start_intent_digest": approved.start_intent.start_intent_digest,
+                "authorization_request_id": authorization_request_id,
+            },
+        )
+        controller_request_id = self._bounded_successor_controller_request_id(
+            approved.start_intent.start_intent_digest
+        )
+        controller_result = self.controller.create(
+            project_id=project_id,
+            start_intent_id=approved.start_intent.start_intent_id,
+            request=AgentHarnessControllerStartRequest(
+                expected_start_intent_digest=approved.start_intent.start_intent_digest,
+                client_request_id=controller_request_id,
+            ),
+            actor=baseline_authorization.actor,
+            actor_source=baseline_authorization.actor_source,
+        )
+        controller_result, controller_advance_called = self._continue_bounded_successor_controller(
+            project_id=project_id,
+            controller_result=controller_result,
+            target_task_id=compilation.task_id,
+        )
+        if (
+            controller_result.execution.proposal_id != successor.proposal_id
+            or controller_result.execution.authorization_id
+            != approved.authorization.authorization_id
+        ):
+            raise ExecutionAgentV2Conflict(
+                "bounded successor Controller execution lost its exact authority binding"
+            )
+        return _V2BoundedSuccessorResult(
+            proposal=successor,
+            authorization=approved.authorization,
+            authorization_decision=approved.authorization_decision,
+            start_intent=approved.start_intent,
+            controller_result=controller_result,
+            authority_evaluation=authority_evaluation,
+            controller_advance_called=controller_advance_called,
+        )
+
     def _build_application_receipt(
         self,
         *,
@@ -1956,6 +2733,8 @@ class ExecutionAgentV2Service:
         dispatch_occurred: bool,
         outcome: AgentToolCallApplicationOutcome,
         reason_codes: list[str],
+        controller_create_called: bool = False,
+        successor: _V2BoundedSuccessorResult | None = None,
     ) -> AgentToolCallApplicationReceiptV2:
         decision_id = ""
         decision_digest = ""
@@ -2000,8 +2779,45 @@ class ExecutionAgentV2Service:
             controller_decision_digest=decision_digest,
             controller_receipt_id=receipt_id,
             controller_receipt_digest=receipt_digest,
+            successor_proposal_id=successor.proposal.proposal_id if successor else "",
+            successor_proposal_digest=successor.proposal.proposal_digest if successor else "",
+            successor_permission_decision_id=(
+                successor.authorization_decision.decision_id if successor else ""
+            ),
+            successor_permission_decision_digest=(
+                successor.authorization_decision.decision_digest if successor else ""
+            ),
+            successor_authorization_id=(
+                successor.authorization.authorization_id if successor else ""
+            ),
+            successor_authorization_digest=(
+                successor.authorization.authorization_digest if successor else ""
+            ),
+            successor_authority_evaluation_id=(
+                successor.authority_evaluation.evaluation_id if successor else ""
+            ),
+            successor_authority_evaluation_digest=(
+                successor.authority_evaluation.evaluation_digest if successor else ""
+            ),
+            successor_start_intent_id=(
+                successor.start_intent.start_intent_id if successor else ""
+            ),
+            successor_start_intent_digest=(
+                successor.start_intent.start_intent_digest if successor else ""
+            ),
+            successor_controller_execution_id=(
+                successor.controller_result.execution.controller_execution_id
+                if successor
+                else ""
+            ),
+            successor_controller_execution_digest=(
+                successor.controller_result.execution.execution_digest
+                if successor
+                else ""
+            ),
             side_effect_attempted=side_effect_attempted,
             controller_advance_called=controller_called,
+            controller_create_called=controller_create_called,
             dispatch_occurred=dispatch_occurred,
             outcome=outcome,
             reason_codes=reason_codes,
@@ -2059,7 +2875,14 @@ class ExecutionAgentV2Service:
         with self.store.application_session(project_id=project_id, tool_call_proposal_id=tool_call_proposal_id, client_request_id=request.client_request_id, request_digest=request_digest) as session:
             existing = self.store.read_v2_committed_receipt(project_id=project_id, tool_call_proposal_id=tool_call_proposal_id)
             if existing is not None:
-                current = self.controller.get(project_id=project_id, controller_execution_id=controller_execution_id)
+                replay_execution_id = (
+                    existing.successor_controller_execution_id
+                    or controller_execution_id
+                )
+                current = self.controller.get(
+                    project_id=project_id,
+                    controller_execution_id=replay_execution_id,
+                )
                 return ExecutionAgentV2ApplyResult(publication=publication, application_receipt=existing, controller_result=current)
 
             started = self.store.read_marker(
@@ -2075,7 +2898,11 @@ class ExecutionAgentV2Service:
                     raise ExecutionAgentV2Conflict(
                         "v2 Controller checkpoint is bound to another application request"
                     )
-                if proposal.classification is not AgentExecutionV2Classification.AUTO_APPLY or proposal.compilation is None:
+                if (
+                    proposal.classification is not AgentExecutionV2Classification.AUTO_APPLY
+                    or proposal.compilation is None
+                    or not proposal.compilation.controller_options_match
+                ):
                     raise ExecutionAgentV2Conflict(
                         "v2 Controller checkpoint is not bound to an auto-apply proposal"
                     )
@@ -2135,8 +2962,10 @@ class ExecutionAgentV2Service:
             compilation = proposal.compilation
             controller_result: ControllerAdvanceResult | None = None
             controller_called = False
+            controller_create_called = False
             side_effect_attempted = False
             dispatch_occurred = False
+            successor_result: _V2BoundedSuccessorResult | None = None
             decision_id = ""
             decision_digest = ""
             receipt_id = ""
@@ -2144,40 +2973,84 @@ class ExecutionAgentV2Service:
             after_digest = snapshot.inspection.inspection_digest
             reasons: list[str]
             if proposal.classification is AgentExecutionV2Classification.AUTO_APPLY and compilation is not None:
-                if not compilation.authority_auto_apply or not compilation.controller_options_match:
+                if not compilation.authority_auto_apply:
                     raise ExecutionAgentV2Conflict("v2 proposal is no longer Controller-apply eligible")
-                controller_request_id = self._controller_request_id(proposal)
-                self.store._write_v2_application_checkpoint(
-                    session,
-                    "controller_call_started.json",
-                    "CONTROLLER_CALL_STARTED",
-                    {
-                        "controller_request_id": controller_request_id,
-                        "application_request_digest": request_digest,
-                    },
-                )
-                controller_called = True
-                side_effect_attempted = True
-                controller_result = self.controller.advance(
-                    project_id=project_id,
-                    controller_execution_id=controller_execution_id,
-                    request=AgentHarnessControllerAdvanceRequest(
-                        expected_controller_execution_digest=proposal.controller_execution_digest,
-                        client_request_id=controller_request_id,
-                    ),
-                    expected_inspection_digest=proposal.inspection_digest,
-                )
-                if controller_result.decision is None or controller_result.receipt is None:
-                    raise ExecutionAgentV2Conflict("Controller did not return exact v2 effect evidence")
-                decision_id = controller_result.decision.decision_id
-                decision_digest = controller_result.decision.decision_digest
-                receipt_id = controller_result.receipt.receipt_id
-                receipt_digest = controller_result.receipt.receipt_digest
-                after_digest = controller_result.inspection.inspection_digest
-                dispatch_occurred = bool(controller_result.receipt.dispatch_occurred)
-                self.store._write_v2_application_checkpoint(session, "controller_effect_observed.json", "CONTROLLER_EFFECT_OBSERVED", {"controller_request_id": controller_request_id, "controller_decision_id": decision_id, "controller_decision_digest": decision_digest, "controller_receipt_id": receipt_id, "controller_receipt_digest": receipt_digest, "after_inspection_digest": after_digest})
-                reasons = ["EXECUTION_AGENT_V2_CONTROLLER_ADVANCE_APPLIED"]
-                outcome = AgentToolCallApplicationOutcome.APPLIED
+                if compilation.controller_options_match:
+                    controller_request_id = self._controller_request_id(proposal)
+                    self.store._write_v2_application_checkpoint(
+                        session,
+                        "controller_call_started.json",
+                        "CONTROLLER_CALL_STARTED",
+                        {
+                            "controller_request_id": controller_request_id,
+                            "application_request_digest": request_digest,
+                        },
+                    )
+                    controller_called = True
+                    side_effect_attempted = True
+                    controller_result = self.controller.advance(
+                        project_id=project_id,
+                        controller_execution_id=controller_execution_id,
+                        request=AgentHarnessControllerAdvanceRequest(
+                            expected_controller_execution_digest=proposal.controller_execution_digest,
+                            client_request_id=controller_request_id,
+                        ),
+                        expected_inspection_digest=proposal.inspection_digest,
+                    )
+                    if controller_result.decision is None or controller_result.receipt is None:
+                        raise ExecutionAgentV2Conflict("Controller did not return exact v2 effect evidence")
+                    decision_id = controller_result.decision.decision_id
+                    decision_digest = controller_result.decision.decision_digest
+                    receipt_id = controller_result.receipt.receipt_id
+                    receipt_digest = controller_result.receipt.receipt_digest
+                    after_digest = controller_result.inspection.inspection_digest
+                    dispatch_occurred = bool(controller_result.receipt.dispatch_occurred)
+                    self.store._write_v2_application_checkpoint(session, "controller_effect_observed.json", "CONTROLLER_EFFECT_OBSERVED", {"controller_request_id": controller_request_id, "controller_decision_id": decision_id, "controller_decision_digest": decision_digest, "controller_receipt_id": receipt_id, "controller_receipt_digest": receipt_digest, "after_inspection_digest": after_digest})
+                    reasons = ["EXECUTION_AGENT_V2_CONTROLLER_ADVANCE_APPLIED"]
+                    outcome = AgentToolCallApplicationOutcome.APPLIED
+                else:
+                    successor_result = self._apply_bounded_successor(
+                        session=session,
+                        project_id=project_id,
+                        proposal=proposal,
+                        response=proposal.parsed_llm_response,
+                        compilation=compilation,
+                        baseline_authorization=authorization,
+                        baseline=baseline,
+                    )
+                    controller_result = successor_result.controller_result
+                    controller_called = successor_result.controller_advance_called
+                    controller_create_called = True
+                    side_effect_attempted = True
+                    if controller_result.receipt is None or controller_result.decision is None:
+                        raise ExecutionAgentV2Conflict(
+                            "bounded successor Controller did not return effect evidence"
+                        )
+                    decision_id = controller_result.decision.decision_id
+                    decision_digest = controller_result.decision.decision_digest
+                    receipt_id = controller_result.receipt.receipt_id
+                    receipt_digest = controller_result.receipt.receipt_digest
+                    after_digest = controller_result.inspection.inspection_digest
+                    dispatch_occurred = bool(controller_result.receipt.dispatch_occurred)
+                    self.store._write_v2_application_checkpoint(
+                        session,
+                        "controller_effect_observed.json",
+                        "CONTROLLER_EFFECT_OBSERVED",
+                        {
+                            "controller_request_id": self._bounded_successor_controller_request_id(
+                                successor_result.start_intent.start_intent_digest
+                            ),
+                            "controller_decision_id": decision_id,
+                            "controller_decision_digest": decision_digest,
+                            "controller_receipt_id": receipt_id,
+                            "controller_receipt_digest": receipt_digest,
+                            "after_inspection_digest": after_digest,
+                            "successor_controller_execution_id": controller_result.execution.controller_execution_id,
+                            "successor_controller_execution_digest": controller_result.execution.execution_digest,
+                        },
+                    )
+                    reasons = ["EXECUTION_AGENT_V2_BOUNDED_SUCCESSOR_APPLIED"]
+                    outcome = AgentToolCallApplicationOutcome.APPLIED
             else:
                 if proposal.classification is AgentExecutionV2Classification.REQUIRE_HUMAN:
                     reasons = ["EXECUTION_AGENT_V2_HUMAN_BOUNDARY"]
@@ -2195,10 +3068,12 @@ class ExecutionAgentV2Service:
                 after_inspection_digest=after_digest,
                 controller_result=controller_result,
                 controller_called=controller_called,
+                controller_create_called=controller_create_called,
                 side_effect_attempted=side_effect_attempted,
                 dispatch_occurred=dispatch_occurred,
                 outcome=outcome,
                 reason_codes=reasons,
+                successor=successor_result,
             )
             self._publish_application_receipt(
                 session=session,

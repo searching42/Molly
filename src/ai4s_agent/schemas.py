@@ -2177,6 +2177,11 @@ class AgentExecutionPlanProposal(BaseModel):
     questions: list[AgentExecutionPlanQuestion] = Field(default_factory=list)
     required_gates: list[str] = Field(default_factory=list)
     missing_artifacts: list[str] = Field(default_factory=list)
+    # v2 successor publications may omit a dependency only when its complete
+    # registered output roster is already present in the verified observation.
+    # This is provenance, not an execution capability; v1 serialization omits
+    # the field to preserve the historical byte contract.
+    reused_completed_dependency_ids: list[str] = Field(default_factory=list)
     status: Literal["review_required"] = "review_required"
     llm_invocation: AgentLLMInvocationMetadata
     # Semantic identity names the compiled plan only.  Invocation, request,
@@ -2217,6 +2222,7 @@ class AgentExecutionPlanProposal(BaseModel):
         payload = handler(self)
         if self.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V1:
             payload.pop("authorization_scope_digest", None)
+            payload.pop("reused_completed_dependency_ids", None)
         return payload
 
     @field_validator("proposal_id", "semantic_plan_id", "publication_id")
@@ -2275,7 +2281,13 @@ class AgentExecutionPlanProposal(BaseModel):
             )
         return {key: normalized[key] for key in sorted(normalized)}
 
-    @field_validator("selected_artifacts", "selected_profiles", "required_gates", "missing_artifacts")
+    @field_validator(
+        "selected_artifacts",
+        "selected_profiles",
+        "required_gates",
+        "missing_artifacts",
+        "reused_completed_dependency_ids",
+    )
     @classmethod
     def validate_compiled_id_lists(cls, value: list[str], info: Any) -> list[str]:
         return _agent_string_list(value, field=info.field_name, sort_values=True)
@@ -2370,10 +2382,11 @@ class AgentExecutionPlanProposal(BaseModel):
         The scope covers the workflow structure, selected inputs and profiles,
         route bindings, budgets, gates and the scientific objective.  It
         deliberately excludes planner/effective/compiled option values,
-        rationales and questions so the scope identity is stable groundwork
-        for future bounded option revision.  This PR does not yet allow an
-        in-workflow value change under an existing authorization: execution
-        still binds the exact proposal digest.
+        rationales and questions so the scope identity remains the stable
+        authority envelope for bounded option revision.  Historical
+        authorizations still bind their exact proposal; a v2 bounded successor
+        must publish a new exact proposal and rerun Permission, Authorization,
+        StartIntent, and Controller provenance before any effect.
         """
 
         return {
@@ -2399,6 +2412,8 @@ class AgentExecutionPlanProposal(BaseModel):
 
     def semantic_plan_material(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
+        if not self.reused_completed_dependency_ids:
+            payload.pop("reused_completed_dependency_ids", None)
         for key in (
             "proposal_id",
             "publication_id",
@@ -2417,6 +2432,8 @@ class AgentExecutionPlanProposal(BaseModel):
 
     def publication_material(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
+        if not self.reused_completed_dependency_ids:
+            payload.pop("reused_completed_dependency_ids", None)
         payload.pop("proposal_digest", None)
         return payload
 
