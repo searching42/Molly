@@ -114,6 +114,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         "M3.5-AUT-ACCEPT",
         "M3.5-BR2-RUNTIME",
         "M3.5-BR2-MAPPING",
+        "M3.5-BR2-CONVERSATION-IMPL",
         "M3.5-BR2-ACCEPT",
         "M3.5-AUT-AUTH",
         "M3.5-AUT-AUTH-L2",
@@ -158,7 +159,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-ACCEPT", "DONE"),
         ("M3.5-BR2-RUNTIME", "DONE"),
         ("M3.5-BR2-MAPPING", "DONE"),
-        ("M3.5-BR2-ACCEPT", "DONE"),
+        ("M3.5-BR2-CONVERSATION-IMPL", "DONE"),
+        ("M3.5-BR2-ACCEPT", "READY"),
         ("M3.5-AUT-AUTH", "DONE"),
         ("M3.5-AUT-AUTH-L2", "DONE"),
         ("M3.5-AUT-FASTPATH", "READY"),
@@ -174,7 +176,15 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Evidence: `I/T/V`" in item_block(active_queue, "M3.5-AUT-L1")
     assert "Evidence: `I/T/V`" in item_block(active_queue, "M3.5-AUT-L2")
     assert "Evidence: `I/T/V`" in item_block(active_queue, "M3.5-AUT-ACCEPT")
-    assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-BR2-ACCEPT")
+    br2_impl = item_block(active_queue, "M3.5-BR2-CONVERSATION-IMPL")
+    assert "Evidence: `I/T/—`" in br2_impl
+    assert "crash-safe publication" in br2_impl
+    assert "immutable replay/recovery" in br2_impl
+    br2_accept = item_block(active_queue, "M3.5-BR2-ACCEPT")
+    assert "State: `READY`" in br2_accept
+    assert "Evidence: `—/—/—`" in br2_accept
+    assert "the real PDF conversation path reaches the human confirmation Gate and `WAITING_USER`" in br2_accept
+    assert "fresh real conversation acceptance has not been rerun" in br2_accept
     assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-AUTH")
     assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-AUTH-L2")
     assert "Evidence: `—/—/—`" in item_block(active_queue, "M3.5-AUT-FASTPATH")

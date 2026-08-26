@@ -115,7 +115,7 @@ M3.5-BR2-RUNTIME — Real MinerU runtime closure
         ↓
 M3.5-BR2-MAPPING — Contextual mapping and evidence binding
         ↓
-M3.5-BR2-ACCEPT — Conversation-driven BR2 implementation and crash-safe publication
+M3.5-BR2-CONVERSATION-IMPL — Conversation-driven BR2 implementation and crash-safe publication
         ↓
 M3.5-AUT-AUTH — Grant-based autonomy authority model
         ↓
@@ -135,6 +135,11 @@ M3.5-UI — Minimal unified UI
         ↓
 M3.5-V1-ACCEPT — Molly v1 final representative acceptance
 ```
+
+`M3.5-BR2-ACCEPT` remains a separate `READY` fresh-real-acceptance boundary after
+the implementation item above. Its pending rerun does not block the autonomy
+refactor queue, but it remains a prerequisite for the later BR2 acceptance gate
+and the unified UI.
 
 The new P0 is to give the already-verified BR1 chain bounded autonomy before adding new scientific tools. PR #43 proved that the execution substrate can work on the real BR1 path; the next risk is whether an Agent can progress inside the existing authority envelope. L1/L2 are also the foundation for BR2 and for later long-horizon Agent trajectory/error-propagation research. Autonomy must not introduce a second Controller or state machine.
 
@@ -198,13 +203,19 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: deterministic extraction, LLM contextual mapping, schema validation, and evidence binding produce a confirmation-ready candidate raw dataset with privacy-safe provenance.
   - Closed by: PR #50, [acceptance README](evidence/br2-contextual-mapping-v1/README.md), [acceptance manifest](evidence/br2-contextual-mapping-v1/acceptance_manifest.json), and [mapping summary](evidence/br2-contextual-mapping-v1/mapping_summary.json).
 
-- [x] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
+- [x] **M3.5-BR2-CONVERSATION-IMPL — Conversation-driven BR2 implementation and crash-safe publication**
   - State: `DONE`
   - Evidence: `I/T/—`
   - Dependency: after `M3.5-BR2-MAPPING`.
   - Closed by: PR #51.
-  - Definition of Done: the BR2 conversation path and confined crash-safe publication are implemented and covered by repository tests; no training, generation, Top-N, or experimental validation is included.
-  - Acceptance boundary: fresh real conversation acceptance was not rerun for this state update, so no `V` evidence is claimed.
+  - Definition of Done: conversation-driven BR2 implementation, confined crash-safe publication, and immutable replay/recovery are implemented and covered by repository tests. This item does not claim fresh real conversation acceptance.
+
+- [ ] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
+  - State: `READY`
+  - Evidence: `—/—/—`
+  - Dependency: after `M3.5-BR2-MAPPING` and `M3.5-BR2-CONVERSATION-IMPL`.
+  - Definition of Done: the real PDF conversation path reaches the human confirmation Gate and `WAITING_USER`; no training, generation, Top-N, or experimental validation is included.
+  - Implementation note: PR #51 closed the separate implementation item above; fresh real conversation acceptance has not been rerun.
 
 - [x] **M3.5-AUT-AUTH — Grant-based autonomy authority model**
   - State: `DONE`
