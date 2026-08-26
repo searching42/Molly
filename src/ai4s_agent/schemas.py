@@ -9960,8 +9960,12 @@ class AgentPlanRevisionApplicationReceipt(BaseModel):
     supersedes_proposal_id: str
     client_request_id: str
     status: Literal["applied"] = "applied"
-    fresh_permission_required: bool = True
-    fresh_authorization_required: bool = True
+    # v1 is a historical exact contract.  It was only emitted for the
+    # pre-authority-aware application path, where a successor always needed a
+    # fresh Permission and Authorization decision.  Do not widen these fields
+    # in place: callers that need derived authority semantics use v2 below.
+    fresh_permission_required: Literal[True] = True
+    fresh_authorization_required: Literal[True] = True
     dispatched: Literal[False] = False
     created_at: str
 
@@ -10008,6 +10012,58 @@ class AgentPlanRevisionApplicationReceipt(BaseModel):
         payload.pop("application_receipt_digest", None)
         payload.pop("created_at", None)
         return payload
+
+
+class AgentPlanRevisionApplicationReceiptV2(AgentPlanRevisionApplicationReceipt):
+    """Authority-bound successor application receipt.
+
+    The v2 receipt is emitted only after a serialized L2 authority decision has
+    been recomputed against the current immutable revision and baseline.  The
+    decision/evaluation and baseline authorization bindings make the derived
+    freshness flags part of the immutable receipt identity rather than caller
+    supplied options.
+    """
+
+    schema_version: Literal["agent_plan_revision_application_receipt.v2"] = (
+        "agent_plan_revision_application_receipt.v2"
+    )
+    fresh_permission_required: bool
+    fresh_authorization_required: bool
+    authority_decision_id: str
+    authority_decision_digest: str
+    authority_evaluation_id: str
+    authority_evaluation_digest: str
+    baseline_authorization_id: str
+    baseline_authorization_digest: str
+    authority_auto_apply: bool
+
+    @field_validator(
+        "authority_decision_id", "authority_evaluation_id", "baseline_authorization_id"
+    )
+    @classmethod
+    def validate_authority_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator(
+        "authority_decision_digest",
+        "authority_evaluation_digest",
+        "baseline_authorization_digest",
+    )
+    @classmethod
+    def validate_authority_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @model_validator(mode="after")
+    def bind_authority(self) -> "AgentPlanRevisionApplicationReceiptV2":
+        expected_fresh = not self.authority_auto_apply
+        if (
+            self.fresh_permission_required != expected_fresh
+            or self.fresh_authorization_required != expected_fresh
+        ):
+            raise ValueError(
+                "v2 application freshness must be derived from authority_auto_apply"
+            )
+        return self
 
 
 class AgentPlanProposal(BaseModel):
@@ -10502,6 +10558,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_revision_proposal": AgentPlanRevisionProposal,
     "agent_plan_revision_application_request": AgentPlanRevisionApplicationRequest,
     "agent_plan_revision_application_receipt": AgentPlanRevisionApplicationReceipt,
+    "agent_plan_revision_application_receipt_v2": AgentPlanRevisionApplicationReceiptV2,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

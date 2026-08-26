@@ -515,6 +515,7 @@ def test_replanner_generated_schemas_equal_pydantic_source() -> None:
         "agent_plan_revision_proposal",
         "agent_plan_revision_application_request",
         "agent_plan_revision_application_receipt",
+        "agent_plan_revision_application_receipt_v2",
     }
     root = Path(__file__).resolve().parents[1] / "docs" / "schemas"
     for name in sorted(names):
@@ -790,6 +791,92 @@ def test_application_recovers_successor_published_before_receipt(tmp_path) -> No
     assert recovered.receipt.successor_proposal_digest == revision.successor_proposal_digest
     assert recovered.dispatched is False
     assert recovered.replayed is True
+
+
+def test_authority_receipt_crash_window_cannot_rebind_freshness(tmp_path) -> None:
+    from ai4s_agent.scientific_agent_autonomy_l2 import classify_plan_revision_materiality
+
+    storage, proposal_store, authorization_service, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1", client_request_id="feedback-authority-crash", feedback="Use three candidates."
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    revision = service.create_revision(
+        project_id="project-1",
+        payload=_revision_payload(
+            baseline, authorization, feedback, request_id="revision-authority-crash"
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=StubLLMProvider(
+            response=AgentReplanLLMResponse(
+                option_patch={"generate_candidates": {"count": 3}}
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    decision = classify_plan_revision_materiality(
+        revision,
+        baseline_proposal=baseline,
+        baseline_authorization=authorization,
+        registry=proposal_store.registry,
+    )
+    crashed = False
+
+    def fault(phase: str) -> None:
+        nonlocal crashed
+        if phase == "after_successor_proposal" and not crashed:
+            crashed = True
+            raise RuntimeError("authority receipt crash")
+
+    service.store = ScientificAgentReplannerStore(storage=storage, fault_injector=fault)
+    request = AgentPlanRevisionApplicationRequest(
+        expected_revision_digest=revision.revision_digest,
+        client_request_id="application-authority-crash",
+    )
+    with pytest.raises(RuntimeError, match="authority receipt crash"):
+        service.apply_revision(
+            project_id="project-1",
+            revision_id=revision.revision_id,
+            request=request,
+            authority_decision=decision,
+        )
+    receipt_id = (
+        "revision-application-"
+        + _agent_digest({"project_id": "project-1", "revision_id": revision.revision_id}).split(":", 1)[1][:32]
+    )
+    with pytest.raises(FileNotFoundError):
+        service.read_application(project_id="project-1", receipt_id=receipt_id)
+
+    forged = decision.model_copy(
+        update={
+            "authority_auto_apply": False,
+            "fresh_permission_required": True,
+            "fresh_authorization_required": True,
+        }
+    )
+    with pytest.raises(ScientificAgentReplannerConflict):
+        service.apply_revision(
+            project_id="project-1",
+            revision_id=revision.revision_id,
+            request=request,
+            authority_decision=forged,
+        )
+
+    service.store = ScientificAgentReplannerStore(storage=storage)
+    recovered = service.apply_revision(
+        project_id="project-1",
+        revision_id=revision.revision_id,
+        request=request,
+        authority_decision=decision,
+    )
+    assert recovered.receipt.schema_version == "agent_plan_revision_application_receipt.v2"
+    assert recovered.receipt.authority_decision_digest == decision.decision_digest
+    assert recovered.receipt.fresh_permission_required is decision.fresh_permission_required
+    assert recovered.receipt.fresh_authorization_required is decision.fresh_authorization_required
 
 
 def test_completed_application_exact_replay_ignores_later_current_source_drift(tmp_path) -> None:

@@ -25,6 +25,7 @@ from ai4s_agent.schemas import (
     AgentAutonomyL2MaterialityClass,
     AgentAutonomyL2MaterialityDecision,
     AgentExecutionPlanProposal,
+    AGENT_EXECUTION_PLAN_PROPOSAL_V2,
     AgentPlanAuthorization,
     AgentPlanDiff,
     AgentPlanDiffChange,
@@ -80,7 +81,11 @@ AUTONOMY_L2_MATERIALITY_POLICY_MATERIAL: dict[str, Any] = {
         "fresh authority is required unless AuthorityRelation is SUBSET and "
         "SemanticBoundary is NONE"
     ),
-    "parameter_rule": "baseline grant uses registered schema bounds; candidate uses exact validated values",
+    "parameter_rule": (
+        "scope-aware v2 baselines use registered schema bounds; historical v1 "
+        "baselines use exact approved option values; candidates use exact "
+        "validated values"
+    ),
     "semantic_boundary_rule": {
         "goal_paths": ["semantic.goal", "semantic.user_constraints"],
         "dataset_paths": [
@@ -285,7 +290,13 @@ def _task_parameter_bounds(
             raise AutonomyL2MaterialityError(
                 f"proposal contains options outside the registered schema: {sorted(unknown)}"
             )
-        if baseline:
+        # A v1 proposal has no separate authorization-scope identity.  Its
+        # approved option values are part of the authorization identity, so
+        # projecting the full registered schema range would silently widen
+        # historical authority.  Only v2 scope-aware proposals may use the
+        # registered bounded schema as a reusable envelope.
+        scope_aware_baseline = baseline and proposal.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V2
+        if scope_aware_baseline:
             for key, raw_schema in properties.items():
                 if not isinstance(raw_schema, Mapping):
                     raise AutonomyL2MaterialityError("registered option property schema is invalid")

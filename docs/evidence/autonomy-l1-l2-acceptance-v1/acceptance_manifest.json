@@ -34,8 +34,8 @@
       "version": "scientific-agent-autonomy-l1-runtime-policy.v1"
     },
     "l2_materiality_policy": {
-      "digest": "sha256:98d9b09457efbc4dcd0d85d195d7e49f47020f32c6a892c63e58e57de5340d9e",
-      "version": "scientific-agent-autonomy-l2-materiality-policy.v2"
+      "digest": "sha256:d3c5196dd2e61cc84a613fce3c7a7741467d58a536658830c93fe3b25537e1af",
+      "version": "scientific-agent-autonomy-l2-materiality-policy.v1"
     }
   },
   "provider_call_summary": {

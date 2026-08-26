@@ -6,12 +6,14 @@ from dataclasses import replace
 import pytest
 
 from ai4s_agent.schemas import (
+    AGENT_EXECUTION_PLAN_PROPOSAL_V1,
     AgentHarnessControllerAction,
     AgentHarnessControllerStatus,
     AgentAutonomyL2MaterialityClass,
     AgentPlanAuthorizationRequest,
     AgentPlanDiffChange,
     AgentPlanFeedbackRequest,
+    AgentExecutionPlanProposal,
     AgentReplanLLMResponse,
     _agent_digest,
 )
@@ -23,9 +25,12 @@ from ai4s_agent.scientific_agent_autonomy_l2 import (
     AUTONOMY_L2_MATERIALITY_POLICY_VERSION,
     AUTONOMY_L2_REVIEWED_DIFF_DIMENSIONS,
     AutonomyL2MaterialityError,
+    _proposal_grant,
     classify_plan_revision_materiality,
     verify_plan_revision_materiality_decision,
 )
+from ai4s_agent.autonomy_authority import AuthorityRelation, evaluate_authority
+from ai4s_agent.planner import AtomicTaskRegistry
 from tests.test_scientific_agent_replanner import (
     CountingProvider,
     _baseline,
@@ -76,6 +81,60 @@ def _feedback_revision(tmp_path: Path, response: AgentReplanLLMResponse):
         verify_current=False,
     )
     return result.proposal, current_baseline, current_authorization, provider
+
+
+def _recast_proposal_as_historical_v1(
+    proposal: AgentExecutionPlanProposal, *, count: int
+) -> AgentExecutionPlanProposal:
+    payload = proposal.model_dump(mode="json")
+    for field in ("planner_options", "effective_planner_options", "compiled_task_options"):
+        payload[field]["generate_candidates"]["count"] = count
+    payload["validated_llm_response"]["task_options"]["generate_candidates"]["count"] = count
+    payload.update(
+        {
+            "schema_version": AGENT_EXECUTION_PLAN_PROPOSAL_V1,
+            "authorization_scope_digest": "",
+            "semantic_plan_id": "",
+            "semantic_plan_digest": "",
+            "publication_id": "",
+            "proposal_id": "",
+            "proposal_digest": "",
+        }
+    )
+    return AgentExecutionPlanProposal.model_validate(payload)
+
+
+def test_historical_v1_baseline_does_not_expand_exact_option_authority(tmp_path: Path) -> None:
+    _revision, baseline, _authorization, _provider = _feedback_revision(
+        tmp_path,
+        AgentReplanLLMResponse(
+            rationale_summary="Use a smaller candidate set.",
+            option_patch={"generate_candidates": {"count": 4}},
+        ),
+    )
+    historical_baseline = _recast_proposal_as_historical_v1(baseline, count=8)
+    historical_candidate = _recast_proposal_as_historical_v1(baseline, count=4)
+    registry = AtomicTaskRegistry()
+    baseline_grant = _proposal_grant(
+        historical_baseline,
+        registry=registry,
+        baseline=True,
+        valid_from="1970-01-01T00:00:00Z",
+    )
+    candidate_grant = _proposal_grant(
+        historical_candidate,
+        registry=registry,
+        baseline=False,
+        valid_from="1970-01-01T00:00:00Z",
+    )
+    assert baseline_grant.parameter_bounds["generate_candidates.count"].allowed_values == [8]
+    evaluation = evaluate_authority(
+        baseline_grant,
+        candidate_grant,
+        changes=[{"dimension": "option", "path": "option.raw_planner_options"}],
+    )
+    assert evaluation.relation is AuthorityRelation.INCOMPARABLE
+    assert evaluation.auto_apply is False
 
 
 def test_l2_policy_uses_authority_relation_and_semantic_boundary(tmp_path: Path) -> None:
@@ -293,8 +352,14 @@ def test_l2_failure_route_reuses_subset_authority_without_user_reapproval(
             ).split(":", 1)[1][:32]
         ),
     )
+    assert application.schema_version == "agent_plan_revision_application_receipt.v2"
     assert application.fresh_permission_required is False
     assert application.fresh_authorization_required is False
+    assert application.authority_decision_id == body["decision"]["decision_id"]
+    assert application.authority_decision_digest == body["decision"]["decision_digest"]
+    assert application.authority_evaluation_digest == body["decision"]["authority_evaluation_digest"]
+    assert application.baseline_authorization_id == state["authorization_id"]
+    assert application.baseline_authorization_digest == state["authorization_digest"]
     assert body["session"]["autonomy_l2_baseline_controller_execution_id"] == state["controller_execution_id"]
     assert body["session"]["autonomy_l2_baseline_authorization_id"] == state["authorization_id"]
     assert body["proposal"]["proposal_id"] != state["proposal_id"]
