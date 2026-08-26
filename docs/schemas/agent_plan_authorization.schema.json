@@ -455,6 +455,13 @@
       "title": "Artifact Bindings",
       "type": "array"
     },
+    "reused_dependency_artifact_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentAuthorizationArtifactBinding"
+      },
+      "title": "Reused Dependency Artifact Bindings",
+      "type": "array"
+    },
     "profile_bindings": {
       "items": {
         "$ref": "#/$defs/AgentAuthorizationProfileBinding"

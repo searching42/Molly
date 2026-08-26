@@ -1469,6 +1469,34 @@ class AgentExecutionPlanCompiler:
                 )
             }
         )
+        reused_completed_dependency_artifact_ids = sorted(
+            {
+                artifact_id
+                for dependency_id in reused_completed_dependency_ids
+                for artifact_id in self.registry.get(dependency_id).output_artifacts
+            }
+        )
+        if reused_completed_dependency_artifact_ids:
+            # A dependency is adoptable only when every output is still a
+            # verified, exact artifact produced by that dependency.  The
+            # resulting IDs are provenance for Authorization, never an
+            # execution capability or a permission to discover new files.
+            for artifact_id in reused_completed_dependency_artifact_ids:
+                artifact = available_by_id.get(artifact_id)
+                if (
+                    artifact is None
+                    or artifact.verification_state not in {"registered", "verified"}
+                    or not artifact.content_digest
+                    or (
+                        artifact.producer_task_id is not None
+                        and artifact.producer_task_id
+                        not in reused_completed_dependency_ids
+                    )
+                ):
+                    raise ScientificAgentPlanError(
+                        "reused dependency output is not an exact verified artifact: "
+                        f"{artifact_id}"
+                    )
         expanded_tools = {
             tool.task_id: tool
             for tool in observation.tool_catalog.tools
@@ -1794,6 +1822,9 @@ class AgentExecutionPlanCompiler:
             required_gates=required_gates,
             missing_artifacts=list(run_plan.missing_artifacts),
             reused_completed_dependency_ids=reused_completed_dependency_ids,
+            reused_completed_dependency_artifact_ids=(
+                reused_completed_dependency_artifact_ids
+            ),
             llm_invocation=metadata,
             client_request_id=clean_client_request_id,
             invocation_id=clean_invocation_id,

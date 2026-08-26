@@ -2403,12 +2403,16 @@ class ExecutionAgentV2Service:
             ):
                 return controller_result, controller_advance_called
             action = controller_result.inspection.next_action
-            if action not in {
-                AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
-                AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
-            }:
+            if action is AgentHarnessControllerAction.ADOPT_COMPLETED_TASK:
+                pass
+            elif (
+                action is AgentHarnessControllerAction.EXECUTE_LOCAL_TASK
+                and controller_result.inspection.current_task_id == target_task_id
+            ):
+                pass
+            else:
                 raise ExecutionAgentV2Conflict(
-                    "bounded successor reached an unsupported Controller boundary"
+                    "bounded successor reached an unsupported or non-target Controller action"
                 )
             request_seed = _agent_digest(
                 {

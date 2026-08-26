@@ -2182,6 +2182,11 @@ class AgentExecutionPlanProposal(BaseModel):
     # This is provenance, not an execution capability; v1 serialization omits
     # the field to preserve the historical byte contract.
     reused_completed_dependency_ids: list[str] = Field(default_factory=list)
+    # The exact pre-existing outputs that make those omitted dependencies
+    # adoptable.  Authorization binds their content/provenance separately from
+    # user-selected inputs so a successor cannot silently consume a later
+    # version of a completed dependency artifact.
+    reused_completed_dependency_artifact_ids: list[str] = Field(default_factory=list)
     status: Literal["review_required"] = "review_required"
     llm_invocation: AgentLLMInvocationMetadata
     # Semantic identity names the compiled plan only.  Invocation, request,
@@ -2223,6 +2228,7 @@ class AgentExecutionPlanProposal(BaseModel):
         if self.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V1:
             payload.pop("authorization_scope_digest", None)
             payload.pop("reused_completed_dependency_ids", None)
+            payload.pop("reused_completed_dependency_artifact_ids", None)
         return payload
 
     @field_validator("proposal_id", "semantic_plan_id", "publication_id")
@@ -2287,6 +2293,7 @@ class AgentExecutionPlanProposal(BaseModel):
         "required_gates",
         "missing_artifacts",
         "reused_completed_dependency_ids",
+        "reused_completed_dependency_artifact_ids",
     )
     @classmethod
     def validate_compiled_id_lists(cls, value: list[str], info: Any) -> list[str]:
@@ -2360,6 +2367,10 @@ class AgentExecutionPlanProposal(BaseModel):
                 raise ValueError(
                     "authorization scope digest is not defined for v1 proposals"
                 )
+            if self.reused_completed_dependency_artifact_ids:
+                raise ValueError(
+                    "reused dependency artifact bindings are not defined for v1 proposals"
+                )
         else:
             expected_scope = _agent_digest(self.authorization_scope_material())
             if (
@@ -2389,7 +2400,7 @@ class AgentExecutionPlanProposal(BaseModel):
         StartIntent, and Controller provenance before any effect.
         """
 
-        return {
+        material = {
             "schema_version": "agent_execution_plan_authorization_scope.v1",
             "project_id": self.project_id,
             "run_id": self.run_id,
@@ -2409,11 +2420,18 @@ class AgentExecutionPlanProposal(BaseModel):
             "success_criteria": self.success_criteria,
             "required_gates": self.required_gates,
         }
+        if self.reused_completed_dependency_artifact_ids:
+            material["reused_completed_dependency_artifact_ids"] = (
+                self.reused_completed_dependency_artifact_ids
+            )
+        return material
 
     def semantic_plan_material(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
         if not self.reused_completed_dependency_ids:
             payload.pop("reused_completed_dependency_ids", None)
+        if not self.reused_completed_dependency_artifact_ids:
+            payload.pop("reused_completed_dependency_artifact_ids", None)
         for key in (
             "proposal_id",
             "publication_id",
@@ -2434,6 +2452,8 @@ class AgentExecutionPlanProposal(BaseModel):
         payload = self.model_dump(mode="json")
         if not self.reused_completed_dependency_ids:
             payload.pop("reused_completed_dependency_ids", None)
+        if not self.reused_completed_dependency_artifact_ids:
+            payload.pop("reused_completed_dependency_artifact_ids", None)
         payload.pop("proposal_digest", None)
         return payload
 
@@ -3898,6 +3918,12 @@ class AgentPlanAuthorization(BaseModel):
     compiled_task_options: dict[str, dict[str, Any]]
     dispatch_intents: list[AgentTaskDispatchIntent]
     artifact_bindings: list[AgentAuthorizationArtifactBinding] = Field(default_factory=list)
+    # Successor-only provenance for completed dependencies omitted from the
+    # new RunPlan.  These bindings remain non-executable, but their exact
+    # content digests are part of the Authorization identity.
+    reused_dependency_artifact_bindings: list[AgentAuthorizationArtifactBinding] = Field(
+        default_factory=list
+    )
     profile_bindings: list[AgentAuthorizationProfileBinding] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
     stop_conditions: list[str] = Field(default_factory=list)
@@ -3932,6 +3958,10 @@ class AgentPlanAuthorization(BaseModel):
         payload = handler(self)
         if self.schema_version == AGENT_PLAN_AUTHORIZATION_V1:
             payload.pop("authorization_scope_digest", None)
+        if not self.reused_dependency_artifact_bindings:
+            # Preserve the byte/digest contract of existing v1 and v2
+            # authorizations that predate successor artifact provenance.
+            payload.pop("reused_dependency_artifact_bindings", None)
         return payload
 
     @field_validator(
@@ -4046,6 +4076,10 @@ class AgentPlanAuthorization(BaseModel):
                 raise ValueError(
                     "authorization scope digest is not defined for v1 authorizations"
                 )
+            if self.reused_dependency_artifact_bindings:
+                raise ValueError(
+                    "reused dependency artifact bindings are not defined for v1 authorizations"
+                )
         elif not self.authorization_scope_digest:
             raise ValueError("authorization scope digest is required")
         roster = set(self.task_ids)
@@ -4055,6 +4089,15 @@ class AgentPlanAuthorization(BaseModel):
             raise ValueError("authorization option maps must exactly cover the RunPlan")
         if {item.task_id for item in self.dispatch_intents} != roster:
             raise ValueError("authorization dispatch intents must exactly cover the RunPlan")
+        artifact_ids = [
+            item.artifact_id
+            for item in self.artifact_bindings
+        ] + [
+            item.artifact_id
+            for item in self.reused_dependency_artifact_bindings
+        ]
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise ValueError("authorization artifact bindings must have unique artifact IDs")
         if sorted({item.gate_id for item in self.gate_bindings}) != self.required_gates:
             raise ValueError("authorization Gate bindings must exactly cover required gates")
         if set(self.preauthorized_operational_gates).intersection(self.pending_gates):

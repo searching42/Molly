@@ -17,6 +17,7 @@ from ai4s_agent.execution_agent_v2 import (
     AgentToolCallApplicationRequestV2,
     AgentToolCallProposalRequestV2,
     ExecutionAgentV2Service,
+    ExecutionAgentV2Conflict,
     ExecutionAgentV2DecisionInvalid,
     ExecutionAgentV2Store,
     ExecutionAgentV2LLMOutcomeUnknown,
@@ -46,7 +47,9 @@ from ai4s_agent.scientific_agent_authorization import (
     ScientificAgentAuthorizationService,
 )
 from ai4s_agent.scientific_agent_harness_controller import (
+    ControllerAdvanceResult,
     ScientificAgentHarnessController,
+    ScientificAgentHarnessControllerVerificationError,
 )
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
@@ -55,6 +58,7 @@ from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanProposalStore,
     ScientificAgentPlanService,
+    ScientificAgentPlanSourceChanged,
 )
 from ai4s_agent.storage import ProjectStorage
 from tests.execution_agent_test_support import (
@@ -933,6 +937,154 @@ def test_v2_bounded_option_successor_reaches_controller_exactly_once(tmp_path: P
     assert replay.application_receipt.application_receipt_id == applied.application_receipt.application_receipt_id
     assert len(replay_after) == len(after)
     assert provider.calls == 1
+
+
+def test_v2_successor_binds_reused_dependency_artifacts_and_rejects_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, controller, current = _clean_controller_fixture(tmp_path)
+    service = _v2_service(storage, controller)
+    arguments = _tool_call_response()["arguments"]
+    arguments["min_nonempty"] = 2
+    provider = CountingStubProvider(response=_tool_call_response(arguments=arguments))
+    proposal = service.create_proposal(
+        project_id="project-1",
+        controller_execution_id=current.execution.controller_execution_id,
+        request=_proposal_request(current.execution.execution_digest, "proposal-v2-reused-artifacts"),
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    ).publication.proposal
+
+    original_approve = controller.authorization_service.approve_and_start
+    approved = None
+
+    def approve_then_tamper(*args: Any, **kwargs: Any):
+        nonlocal approved
+        approved = original_approve(*args, **kwargs)
+        registry = storage.read_artifact_registry("project-1", "run-1")
+        reused_path = storage.run_dir("project-1", "run-1") / registry["dataset_profile"]
+        reused_path.write_bytes(reused_path.read_bytes() + b"\npost-compile-tamper\n")
+        return approved
+
+    monkeypatch.setattr(
+        controller.authorization_service,
+        "approve_and_start",
+        approve_then_tamper,
+    )
+    with pytest.raises(
+        (ScientificAgentPlanSourceChanged, ScientificAgentHarnessControllerVerificationError),
+        match="dataset_profile|artifact|authority|stale",
+    ):
+        service.apply_proposal(
+            project_id="project-1",
+            controller_execution_id=current.execution.controller_execution_id,
+            tool_call_proposal_id=proposal.tool_call_proposal_id,
+            request=AgentToolCallApplicationRequestV2(
+                expected_tool_call_proposal_digest=proposal.tool_call_proposal_digest,
+                client_request_id="application-v2-reused-artifacts",
+            ),
+        )
+
+    assert approved is not None
+    reused = {
+        binding.artifact_id: binding
+        for binding in approved.authorization.reused_dependency_artifact_bindings
+    }
+    assert {"dataset_profile", "property_catalog"}.issubset(reused)
+    assert reused["dataset_profile"].producer_task_id == "inspect_dataset"
+    executions = controller.control_store.list_harness_controller_executions(
+        project_id="project-1"
+    )
+    assert sum(
+        receipt.dispatch_occurred
+        for execution in executions
+        for receipt in controller.control_store.list_harness_controller_action_receipts(
+            project_id="project-1",
+            controller_execution_id=execution.controller_execution_id,
+        )
+    ) == 1
+
+
+def test_v2_successor_adopts_predecessor_then_dispatches_only_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, controller, current = _clean_controller_fixture(tmp_path)
+    service = _v2_service(storage, controller)
+    predecessor = replace(
+        current,
+        inspection=current.inspection.model_copy(
+            update={
+                "current_task_id": "inspect_dataset",
+                "next_action": AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
+            }
+        ),
+    )
+    target_receipt = current.receipt.model_copy(
+        update={"task_id": "clean_dataset", "dispatch_occurred": True}
+    )
+    target = replace(
+        current,
+        inspection=current.inspection.model_copy(
+            update={
+                "current_task_id": "clean_dataset",
+                "next_action": AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+            }
+        ),
+        receipt=target_receipt,
+    )
+    advance_calls: list[dict[str, Any]] = []
+
+    def advance(**kwargs: Any) -> ControllerAdvanceResult:
+        advance_calls.append(kwargs)
+        return target
+
+    monkeypatch.setattr(controller, "advance", advance)
+    result, advance_called = service._continue_bounded_successor_controller(
+        project_id="project-1",
+        controller_result=predecessor,
+        target_task_id="clean_dataset",
+    )
+    assert advance_called is True
+    assert len(advance_calls) == 1
+    assert result.receipt is not None
+    assert result.receipt.task_id == "clean_dataset"
+    assert result.receipt.dispatch_occurred is True
+
+
+def test_v2_successor_rejects_predecessor_local_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, controller, current = _clean_controller_fixture(tmp_path)
+    service = _v2_service(storage, controller)
+    predecessor_execution = replace(
+        current,
+        inspection=current.inspection.model_copy(
+            update={
+                "current_task_id": "inspect_dataset",
+                "next_action": AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+            }
+        ),
+    )
+    advance_calls: list[dict[str, Any]] = []
+
+    def advance(**kwargs: Any) -> ControllerAdvanceResult:
+        advance_calls.append(kwargs)
+        raise AssertionError("predecessor execution must fail before Controller.advance")
+
+    monkeypatch.setattr(controller, "advance", advance)
+    with pytest.raises(
+        ExecutionAgentV2Conflict,
+        match="non-target Controller action",
+    ):
+        service._continue_bounded_successor_controller(
+            project_id="project-1",
+            controller_result=predecessor_execution,
+            target_task_id="clean_dataset",
+        )
+    assert advance_calls == []
 
 
 def test_v2_terminal_human_boundary_does_not_call_provider(tmp_path: Path) -> None:

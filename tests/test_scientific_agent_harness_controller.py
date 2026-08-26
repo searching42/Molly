@@ -479,6 +479,7 @@ def _local_authority_chain(
     tmp_path: Path,
     *,
     requested_tool_ids: list[str] | None = None,
+    add_unselected_artifact: bool = False,
 ):
     storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
     storage.create_project("project-1", name="Project", created_at=_NOW)
@@ -489,6 +490,15 @@ def _local_authority_chain(
     storage.register_artifact_path(
         "project-1", "run-1", "uploaded_dataset", "inputs/dataset.csv"
     )
+    if add_unselected_artifact:
+        unselected = run_dir / "inputs" / "unselected-manifest.json"
+        unselected.write_text('{"source":"fixture"}\n', encoding="utf-8")
+        storage.register_artifact_path(
+            "project-1",
+            "run-1",
+            "unselected_manifest",
+            "inputs/unselected-manifest.json",
+        )
     tool_ids = requested_tool_ids or ["inspect_dataset"]
     response = AgentExecutionPlanLLMResponse(
         requested_tool_ids=tool_ids,
@@ -2544,6 +2554,54 @@ def test_decision_freshness_barrier_rechecks_input_after_decision_commit(
         controller_execution_id=executions[0].controller_execution_id,
     ) == []
     assert storage.read_stage_state("project-1", "run-1") is None
+
+
+def test_ordinary_plan_freezes_unselected_preexisting_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(
+        tmp_path,
+        add_unselected_artifact=True,
+    )
+    original_publish = control_store.publish_harness_controller_decision
+    unselected = storage.run_dir("project-1", "run-1") / "inputs" / "unselected-manifest.json"
+    mutated = False
+
+    def publish_then_mutate(*, project_id, decision):
+        nonlocal mutated
+        published = original_publish(project_id=project_id, decision=decision)
+        if not mutated:
+            mutated = True
+            unselected.write_text('{"source":"tampered"}\n', encoding="utf-8")
+        return published
+
+    monkeypatch.setattr(
+        control_store,
+        "publish_harness_controller_decision",
+        publish_then_mutate,
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="pre-existing artifact authority changed",
+    ):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=AgentHarnessControllerStartRequest(
+                expected_start_intent_digest=intent.start_intent_digest,
+                client_request_id="unselected-source-drift-create-1",
+            ),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=control_store.list_harness_controller_executions(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+        )[0].controller_execution_id,
+    ) == []
 
 
 def test_gate_approval_commits_decision_without_executing_then_advance_runs_task(
