@@ -116,9 +116,29 @@
       "title": "Successor Proposal Digest",
       "type": "string"
     },
+    "authority_chain_verified": {
+      "default": false,
+      "title": "Authority Chain Verified",
+      "type": "boolean"
+    },
+    "successor_permission_decision_id": {
+      "default": "",
+      "title": "Successor Permission Decision Id",
+      "type": "string"
+    },
+    "successor_permission_decision_digest": {
+      "default": "",
+      "title": "Successor Permission Decision Digest",
+      "type": "string"
+    },
     "successor_authorization_id": {
       "default": "",
       "title": "Successor Authorization Id",
+      "type": "string"
+    },
+    "successor_authorization_digest": {
+      "default": "",
+      "title": "Successor Authorization Digest",
       "type": "string"
     },
     "successor_start_intent_id": {
@@ -126,9 +146,19 @@
       "title": "Successor Start Intent Id",
       "type": "string"
     },
+    "successor_start_intent_digest": {
+      "default": "",
+      "title": "Successor Start Intent Digest",
+      "type": "string"
+    },
     "successor_controller_execution_id": {
       "default": "",
       "title": "Successor Controller Execution Id",
+      "type": "string"
+    },
+    "successor_controller_execution_digest": {
+      "default": "",
+      "title": "Successor Controller Execution Digest",
       "type": "string"
     },
     "effect_started": {

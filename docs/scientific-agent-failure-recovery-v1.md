@@ -1,8 +1,12 @@
 # Scientific Agent failure recovery v1
 
-This document defines the independent `M3.5-AUT-FAILURE-RECOVERY` contract.
+This document defines the `M3.5-AUT-FAILURE-RECOVERY-FOUNDATION` contract.
 It does not replace the Controller, the v2 Execution Agent, L2, Feedback, or
 Lease contracts.
+
+The foundation owns the typed failure/recovery control plane and the trusted
+successor boundary.  The production Conversation/coordinator `FAILED`
+continuation remains the follow-on `M3.5-AUT-FAILURE-RECOVERY` roadmap item.
 
 ## Authority and evidence
 

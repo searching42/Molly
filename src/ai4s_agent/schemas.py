@@ -3046,9 +3046,19 @@ class AgentRecoveryAttemptReceipt(BaseModel):
     authority_epoch: str = ""
     successor_proposal_id: str = ""
     successor_proposal_digest: str = ""
+    # Exact provenance for the trusted Permission -> Authorization ->
+    # StartIntent -> Controller successor chain.  These are optional only for
+    # deterministic ASK_USER/STOP receipts and for historical receipts; the
+    # recovery service requires the complete set before any automatic effect.
+    authority_chain_verified: bool = False
+    successor_permission_decision_id: str = ""
+    successor_permission_decision_digest: str = ""
     successor_authorization_id: str = ""
+    successor_authorization_digest: str = ""
     successor_start_intent_id: str = ""
+    successor_start_intent_digest: str = ""
     successor_controller_execution_id: str = ""
+    successor_controller_execution_digest: str = ""
     effect_started: bool = False
     effect_receipt_id: str = ""
     effect_receipt_digest: str = ""
@@ -3083,15 +3093,15 @@ class AgentRecoveryAttemptReceipt(BaseModel):
     def action(self) -> AgentRecoveryAction:
         return self.recovery_action
 
-    @field_validator("receipt_id", "failure_id", "recovery_decision_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id")
+    @field_validator("receipt_id", "failure_id", "recovery_decision_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_permission_decision_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id")
     @classmethod
     def validate_receipt_ids(cls, value: str, info: Any) -> str:
-        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"receipt_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id"})
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"receipt_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_permission_decision_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id"})
 
-    @field_validator("receipt_digest", "failure_digest", "recovery_decision_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "effect_receipt_digest")
+    @field_validator("receipt_digest", "failure_digest", "recovery_decision_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "successor_permission_decision_digest", "successor_authorization_digest", "successor_start_intent_digest", "successor_controller_execution_digest", "effect_receipt_digest")
     @classmethod
     def validate_receipt_digests(cls, value: str, info: Any) -> str:
-        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"receipt_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "effect_receipt_digest"})
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"receipt_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "successor_permission_decision_digest", "successor_authorization_digest", "successor_start_intent_digest", "successor_controller_execution_digest", "effect_receipt_digest"})
 
     @field_validator("created_at")
     @classmethod
@@ -3108,6 +3118,30 @@ class AgentRecoveryAttemptReceipt(BaseModel):
             raise ValueError("session and authority epoch anchors must be provided together")
         if bool(self.effect_receipt_id) != bool(self.effect_receipt_digest):
             raise ValueError("effect receipt ID and digest must be provided together")
+        chain_pairs = (
+            (self.successor_proposal_id, self.successor_proposal_digest),
+            (
+                self.successor_permission_decision_id,
+                self.successor_permission_decision_digest,
+            ),
+            (self.successor_authorization_id, self.successor_authorization_digest),
+            (self.successor_start_intent_id, self.successor_start_intent_digest),
+            (
+                self.successor_controller_execution_id,
+                self.successor_controller_execution_digest,
+            ),
+        )
+        # REPLAN receipts may carry the existing Replanner's successor
+        # proposal ID without a Controller successor (the Replanner owns its
+        # own authority-chain receipt).  Retry/TOOL_CALL receipts, and any
+        # receipt explicitly claiming a verified chain, require every exact
+        # ID/digest pair.
+        if self.recovery_action is not AgentRecoveryAction.REPLAN and any(
+            bool(identifier) != bool(digest) for identifier, digest in chain_pairs
+        ):
+            raise ValueError("successor authority IDs and digests must be provided in pairs")
+        if self.authority_chain_verified and not all(identifier and digest for identifier, digest in chain_pairs):
+            raise ValueError("verified successor authority chain is incomplete")
         if self.effect_started and not self.successor_controller_execution_id and not self.effect_receipt_id:
             raise ValueError("effect_started requires successor Controller or effect receipt binding")
         expected = _agent_digest(self.semantic_material())

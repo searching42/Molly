@@ -3,9 +3,10 @@
 This module is deliberately a control-plane boundary rather than a second
 executor.  Failure classification is derived from typed server evidence;
 recovery responses are advisory; and an executable successor is accepted only
-through a caller supplied applicator that owns the existing
-Permission -> Authorization -> StartIntent -> Controller chain.  No adapter,
-worker, shell, path, credential, or raw exception is accepted here.
+through the trusted Permission -> Authorization -> StartIntent -> Controller
+applicator interface (the concrete implementation below reuses those existing
+services).  No adapter, worker, shell, path, credential, or raw exception is
+accepted here.
 
 The durable store is project-scoped and no-replace.  A failure has one
 recovery-attempt identity, so retries are counted by unique immutable
@@ -21,6 +22,7 @@ import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -564,6 +566,203 @@ class FailureRecoveryStore:
         with _exclusive_process_lock(lock):
             yield failure
 
+    @contextmanager
+    def aggregate_session(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        autonomy_grant_id: str,
+        authority_epoch: str,
+    ):
+        """Serialize one durable retry/replan budget aggregate.
+
+        A failure-local lock protects duplicate requests for one failure, but
+        it cannot protect two different failures that share a grant/session
+        budget.  The aggregate key is derived only from the server-resolved
+        lineage, and the lock is held through the durable receipt commit so
+        the budget check, ordinal assignment, and receipt publication are one
+        cross-process critical section.
+        """
+
+        aggregate = self._aggregate_dir(
+            project_id=project_id,
+            session_id=session_id,
+            autonomy_grant_id=autonomy_grant_id,
+            authority_epoch=authority_epoch,
+            create=True,
+        )
+        lock = aggregate / "recovery-budget.lock"
+        if lock.is_symlink():
+            raise FailureRecoveryConflict("recovery budget lock is unsafe")
+        with _exclusive_process_lock(lock):
+            yield aggregate
+
+    def _aggregate_dir(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        autonomy_grant_id: str,
+        authority_epoch: str,
+        create: bool,
+    ) -> Path:
+        root = self._project_root(project_id, create=create)
+        aggregates = self._safe_child(root, "aggregates", create=create)
+        aggregate_id = "budget-" + _agent_digest(
+            {
+                "schema_version": "agent_failure_recovery_budget_lock.v1",
+                "session_id": _safe_scope_id(session_id, field="session_id"),
+                "autonomy_grant_id": _safe_scope_id(
+                    autonomy_grant_id, field="autonomy_grant_id"
+                ),
+                "authority_epoch": _safe_scope_id(
+                    authority_epoch, field="authority_epoch"
+                ),
+            }
+        ).split(":", 1)[1][:48]
+        return self._safe_child(aggregates, aggregate_id, create=create)
+
+    def reserve_budget(
+        self,
+        *,
+        aggregate_dir: Path,
+        failure_id: str,
+        failure_digest: str,
+        decision_id: str,
+        request_digest: str,
+        recovery_action: AgentRecoveryAction,
+        ordinal: int,
+        session_id: str,
+        autonomy_grant_id: str,
+        autonomy_grant_digest: str,
+        authority_epoch: str,
+        created_at: str,
+    ) -> str:
+        """Durably reserve one retry/replan ordinal under the aggregate lock.
+
+        The reservation is immutable and intentionally remains after a crash.
+        A later recovery can consume the same failure's reservation only after
+        authoritative effect reconciliation; another failure cannot silently
+        reuse a slot whose effect outcome is still unknown.
+        """
+
+        if recovery_action not in {
+            AgentRecoveryAction.RETRY_EXACT,
+            AgentRecoveryAction.TOOL_CALL,
+            AgentRecoveryAction.REPLAN,
+        } or ordinal <= 0:
+            raise FailureRecoveryConflict("invalid recovery budget reservation")
+        if aggregate_dir.is_symlink() or not aggregate_dir.is_dir():
+            raise FailureRecoveryConflict("recovery budget aggregate is unsafe")
+        reservations = self._safe_child(aggregate_dir, "reservations", create=True)
+        payload = {
+            "schema_version": "agent_failure_recovery_budget_reservation.v1",
+            "failure_id": _safe_scope_id(failure_id, field="failure_id"),
+            "failure_digest": _agent_digest_value(failure_digest, field="failure_digest"),
+            "decision_id": _safe_scope_id(decision_id, field="decision_id"),
+            "request_digest": _agent_digest_value(request_digest, field="request_digest"),
+            "recovery_action": recovery_action.value,
+            "ordinal": int(ordinal),
+            "session_id": _safe_scope_id(session_id, field="session_id"),
+            "autonomy_grant_id": _safe_scope_id(
+                autonomy_grant_id, field="autonomy_grant_id"
+            ),
+            "autonomy_grant_digest": _agent_digest_value(
+                autonomy_grant_digest, field="autonomy_grant_digest"
+            ),
+            "authority_epoch": _safe_scope_id(
+                authority_epoch, field="authority_epoch"
+            ),
+            "created_at": _agent_safe_text(
+                created_at, field="created_at", max_length=64, allow_empty=False
+            ),
+        }
+        reservation_id = "reservation-" + _agent_digest(
+            {
+                "schema_version": payload["schema_version"],
+                "failure_id": payload["failure_id"],
+                "failure_digest": payload["failure_digest"],
+                "decision_id": payload["decision_id"],
+                "recovery_action": payload["recovery_action"],
+                "ordinal": payload["ordinal"],
+            }
+        ).split(":", 1)[1][:32]
+        path = reservations / reservation_id
+        if path.exists() or path.is_symlink():
+            existing = self._read_json(path)
+            if existing is None:
+                raise FailureRecoveryConflict("recovery budget reservation is unreadable")
+            expected = {**payload, "reservation_id": reservation_id}
+            # ``created_at`` is audit metadata and may differ when a crashed
+            # request is resumed; every identity-bearing field must remain
+            # byte-identical.
+            if {
+                key: value for key, value in existing.items() if key != "created_at"
+            } != {
+                key: value for key, value in expected.items() if key != "created_at"
+            }:
+                raise FailureRecoveryConflict(
+                    "immutable recovery budget reservation is bound to different bytes"
+                )
+            return reservation_id
+        self._write_or_verify(
+            path,
+            _pretty_json_bytes({**payload, "reservation_id": reservation_id}),
+        )
+        return reservation_id
+
+    def list_budget_reservations(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        autonomy_grant_id: str,
+        autonomy_grant_digest: str,
+        authority_epoch: str,
+    ) -> list[dict[str, Any]]:
+        """Read the immutable reservations for one aggregate lineage."""
+
+        try:
+            aggregate = self._aggregate_dir(
+                project_id=project_id,
+                session_id=session_id,
+                autonomy_grant_id=autonomy_grant_id,
+                authority_epoch=authority_epoch,
+                create=False,
+            )
+        except FileNotFoundError:
+            return []
+        reservations = aggregate / "reservations"
+        if not reservations.exists():
+            return []
+        if reservations.is_symlink() or not reservations.is_dir():
+            raise FailureRecoveryConflict("recovery budget reservations are unsafe")
+        result: list[dict[str, Any]] = []
+        for path in sorted(reservations.iterdir(), key=lambda item: item.name):
+            if path.is_symlink() or not path.is_file():
+                raise FailureRecoveryConflict("recovery budget reservations contain unsafe entry")
+            payload = self._read_json(path)
+            if payload is None:
+                continue
+            if payload.get("reservation_id") != path.name:
+                raise FailureRecoveryConflict("recovery budget reservation identity is invalid")
+            if (
+                payload.get("session_id") != session_id
+                or payload.get("autonomy_grant_id") != autonomy_grant_id
+                or payload.get("autonomy_grant_digest") != autonomy_grant_digest
+                or payload.get("authority_epoch") != authority_epoch
+            ):
+                raise FailureRecoveryConflict("recovery budget reservation lineage is invalid")
+            if payload.get("recovery_action") not in {
+                AgentRecoveryAction.RETRY_EXACT.value,
+                AgentRecoveryAction.TOOL_CALL.value,
+                AgentRecoveryAction.REPLAN.value,
+            } or not isinstance(payload.get("ordinal"), int) or payload["ordinal"] <= 0:
+                raise FailureRecoveryConflict("recovery budget reservation is invalid")
+            result.append(payload)
+        return result
+
     def _artifact_path(self, project_id: str, kind: str, artifact_id: str, *, create: bool) -> Path:
         root = self._project_root(project_id, create=create)
         collection = self._safe_child(root, kind, create=create)
@@ -708,6 +907,666 @@ class FailureRecoveryStore:
         return matches[0] if matches else None
 
 
+class RecoverySuccessorApplicator:
+    """Trusted interface for an effectful recovery successor.
+
+    A plain callback is deliberately not accepted by the recovery service.
+    Implementations must be an instance of this interface so the service can
+    require the concrete authority-chain result and its exact provenance.
+    """
+
+    # Subclasses must explicitly opt in after implementing and verifying the
+    # full chain.  A plain subclass is therefore not implicitly trusted.
+    recovery_authority_chain_verified = False
+
+    def apply_recovery_successor(self, **kwargs: Any) -> Mapping[str, Any]:
+        raise NotImplementedError
+
+    def __call__(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self.apply_recovery_successor(**kwargs)
+
+
+class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
+    """Apply one recovery through the existing Permission → Controller chain.
+
+    This adapter intentionally owns no executor or adapter calls.  It rebuilds
+    an exact, current successor proposal from the failed Controller's verified
+    plan, publishes it through ``ScientificAgentPlanProposalStore``, reruns the
+    existing Permission/Authorization/StartIntent chain, and finally starts it
+    with ``Controller.create``.  Every returned identity is read back from the
+    authoritative artifact, never accepted from recovery/LLM input.
+    """
+
+    def __init__(
+        self,
+        *,
+        proposal_store: Any,
+        authorization_service: Any,
+        controller: Any,
+        registry: Any | None = None,
+        actor: str,
+        actor_source: str,
+        clock: Callable[[], str] = now_iso,
+    ) -> None:
+        self.proposal_store = proposal_store
+        self.authorization_service = authorization_service
+        self.controller = controller
+        self.registry = registry or getattr(proposal_store, "registry", None)
+        self.actor = _agent_safe_text(actor, field="actor", max_length=256, allow_empty=False)
+        self.actor_source = _agent_safe_text(
+            actor_source,
+            field="actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        self.clock = clock
+        try:
+            from ai4s_agent.scientific_agent_permissions import (
+                TRUSTED_AUTHORIZATION_ACTOR_SOURCES,
+            )
+        except ImportError as exc:  # pragma: no cover - package invariant
+            raise FailureRecoveryDecisionInvalid(
+                "trusted authorization actor policy is unavailable"
+            ) from exc
+        if self.actor_source not in TRUSTED_AUTHORIZATION_ACTOR_SOURCES:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor requires a trusted authorization actor source"
+            )
+        for name in (
+            "read_execution_agent_snapshot",
+            "create",
+            "advance",
+        ):
+            if not callable(getattr(controller, name, None)):
+                raise FailureRecoveryDecisionInvalid(
+                    "recovery successor requires the concrete Controller authority chain"
+                )
+        if not callable(getattr(authorization_service, "approve_and_start", None)):
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor requires the concrete authorization service"
+            )
+        if not callable(getattr(proposal_store, "publish", None)) or not callable(
+            getattr(proposal_store, "read", None)
+        ):
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor requires the concrete proposal store"
+            )
+
+    @staticmethod
+    def _select_successor_tool(
+        *,
+        observation: AgentFailureObservation,
+        decision: AgentRecoveryDecision,
+        catalog: Any,
+    ) -> Any:
+        tools = list(getattr(catalog, "tools", ()))
+        selected_id = decision.selected_logical_tool_id or observation.logical_tool_id
+        matches = [
+            item
+            for item in tools
+            if getattr(item, "tool_id", "") == selected_id
+            or (
+                selected_id == observation.logical_tool_id
+                and getattr(item, "task_id", "") == observation.task_id
+            )
+        ]
+        if len(matches) != 1:
+            raise FailureRecoveryDecisionInvalid(
+                "failed task does not have one registered logical successor tool"
+            )
+        return matches[0]
+
+    @staticmethod
+    def _selected_artifacts(*, observation: Any, tool: Any, baseline_response: Any) -> list[str]:
+        available = {
+            item.artifact_id
+            for item in getattr(observation, "available_artifacts", ())
+            if getattr(item, "verification_state", "") in {"registered", "verified"}
+            and getattr(item, "content_digest", "")
+        }
+        allowed = set(getattr(tool, "input_artifact_ids", ()))
+        baseline = [
+            str(item)
+            for item in getattr(baseline_response, "selected_input_artifact_ids", ())
+            if str(item) in available and str(item) in allowed
+        ]
+        selected = list(dict.fromkeys(baseline))
+        for artifact_id in getattr(tool, "required_input_artifact_ids", ()):
+            if artifact_id in available and artifact_id not in selected:
+                selected.append(artifact_id)
+        for group in getattr(tool, "input_artifact_alternatives", ()):
+            choices = [item for item in group if item in available and item in allowed]
+            already = [item for item in choices if item in selected]
+            if not already and choices:
+                selected.append(sorted(choices)[0])
+        return sorted(set(selected))
+
+    def _current_plan_observation(self, *, baseline_publication: Any) -> Any:
+        builder = getattr(self.proposal_store, "observation_builder", None)
+        if builder is None or not callable(getattr(builder, "build", None)):
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor requires the verified current plan observation builder"
+            )
+        try:
+            return builder.build(
+                project_id=baseline_publication.proposal.project_id,
+                run_id=baseline_publication.proposal.run_id,
+                goal=baseline_publication.observation.goal_context,
+                user_constraints=list(baseline_publication.observation.explicit_constraints),
+            )
+        except Exception as exc:
+            raise FailureRecoveryStale(
+                "current plan observation could not be verified for recovery"
+            ) from exc
+
+    def _continue_successor_controller(
+        self,
+        *,
+        project_id: str,
+        target_task_id: str,
+        controller_result: Any,
+    ) -> Any:
+        """Advance only the registered adoption/local-successor steps.
+
+        ``Controller.create`` performs one transition.  A successor plan may
+        first need to adopt already-completed dependencies before reaching the
+        recovered local task.  Reuse the same bounded continuation boundary
+        as Execution Agent v2; Gates, remote actions, and unrelated tasks are
+        never auto-advanced here.
+        """
+
+        from ai4s_agent.schemas import (
+            AgentHarnessControllerAction,
+            AgentHarnessControllerAdvanceRequest,
+        )
+
+        for _ in range(16):
+            receipt = getattr(controller_result, "receipt", None)
+            if (
+                receipt is not None
+                and receipt.task_id == target_task_id
+                and bool(receipt.dispatch_occurred)
+            ):
+                return controller_result
+            inspection = getattr(controller_result, "inspection", None)
+            execution = getattr(controller_result, "execution", None)
+            if inspection is None or execution is None:
+                raise FailureRecoveryStale(
+                    "successor Controller continuation returned incomplete evidence"
+                )
+            action = inspection.next_action
+            if action is AgentHarnessControllerAction.ADOPT_COMPLETED_TASK:
+                pass
+            elif (
+                action is AgentHarnessControllerAction.EXECUTE_LOCAL_TASK
+                and inspection.current_task_id == target_task_id
+            ):
+                pass
+            else:
+                raise FailureRecoveryDecisionInvalid(
+                    "recovery successor reached a Gate, remote, or unrelated Controller action"
+                )
+            request_seed = _agent_digest(
+                {
+                    "schema_version": "agent_failure_recovery_successor_controller_continuation.v1",
+                    "controller_execution_id": execution.controller_execution_id,
+                    "controller_execution_digest": execution.execution_digest,
+                    "inspection_digest": inspection.inspection_digest,
+                    "target_task_id": target_task_id,
+                    "action": getattr(action, "value", action),
+                }
+            )
+            controller_result = self.controller.advance(
+                project_id=project_id,
+                controller_execution_id=execution.controller_execution_id,
+                request=AgentHarnessControllerAdvanceRequest(
+                    expected_controller_execution_digest=execution.execution_digest,
+                    client_request_id=(
+                        "recovery-successor-continue-"
+                        + request_seed.split(":", 1)[1][:32]
+                    ),
+                ),
+                expected_inspection_digest=inspection.inspection_digest,
+            )
+        raise FailureRecoveryDecisionInvalid(
+            "recovery successor did not reach its selected local Controller task"
+        )
+
+    def _build_successor(
+        self,
+        *,
+        observation: AgentFailureObservation,
+        decision: AgentRecoveryDecision,
+        baseline_publication: Any,
+        current_observation: Any,
+    ) -> Any:
+        from ai4s_agent.scientific_agent_plan import AgentExecutionPlanCompiler
+        from ai4s_agent.schemas import (
+            AgentExecutionPlanLLMResponse,
+            AgentLLMInvocationMetadata,
+        )
+
+        tool = self._select_successor_tool(
+            observation=observation,
+            decision=decision,
+            catalog=current_observation.tool_catalog,
+        )
+        if getattr(tool, "execution_route", "local_executor") != "local_executor":
+            raise FailureRecoveryDecisionInvalid(
+                "remote recovery successors remain an explicit authority boundary"
+            )
+        if decision.selected_logical_tool_id and decision.selected_logical_tool_id not in {
+            getattr(tool, "tool_id", ""),
+            getattr(tool, "task_id", ""),
+            observation.logical_tool_id,
+        }:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery decision does not bind the registered failed task"
+            )
+        baseline_response = baseline_publication.proposal.validated_llm_response
+        requested_tool_ids = list(baseline_response.requested_tool_ids)
+        task_options = {
+            key: dict(value) for key, value in baseline_response.task_options.items()
+        }
+        selected_tool_id = getattr(tool, "tool_id", "")
+        failed_tool_ids = {
+            observation.logical_tool_id,
+            observation.task_id,
+        }
+        for candidate in current_observation.tool_catalog.tools:
+            if getattr(candidate, "task_id", "") == observation.task_id:
+                failed_tool_ids.add(getattr(candidate, "tool_id", ""))
+        bound_failed_ids = failed_tool_ids.intersection(requested_tool_ids)
+        if not bound_failed_ids and selected_tool_id not in requested_tool_ids:
+            raise FailureRecoveryStale(
+                "baseline plan does not contain the failed logical task"
+            )
+        if decision.recovery_action is AgentRecoveryAction.TOOL_CALL:
+            if selected_tool_id not in requested_tool_ids:
+                # A logical alternative replaces the failed catalog entry in
+                # the complete baseline plan; unrelated planned tasks and
+                # their exact options remain untouched.
+                replacement = sorted(bound_failed_ids)[0]
+                requested_tool_ids[requested_tool_ids.index(replacement)] = selected_tool_id
+                task_options.pop(replacement, None)
+            elif selected_tool_id != observation.logical_tool_id:
+                # If the alternative was already present in the plan, remove
+                # the failed entry instead of scheduling both logical tasks.
+                for failed_id in sorted(bound_failed_ids):
+                    if failed_id != selected_tool_id and failed_id in requested_tool_ids:
+                        requested_tool_ids.remove(failed_id)
+                        task_options.pop(failed_id, None)
+            options = dict(
+                task_options.get(
+                    selected_tool_id,
+                    baseline_publication.proposal.effective_planner_options.get(
+                        getattr(tool, "task_id", ""), {}
+                    ),
+                )
+                or {}
+            )
+            options.update(decision.selected_arguments)
+            task_options[selected_tool_id] = options
+        # RETRY_EXACT deliberately reuses the complete immutable baseline
+        # response.  It must not silently drop unrelated tasks or substitute a
+        # different input artifact while rebuilding the successor proposal.
+        response = baseline_response.model_copy(
+            update={
+                "requested_tool_ids": requested_tool_ids,
+                "task_options": task_options,
+            }
+        )
+        invocation_id = "recovery-successor-invocation-" + _agent_digest(
+            {"failure_id": observation.failure_id, "decision_id": decision.decision_id}
+        ).split(":", 1)[1][:32]
+        client_request_id = "recovery-successor-proposal-" + _agent_digest(
+            {"failure_id": observation.failure_id, "decision_id": decision.decision_id}
+        ).split(":", 1)[1][:32]
+        invocation = AgentLLMInvocationMetadata(
+            provider="server-failure-recovery",
+            model="bounded-successor",
+            prompt_version=baseline_publication.proposal.prompt_version,
+            response_id=invocation_id,
+            observation_digest=current_observation.observation_digest,
+            tool_catalog_digest=current_observation.tool_catalog.catalog_digest,
+            validated_output_digest=_agent_digest(response.model_dump(mode="json")),
+        )
+        compiler = AgentExecutionPlanCompiler(
+            registry=self.registry or getattr(self.proposal_store, "registry", None),
+            resource_authority_policy_store=getattr(
+                self.proposal_store, "resource_authority_policy_store", None
+            ),
+        )
+        try:
+            successor = compiler.compile(
+                observation=current_observation,
+                response=response,
+                invocation=invocation,
+                created_at=self.clock(),
+                client_request_id=client_request_id,
+                invocation_id=invocation_id,
+                schema_version=baseline_publication.proposal.schema_version,
+                skip_satisfied_dependencies=True,
+            )
+        except Exception as exc:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor failed deterministic plan compilation"
+            ) from exc
+        request_digest = _agent_digest(
+            {
+                "schema_version": "agent_failure_recovery_successor_proposal.v1",
+                "failure_id": observation.failure_id,
+                "failure_digest": observation.failure_digest,
+                "decision_id": decision.decision_id,
+                "decision_digest": decision.decision_digest,
+                "proposal_id": successor.proposal_id,
+                "proposal_digest": successor.proposal_digest,
+            }
+        )
+        try:
+            publication = self.proposal_store.publish(
+                observation=current_observation,
+                catalog=current_observation.tool_catalog,
+                llm_response=response,
+                proposal=successor,
+                request_digest=request_digest,
+            )
+        except Exception as exc:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor proposal publication failed exact verification"
+            ) from exc
+        if publication.proposal.model_dump(mode="json") != successor.model_dump(mode="json"):
+            raise FailureRecoveryConflict(
+                "recovery successor proposal publication changed its immutable bytes"
+            )
+        return publication
+
+    def apply_recovery_successor(
+        self,
+        *,
+        observation: AgentFailureObservation,
+        decision: AgentRecoveryDecision,
+        controller: Any | None = None,
+        registry: Any | None = None,
+        grant: AutonomyGrant | None = None,
+    ) -> Mapping[str, Any]:
+        del registry
+        active_controller = controller if controller is not None else self.controller
+        if active_controller is not self.controller:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor Controller binding is not the trusted instance"
+            )
+        if grant is not None:
+            expected_grant_digest = _agent_digest(grant.scope_material())
+            if grant.grant_digest != expected_grant_digest:
+                raise FailureRecoveryStale("recovery successor grant is stale or forged")
+        try:
+            snapshot = active_controller.read_execution_agent_snapshot(
+                project_id=observation.project_id,
+                controller_execution_id=observation.controller_execution_id,
+                expected_controller_execution_digest=observation.controller_execution_digest,
+            )
+        except Exception as exc:
+            raise FailureRecoveryStale(
+                "current Controller snapshot could not be verified for recovery"
+            ) from exc
+        execution = getattr(snapshot, "execution", None)
+        inspection = getattr(snapshot, "inspection", None)
+        if execution is None or inspection is None:
+            raise FailureRecoveryStale("current Controller snapshot is incomplete")
+        if (
+            execution.project_id != observation.project_id
+            or execution.run_id != observation.run_id
+            or execution.controller_execution_id != observation.controller_execution_id
+            or execution.execution_digest != observation.controller_execution_digest
+            or inspection.inspection_digest != observation.inspection_digest
+        ):
+            raise FailureRecoveryStale("recovery successor snapshot binding is stale")
+        if str(getattr(inspection.status, "value", inspection.status)) not in {
+            "failed",
+            "recovery_required",
+        }:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor requires the exact current failed Controller state"
+            )
+        try:
+            baseline_publication = self.proposal_store.read(
+                project_id=observation.project_id,
+                proposal_id=execution.proposal_id,
+                verify_current=False,
+            )
+            baseline_authorization = self.authorization_service.verify_authorization(
+                project_id=observation.project_id,
+                authorization_id=execution.authorization_id,
+                verify_current=False,
+            )
+            baseline_start_intent = self.authorization_service.verify_start_intent(
+                project_id=observation.project_id,
+                start_intent_id=execution.start_intent_id,
+                verify_current=False,
+            )
+        except Exception as exc:
+            raise FailureRecoveryStale(
+                "baseline Permission/Authorization artifacts could not be verified"
+            ) from exc
+        if (
+            baseline_publication.proposal.project_id != observation.project_id
+            or baseline_publication.proposal.run_id != observation.run_id
+            or baseline_publication.proposal.proposal_id != execution.proposal_id
+            or baseline_publication.proposal.proposal_digest != execution.proposal_digest
+            or baseline_publication.proposal.observation_digest
+            != execution.observation_digest
+            or baseline_publication.proposal.tool_catalog_digest
+            != execution.tool_catalog_digest
+            or baseline_authorization.proposal_id != baseline_publication.proposal.proposal_id
+            or baseline_authorization.proposal_digest != baseline_publication.proposal.proposal_digest
+            or baseline_authorization.authorization_id != execution.authorization_id
+            or baseline_authorization.authorization_digest != execution.authorization_digest
+            or baseline_authorization.permission_decision_id
+            != execution.permission_decision_id
+            or baseline_authorization.permission_decision_digest
+            != execution.permission_decision_digest
+            or baseline_start_intent.start_intent_id != execution.start_intent_id
+            or baseline_start_intent.start_intent_digest != execution.start_intent_digest
+            or baseline_start_intent.proposal_id
+            != baseline_publication.proposal.proposal_id
+            or baseline_start_intent.proposal_digest
+            != baseline_publication.proposal.proposal_digest
+            or baseline_start_intent.authorization_id
+            != baseline_authorization.authorization_id
+            or baseline_start_intent.authorization_digest
+            != baseline_authorization.authorization_digest
+            or baseline_start_intent.permission_decision_id
+            != baseline_authorization.permission_decision_id
+            or baseline_start_intent.permission_decision_digest
+            != baseline_authorization.permission_decision_digest
+        ):
+            raise FailureRecoveryStale("baseline authority chain binding is stale")
+        try:
+            from ai4s_agent.scientific_agent_permissions import (
+                TRUSTED_AUTHORIZATION_ACTOR_SOURCES,
+            )
+        except ImportError as exc:  # pragma: no cover - package invariant
+            raise FailureRecoveryDecisionInvalid(
+                "trusted authorization actor policy is unavailable"
+            ) from exc
+        baseline_actor = _agent_safe_text(
+            baseline_authorization.actor,
+            field="baseline_authorization_actor",
+            max_length=256,
+            allow_empty=False,
+        )
+        baseline_actor_source = _agent_safe_text(
+            baseline_authorization.actor_source,
+            field="baseline_authorization_actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        if baseline_actor_source not in TRUSTED_AUTHORIZATION_ACTOR_SOURCES:
+            raise FailureRecoveryDecisionInvalid(
+                "baseline authority chain does not have a trusted actor source"
+            )
+        current_observation = self._current_plan_observation(
+            baseline_publication=baseline_publication
+        )
+        successor_publication = self._build_successor(
+            observation=observation,
+            decision=decision,
+            baseline_publication=baseline_publication,
+            current_observation=current_observation,
+        )
+        from ai4s_agent.schemas import (
+            AgentAuthorizationMode,
+            AgentHarnessControllerStartRequest,
+            AgentPlanAuthorizationRequest,
+        )
+
+        preauthorized = [
+            gate_id
+            for gate_id in baseline_authorization.preauthorized_operational_gates
+            if gate_id in successor_publication.proposal.required_gates
+        ]
+        authorization_request_id = "recovery-successor-authorization-" + _agent_digest(
+            {
+                "failure_id": observation.failure_id,
+                "decision_id": decision.decision_id,
+                "proposal_id": successor_publication.proposal.proposal_id,
+                "proposal_digest": successor_publication.proposal.proposal_digest,
+            }
+        ).split(":", 1)[1][:32]
+        try:
+            mode = baseline_authorization.authorization_mode
+            if not isinstance(mode, AgentAuthorizationMode):
+                mode = AgentAuthorizationMode(str(mode))
+            chain = self.authorization_service.approve_and_start(
+                project_id=observation.project_id,
+                proposal_id=successor_publication.proposal.proposal_id,
+                request=AgentPlanAuthorizationRequest(
+                    expected_proposal_digest=successor_publication.proposal.proposal_digest,
+                    authorization_mode=mode,
+                    requested_preauthorized_gate_ids=preauthorized,
+                    confirmed=True,
+                    client_request_id=authorization_request_id,
+                    note="server-bounded failure recovery successor",
+                ),
+                actor=baseline_actor,
+                actor_source=baseline_actor_source,
+            )
+            verified_authorization = self.authorization_service.verify_authorization(
+                project_id=observation.project_id,
+                authorization_id=chain.authorization.authorization_id,
+                verify_current=False,
+            )
+            verified_start_intent = self.authorization_service.verify_start_intent(
+                project_id=observation.project_id,
+                start_intent_id=chain.start_intent.start_intent_id,
+                verify_current=False,
+            )
+        except Exception as exc:
+            raise FailureRecoveryDecisionInvalid(
+                "recovery successor Permission/Authorization/StartIntent chain was denied"
+            ) from exc
+        if (
+            verified_authorization.authorization_id != chain.authorization.authorization_id
+            or verified_authorization.authorization_digest != chain.authorization.authorization_digest
+            or verified_start_intent.start_intent_id != chain.start_intent.start_intent_id
+            or verified_start_intent.start_intent_digest != chain.start_intent.start_intent_digest
+            or chain.start_decision.decision_id
+            != verified_start_intent.permission_decision_id
+            or chain.start_decision.decision_digest
+            != verified_start_intent.permission_decision_digest
+            or verified_start_intent.authorization_id != verified_authorization.authorization_id
+            or verified_start_intent.authorization_digest != verified_authorization.authorization_digest
+        ):
+            raise FailureRecoveryConflict("successor authority artifacts failed exact binding")
+        controller_request_id = "recovery-successor-controller-" + _agent_digest(
+            {
+                "start_intent_id": verified_start_intent.start_intent_id,
+                "start_intent_digest": verified_start_intent.start_intent_digest,
+            }
+        ).split(":", 1)[1][:32]
+        try:
+            controller_result = active_controller.create(
+                project_id=observation.project_id,
+                start_intent_id=verified_start_intent.start_intent_id,
+                request=AgentHarnessControllerStartRequest(
+                    expected_start_intent_digest=verified_start_intent.start_intent_digest,
+                    client_request_id=controller_request_id,
+                ),
+                actor=baseline_actor,
+                actor_source=baseline_actor_source,
+            )
+            controller_result = self._continue_successor_controller(
+                project_id=observation.project_id,
+                target_task_id=self._select_successor_tool(
+                    observation=observation,
+                    decision=decision,
+                    catalog=current_observation.tool_catalog,
+                ).task_id,
+                controller_result=controller_result,
+            )
+        except Exception as exc:
+            raise FailureRecoveryEffectUnknown(
+                "recovery successor Controller outcome is unknown"
+            ) from exc
+        successor_execution = getattr(controller_result, "execution", None)
+        successor_receipt = getattr(controller_result, "receipt", None)
+        if successor_execution is None:
+            raise FailureRecoveryEffectUnknown(
+                "recovery successor Controller did not return execution evidence"
+            )
+        if (
+            successor_execution.proposal_id != successor_publication.proposal.proposal_id
+            or successor_execution.proposal_digest
+            != successor_publication.proposal.proposal_digest
+            or successor_execution.authorization_id != verified_authorization.authorization_id
+            or successor_execution.authorization_digest
+            != verified_authorization.authorization_digest
+            or successor_execution.start_intent_id != verified_start_intent.start_intent_id
+            or successor_execution.start_intent_digest
+            != verified_start_intent.start_intent_digest
+            or successor_execution.permission_decision_id
+            != chain.start_decision.decision_id
+            or successor_execution.permission_decision_digest
+            != chain.start_decision.decision_digest
+        ):
+            raise FailureRecoveryConflict("successor Controller execution is not authority-bound")
+        details: dict[str, Any] = {
+            "authority_chain_verified": True,
+            "baseline_authorization_id": baseline_authorization.authorization_id,
+            "baseline_authorization_digest": baseline_authorization.authorization_digest,
+            "successor_proposal_id": successor_publication.proposal.proposal_id,
+            "successor_proposal_digest": successor_publication.proposal.proposal_digest,
+            "successor_permission_decision_id": chain.start_decision.decision_id,
+            "successor_permission_decision_digest": chain.start_decision.decision_digest,
+            "successor_authorization_id": verified_authorization.authorization_id,
+            "successor_authorization_digest": verified_authorization.authorization_digest,
+            "successor_start_intent_id": verified_start_intent.start_intent_id,
+            "successor_start_intent_digest": verified_start_intent.start_intent_digest,
+            "successor_controller_execution_id": successor_execution.controller_execution_id,
+            "successor_controller_execution_digest": successor_execution.execution_digest,
+            "effect_started": bool(successor_receipt is not None),
+            "outcome": (
+                AgentRecoveryOutcome.COMMITTED.value
+                if successor_receipt is not None
+                else AgentRecoveryOutcome.REQUIRE_HUMAN.value
+            ),
+        }
+        if successor_receipt is not None:
+            details.update(
+                {
+                    "effect_receipt_id": successor_receipt.receipt_id,
+                    "effect_receipt_digest": successor_receipt.receipt_digest,
+                }
+            )
+        return details
+
+
+# Public aliases used by integrations that describe this component as the
+# trusted/bounded applicator rather than the concrete Scientific Agent name.
+TrustedRecoverySuccessorApplicator = ScientificAgentRecoverySuccessorApplicator
+
+
 # Backward/forward-friendly name used by callers and hidden contract tests.
 ScientificAgentFailureRecoveryStore = FailureRecoveryStore
 
@@ -723,8 +1582,8 @@ class ScientificAgentFailureRecoveryService:
         provider: LLMProvider | None = None,
         grant: AutonomyGrant | Mapping[str, Any] | None = None,
         replanner: Any | None = None,
-        successor_applicator: Callable[..., Any] | None = None,
-        apply_successor: Callable[..., Any] | None = None,
+        successor_applicator: RecoverySuccessorApplicator | None = None,
+        apply_successor: RecoverySuccessorApplicator | None = None,
         effect_reconciler: Callable[..., Any] | None = None,
         tool_roster_provider: Callable[..., Sequence[str]] | None = None,
         allowed_recovery_tools: Sequence[str] | None = None,
@@ -747,6 +1606,12 @@ class ScientificAgentFailureRecoveryService:
         self.grant = self._coerce_grant(grant) if grant is not None and not isinstance(grant, AutonomyGrant) else grant
         self.replanner = replanner
         self.successor_applicator = successor_applicator or apply_successor
+        if self.successor_applicator is not None and not isinstance(
+            self.successor_applicator, RecoverySuccessorApplicator
+        ):
+            raise FailureRecoveryDecisionInvalid(
+                "automatic recovery requires the concrete trusted successor applicator"
+            )
         self.effect_reconciler = effect_reconciler
         self.tool_roster_provider = tool_roster_provider
         self.allowed_recovery_tools = tuple(allowed_recovery_tools or ())
@@ -826,9 +1691,8 @@ class ScientificAgentFailureRecoveryService:
         task_id: str,
         current_arguments: Mapping[str, Any],
         grant: AutonomyGrant | Mapping[str, Any] | None,
-        max_retries: int = 0,
-        max_replans: int = 0,
     ) -> AutonomyGrant:
+        del task_id, current_arguments
         if grant is None:
             grant = self.grant
         if grant is not None and not isinstance(grant, AutonomyGrant):
@@ -841,19 +1705,26 @@ class ScientificAgentFailureRecoveryService:
             expected = _agent_digest(grant.scope_material())
             if grant.grant_digest != expected:
                 raise FailureRecoveryStale("autonomy grant is stale or forged")
+            try:
+                now = datetime.now(timezone.utc)
+                valid_until = datetime.fromisoformat(
+                    grant.valid_until.replace("Z", "+00:00")
+                )
+                valid_from = (
+                    datetime.fromisoformat(grant.valid_from.replace("Z", "+00:00"))
+                    if grant.valid_from
+                    else None
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise FailureRecoveryStale("autonomy grant validity is invalid") from exc
+            if (valid_from is not None and now < valid_from) or now > valid_until:
+                raise FailureRecoveryStale("autonomy grant is not currently valid")
             return grant
-        bounds: dict[str, AutonomyParameterBound] = {
-            f"{task_id}.{key}": AutonomyParameterBound(allowed_values=[value])
-            for key, value in current_arguments.items()
-        }
-        return AutonomyGrant(
-            project_id=project_id,
-            allowed_tasks=[task_id],
-            allowed_effect_classes=[],
-            parameter_bounds=bounds,
-            max_retries=max(0, int(max_retries)),
-            max_replans=max(0, int(max_replans)),
-            valid_until="9999-12-31T23:59:59Z",
+        # Recovery is a consumer of existing authority.  In particular, a
+        # caller-supplied retry/replan count must never be promoted into a new
+        # AutonomyGrant (the previous fallback did exactly that).
+        raise FailureRecoveryObservationInvalid(
+            "a current server-issued AutonomyGrant is required for recovery"
         )
 
     def _server_tool_roster(self, *, observation: AgentFailureObservation, override: Sequence[str] | None) -> list[str]:
@@ -922,8 +1793,52 @@ class ScientificAgentFailureRecoveryService:
             and item.autonomy_grant_id == grant.grant_id
             and item.autonomy_grant_digest == grant.grant_digest
         ]
-        retry_ids = sorted({item.receipt_id for item in relevant if item.recovery_action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL} and item.retry_ordinal > 0})
-        replan_ids = sorted({item.receipt_id for item in relevant if item.recovery_action is AgentRecoveryAction.REPLAN and item.replan_ordinal > 0})
+        retry_ids = sorted(
+            {
+                item.receipt_id
+                for item in relevant
+                if item.recovery_action
+                in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL}
+                and item.retry_ordinal > 0
+            }
+        )
+        replan_ids = sorted(
+            {
+                item.receipt_id
+                for item in relevant
+                if item.recovery_action is AgentRecoveryAction.REPLAN
+                and item.replan_ordinal > 0
+            }
+        )
+        # A reservation is counted until the matching immutable receipt is
+        # visible.  This closes the crash window between effect dispatch and
+        # receipt publication without ever counting a committed attempt twice.
+        reservations = self.store.list_budget_reservations(
+            project_id=project_id,
+            session_id=session_id,
+            autonomy_grant_id=grant.grant_id,
+            autonomy_grant_digest=grant.grant_digest,
+            authority_epoch=authority_epoch,
+        )
+        committed_decisions = {
+            (item.failure_digest, item.recovery_decision_id)
+            for item in relevant
+        }
+        retry_reservations = {
+            str(item["reservation_id"])
+            for item in reservations
+            if item.get("recovery_action")
+            in {AgentRecoveryAction.RETRY_EXACT.value, AgentRecoveryAction.TOOL_CALL.value}
+            and (item.get("failure_digest"), item.get("decision_id"))
+            not in committed_decisions
+        }
+        replan_reservations = {
+            str(item["reservation_id"])
+            for item in reservations
+            if item.get("recovery_action") == AgentRecoveryAction.REPLAN.value
+            and (item.get("failure_digest"), item.get("decision_id"))
+            not in committed_decisions
+        }
         receipt_ids = sorted({item.receipt_id for item in relevant})
         return AgentRecoveryBudgetEvidence(
             project_id=project_id,
@@ -931,10 +1846,14 @@ class ScientificAgentFailureRecoveryService:
             autonomy_grant_id=grant.grant_id,
             autonomy_grant_digest=grant.grant_digest,
             authority_epoch=authority_epoch,
-            retries_used=len(retry_ids),
-            replans_used=len(replan_ids),
-            retries_remaining=max(0, grant.max_retries - len(retry_ids)),
-            replans_remaining=max(0, grant.max_replans - len(replan_ids)),
+            retries_used=len(set(retry_ids).union(retry_reservations)),
+            replans_used=len(set(replan_ids).union(replan_reservations)),
+            retries_remaining=max(
+                0, grant.max_retries - len(set(retry_ids).union(retry_reservations))
+            ),
+            replans_remaining=max(
+                0, grant.max_replans - len(set(replan_ids).union(replan_reservations))
+            ),
             receipt_ids=receipt_ids,
             created_at=self.clock(),
         )
@@ -1052,11 +1971,20 @@ class ScientificAgentFailureRecoveryService:
         max_retries: int = 0,
         max_replans: int = 0,
     ) -> AgentFailureObservation:
+        if max_retries or max_replans:
+            raise FailureRecoveryObservationInvalid(
+                "retry/replan budgets must come from the current AutonomyGrant"
+            )
         source = evidence if evidence is not None else failure_evidence
         if source is None:
             raise FailureRecoveryObservationInvalid("typed failure evidence is required")
         typed = _server_failure_evidence(source, task_id=task_id, logical_tool_id=logical_tool_id)
-        resolved_grant = self._resolve_grant(project_id=project_id, task_id=task_id or typed.task_id or logical_tool_id, current_arguments=dict(current_arguments or arguments or {}), grant=grant, max_retries=max_retries, max_replans=max_replans)
+        resolved_grant = self._resolve_grant(
+            project_id=project_id,
+            task_id=task_id or typed.task_id or logical_tool_id,
+            current_arguments=dict(current_arguments or arguments or {}),
+            grant=grant,
+        )
         session = self._resolve_session(
             project_id=project_id,
             run_id=run_id,
@@ -1095,12 +2023,27 @@ class ScientificAgentFailureRecoveryService:
     def build_failure_observation(self, **kwargs: Any) -> AgentFailureObservation:
         return self.observe_failure(**kwargs)
 
-    def _verify_current_state(self, observation: AgentFailureObservation) -> None:
-        if self.controller is None:
-            return
-        reader = getattr(self.controller, "read_execution_agent_snapshot", None)
-        if not callable(reader):
-            return
+    def _has_current_state_verifier(self) -> bool:
+        return bool(
+            self.controller is not None
+            and callable(
+                getattr(self.controller, "read_execution_agent_snapshot", None)
+            )
+        )
+
+    def _verify_current_state(
+        self,
+        observation: AgentFailureObservation,
+        *,
+        required: bool = True,
+    ) -> bool:
+        if not self._has_current_state_verifier():
+            if required:
+                raise FailureRecoveryDecisionInvalid(
+                    "automatic recovery requires a current Controller snapshot verifier"
+                )
+            return False
+        reader = getattr(self.controller, "read_execution_agent_snapshot")
         try:
             snapshot = reader(
                 project_id=observation.project_id,
@@ -1114,8 +2057,22 @@ class ScientificAgentFailureRecoveryService:
         inspection = getattr(snapshot, "inspection", None)
         execution_digest = getattr(execution, "execution_digest", "")
         inspection_digest = getattr(inspection, "inspection_digest", "")
-        if execution_digest != observation.controller_execution_digest or inspection_digest != observation.inspection_digest:
+        if (
+            getattr(execution, "project_id", None) != observation.project_id
+            or getattr(execution, "run_id", None) != observation.run_id
+            or getattr(execution, "controller_execution_id", None)
+            != observation.controller_execution_id
+            or execution_digest != observation.controller_execution_digest
+            or inspection_digest != observation.inspection_digest
+        ):
             raise FailureRecoveryStale("failure observation is stale against current Controller state")
+        if required:
+            status = getattr(inspection, "status", "")
+            status = getattr(status, "value", status)
+            if str(status) not in {"failed", "recovery_required"}:
+                raise FailureRecoveryDecisionInvalid(
+                    "automatic recovery requires the current Controller FAILED state"
+                )
         next_action = getattr(getattr(inspection, "next_action", None), "value", getattr(inspection, "next_action", ""))
         if str(next_action) in {
             "prepare_local_gate",
@@ -1128,6 +2085,7 @@ class ScientificAgentFailureRecoveryService:
             "recover_remote_task",
         }:
             raise FailureRecoveryDecisionInvalid("Controller is at a Gate or remote authority boundary")
+        return True
 
     def _verify_tool_catalog(self, observation: AgentFailureObservation) -> None:
         """Rebind the observation to the current server-owned tool catalog."""
@@ -1235,7 +2193,11 @@ class ScientificAgentFailureRecoveryService:
             return AgentRecoveryLLMResponse(action=AgentRecoveryAction.STOP, reason="No bounded recovery action is registered for this failure.")
         if observation.failure_class in {AgentFailureClass.AUTHORITY_EXPANSION_REQUIRED, AgentFailureClass.SEMANTIC_REVIEW_REQUIRED}:
             return AgentRecoveryLLMResponse(action=AgentRecoveryAction.ASK_USER, question="Fresh authority or scientific review is required before recovery.")
-        if observation.failure_class is AgentFailureClass.TRANSIENT and budget.retries_remaining <= 0:
+        if observation.failure_class in {
+            AgentFailureClass.TRANSIENT,
+            AgentFailureClass.PARAMETER_RECOVERABLE,
+            AgentFailureClass.ALTERNATIVE_TOOL_AVAILABLE,
+        } and budget.retries_remaining <= 0:
             return AgentRecoveryLLMResponse(action=AgentRecoveryAction.ASK_USER, question="The retry budget is exhausted.")
         if observation.failure_class is AgentFailureClass.PARAMETER_RECOVERABLE and self.provider is None:
             return AgentRecoveryLLMResponse(action=AgentRecoveryAction.ASK_USER, question="Choose reviewed bounded parameters before retrying.")
@@ -1412,16 +2374,36 @@ class ScientificAgentFailureRecoveryService:
             authority_relation=relation,
             semantic_boundary=boundary,
             auto_apply=auto_apply,
-            retry_ordinal=observation.retry_count_used + 1 if action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL} else 0,
-            replan_ordinal=observation.replan_count_used + 1 if action is AgentRecoveryAction.REPLAN else 0,
+            # The aggregate projection is read while the aggregate lock is
+            # held by ``recover_failure``.  Ordinals must therefore come from
+            # that current reservation view, never from the possibly stale
+            # observation snapshot supplied by a caller.
+            retry_ordinal=budget.retries_used + 1
+            if action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL}
+            else 0,
+            replan_ordinal=budget.replans_used + 1
+            if action is AgentRecoveryAction.REPLAN
+            else 0,
             provider_call_count=provider_call_count,
             reason_codes=_safe_reason_list(reasons or ["RECOVERY_DECISION_DERIVED"]),
             outcome=AgentRecoveryOutcome.COMMITTED if auto_apply else AgentRecoveryOutcome.REQUIRE_HUMAN if action is AgentRecoveryAction.ASK_USER else AgentRecoveryOutcome.STOPPED,
             created_at=self.clock(),
         )
 
-    def select_recovery_decision(self, *, observation: AgentFailureObservation, grant: AutonomyGrant | None = None, budget: AgentRecoveryBudgetEvidence | None = None, failure_dir: Path | None = None) -> tuple[AgentRecoveryDecision, int]:
-        resolved_grant = grant or self._resolve_grant(project_id=observation.project_id, task_id=observation.task_id, current_arguments=observation.current_arguments, grant=None)
+    def select_recovery_decision(
+        self,
+        *,
+        observation: AgentFailureObservation,
+        grant: AutonomyGrant | Mapping[str, Any] | None = None,
+        budget: AgentRecoveryBudgetEvidence | None = None,
+        failure_dir: Path | None = None,
+    ) -> tuple[AgentRecoveryDecision, int]:
+        resolved_grant = self._resolve_grant(
+            project_id=observation.project_id,
+            task_id=observation.task_id,
+            current_arguments=observation.current_arguments,
+            grant=grant,
+        )
         session = observation.session_id or self._resolve_session(
             project_id=observation.project_id,
             run_id=observation.run_id,
@@ -1439,10 +2421,32 @@ class ScientificAgentFailureRecoveryService:
         if deterministic is None:
             if failure_dir is None:
                 raise FailureRecoveryDecisionInvalid("provider-backed decisions require a durable failure session")
-                response, provider_calls = self._provider_response(observation=observation, failure_dir=failure_dir, budget=current_budget)
+            # A provider response cannot be treated as an automatic recovery
+            # proposal until the exact current Controller snapshot has been
+            # verified.  Fail before crossing the provider boundary when that
+            # verifier is unavailable.
+            if not self._has_current_state_verifier():
+                raise FailureRecoveryDecisionInvalid(
+                    "automatic recovery requires a current Controller snapshot verifier"
+                )
+            self._verify_current_state(observation)
+            response, provider_calls = self._provider_response(
+                observation=observation,
+                failure_dir=failure_dir,
+                budget=current_budget,
+            )
         else:
             response = deterministic
-        return self._decision(observation=observation, response=response, budget=current_budget, grant=resolved_grant, provider_call_count=provider_calls), provider_calls
+        decision = self._decision(
+            observation=observation,
+            response=response,
+            budget=current_budget,
+            grant=resolved_grant,
+            provider_call_count=provider_calls,
+        )
+        if decision.auto_apply:
+            self._verify_current_state(observation)
+        return decision, provider_calls
 
     def decide(self, **kwargs: Any) -> AgentRecoveryDecision:
         decision, _ = self.select_recovery_decision(**kwargs)
@@ -1453,9 +2457,50 @@ class ScientificAgentFailureRecoveryService:
         if value is None:
             return {}
         if isinstance(value, Mapping):
-            return {str(key): item for key, item in value.items() if str(key) in {"successor_proposal_id", "successor_proposal_digest", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id", "effect_receipt_digest", "effect_started", "outcome"}}
+            return {
+                str(key): item
+                for key, item in value.items()
+                if str(key)
+                in {
+                    "authority_chain_verified",
+                    "baseline_authorization_id",
+                    "baseline_authorization_digest",
+                    "successor_proposal_id",
+                    "successor_proposal_digest",
+                    "successor_permission_decision_id",
+                    "successor_permission_decision_digest",
+                    "successor_authorization_id",
+                    "successor_authorization_digest",
+                    "successor_start_intent_id",
+                    "successor_start_intent_digest",
+                    "successor_controller_execution_id",
+                    "successor_controller_execution_digest",
+                    "effect_receipt_id",
+                    "effect_receipt_digest",
+                    "effect_started",
+                    "outcome",
+                }
+            }
         result: dict[str, Any] = {}
-        for key in ("successor_proposal_id", "successor_proposal_digest", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id", "effect_receipt_digest", "effect_started", "outcome"):
+        for key in (
+            "authority_chain_verified",
+            "baseline_authorization_id",
+            "baseline_authorization_digest",
+            "successor_proposal_id",
+            "successor_proposal_digest",
+            "successor_permission_decision_id",
+            "successor_permission_decision_digest",
+            "successor_authorization_id",
+            "successor_authorization_digest",
+            "successor_start_intent_id",
+            "successor_start_intent_digest",
+            "successor_controller_execution_id",
+            "successor_controller_execution_digest",
+            "effect_receipt_id",
+            "effect_receipt_digest",
+            "effect_started",
+            "outcome",
+        ):
             value_attr = getattr(value, key, None)
             if value_attr not in (None, ""):
                 result[key] = value_attr.value if isinstance(value_attr, AgentRecoveryOutcome) else value_attr
@@ -1464,11 +2509,68 @@ class ScientificAgentFailureRecoveryService:
             result.setdefault("successor_controller_execution_id", execution.controller_execution_id)
         return result
 
-    def _apply(self, *, observation: AgentFailureObservation, decision: AgentRecoveryDecision, failure_dir: Path) -> dict[str, Any]:
+    @staticmethod
+    def _require_successor_chain_details(details: Mapping[str, Any]) -> dict[str, Any]:
+        """Require exact provenance returned by the trusted applicator."""
+
+        required = (
+            "successor_proposal_id",
+            "successor_proposal_digest",
+            "successor_permission_decision_id",
+            "successor_permission_decision_digest",
+            "successor_authorization_id",
+            "successor_authorization_digest",
+            "successor_start_intent_id",
+            "successor_start_intent_digest",
+            "successor_controller_execution_id",
+            "successor_controller_execution_digest",
+        )
+        if details.get("authority_chain_verified") is not True:
+            raise FailureRecoveryDecisionInvalid(
+                "automatic successor did not prove the Permission/Authorization/StartIntent/Controller chain"
+            )
+        if any(not details.get(key) for key in required):
+            raise FailureRecoveryDecisionInvalid(
+                "automatic successor authority provenance is incomplete"
+            )
+        # Revalidate all returned identities/digests at the control-plane
+        # boundary.  They are evidence, never executable input.
+        for key in (
+            "successor_proposal_id",
+            "successor_permission_decision_id",
+            "successor_authorization_id",
+            "successor_start_intent_id",
+            "successor_controller_execution_id",
+        ):
+            _agent_identifier(str(details[key]), field=key)
+        for key in (
+            "successor_proposal_digest",
+            "successor_permission_decision_digest",
+            "successor_authorization_digest",
+            "successor_start_intent_digest",
+            "successor_controller_execution_digest",
+        ):
+            _agent_digest_value(str(details[key]), field=key)
+        return dict(details)
+
+    def _apply(
+        self,
+        *,
+        observation: AgentFailureObservation,
+        decision: AgentRecoveryDecision,
+        failure_dir: Path,
+        grant: AutonomyGrant,
+    ) -> dict[str, Any]:
         existing_effect = self.store.read_checkpoint(failure_dir=failure_dir, filename="effect_result.json")
         effect_started = self.store.read_checkpoint(failure_dir=failure_dir, filename="effect_started.json")
         if existing_effect is not None:
-            return dict(existing_effect.get("details") or {})
+            details = dict(existing_effect.get("details") or {})
+            if decision.recovery_action in {
+                AgentRecoveryAction.RETRY_EXACT,
+                AgentRecoveryAction.TOOL_CALL,
+            }:
+                return self._require_successor_chain_details(details)
+            return details
         if effect_started is not None:
             # A prior process may have committed the Controller/Replanner
             # effect and crashed before publishing our recovery receipt.  Only
@@ -1483,6 +2585,11 @@ class ScientificAgentFailureRecoveryService:
             details = self._result_details(reconciled)
             if not details:
                 raise FailureRecoveryEffectUnknown("recovery effect could not be reconciled")
+            if decision.recovery_action in {
+                AgentRecoveryAction.RETRY_EXACT,
+                AgentRecoveryAction.TOOL_CALL,
+            }:
+                details = self._require_successor_chain_details(details)
             self.store.write_checkpoint(failure_dir=failure_dir, filename="effect_result.json", status="EFFECT_RECONCILED", values={"schema_version": FAILURE_RECOVERY_EFFECT_CHECKPOINT_VERSION, "details": details})
             return details
         if decision.recovery_action is AgentRecoveryAction.REPLAN:
@@ -1510,12 +2617,24 @@ class ScientificAgentFailureRecoveryService:
             self._fault("after_effect")
             return details
         if decision.recovery_action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL}:
-            if self.successor_applicator is None:
-                raise FailureRecoveryDecisionInvalid("recovery successor must be applied through the existing authority chain")
+            if not isinstance(self.successor_applicator, RecoverySuccessorApplicator):
+                raise FailureRecoveryDecisionInvalid(
+                    "automatic recovery requires the concrete trusted successor applicator"
+                )
+            if self.successor_applicator.recovery_authority_chain_verified is not True:
+                raise FailureRecoveryDecisionInvalid(
+                    "automatic recovery successor authority chain is not verified"
+                )
             self.store.write_checkpoint(failure_dir=failure_dir, filename="effect_started.json", status="SUCCESSOR_REQUEST_STARTED", values={"schema_version": FAILURE_RECOVERY_EFFECT_CHECKPOINT_VERSION, "decision_id": decision.decision_id, "operation": "permission_authorization_start_controller"})
             self._fault("after_effect_started")
             try:
-                result = self.successor_applicator(observation=observation, decision=decision, controller=self.controller, registry=self.registry)
+                result = self.successor_applicator.apply_recovery_successor(
+                    observation=observation,
+                    decision=decision,
+                    controller=self.controller,
+                    registry=self.registry,
+                    grant=grant,
+                )
             except Exception as exc:
                 if self.effect_reconciler is not None:
                     try:
@@ -1527,6 +2646,7 @@ class ScientificAgentFailureRecoveryService:
                         pass
                 raise FailureRecoveryEffectUnknown("successor application outcome is unknown") from exc
             details = self._result_details(result)
+            details = self._require_successor_chain_details(details)
             self.store.write_checkpoint(failure_dir=failure_dir, filename="effect_result.json", status="EFFECT_COMMITTED", values={"schema_version": FAILURE_RECOVERY_EFFECT_CHECKPOINT_VERSION, "details": details})
             self._fault("after_effect")
             return details
@@ -1582,9 +2702,25 @@ class ScientificAgentFailureRecoveryService:
             authority_epoch=authority_epoch,
             successor_proposal_id=str(details.get("successor_proposal_id") or ""),
             successor_proposal_digest=str(details.get("successor_proposal_digest") or ""),
+            authority_chain_verified=bool(details.get("authority_chain_verified", False)),
+            successor_permission_decision_id=str(
+                details.get("successor_permission_decision_id") or ""
+            ),
+            successor_permission_decision_digest=str(
+                details.get("successor_permission_decision_digest") or ""
+            ),
             successor_authorization_id=str(details.get("successor_authorization_id") or ""),
+            successor_authorization_digest=str(
+                details.get("successor_authorization_digest") or ""
+            ),
             successor_start_intent_id=str(details.get("successor_start_intent_id") or ""),
+            successor_start_intent_digest=str(
+                details.get("successor_start_intent_digest") or ""
+            ),
             successor_controller_execution_id=str(details.get("successor_controller_execution_id") or ""),
+            successor_controller_execution_digest=str(
+                details.get("successor_controller_execution_digest") or ""
+            ),
             effect_started=effect_started,
             effect_receipt_id=effect_receipt_id,
             effect_receipt_digest=effect_receipt_digest,
@@ -1610,9 +2746,12 @@ class ScientificAgentFailureRecoveryService:
             obs = raw_observation if isinstance(raw_observation, AgentFailureObservation) else AgentFailureObservation.model_validate(raw_observation)
         except (ValidationError, ValueError) as exc:
             raise FailureRecoveryObservationInvalid("failure observation failed strict validation") from exc
-        self._verify_current_state(obs)
-        self._verify_tool_catalog(obs)
         resolved_grant = self._resolve_grant(project_id=obs.project_id, task_id=obs.task_id, current_arguments=obs.current_arguments, grant=grant)
+        # A missing verifier is tolerated only long enough to resolve a
+        # deterministic ASK_USER/STOP boundary.  Any automatic action is
+        # rejected below before a provider/effect boundary is crossed.
+        self._verify_current_state(obs, required=False)
+        self._verify_tool_catalog(obs)
         expected_session = obs.session_id or self._resolve_session(
             project_id=obs.project_id,
             run_id=obs.run_id,
@@ -1637,59 +2776,132 @@ class ScientificAgentFailureRecoveryService:
             raise FailureRecoveryStale("recovery autonomy authority is stale")
         request_id = _safe_scope_id(client_request_id or f"recover-{obs.failure_id}", field="client_request_id")
         request_digest = _agent_digest({"schema_version": "agent_failure_recovery_request.v1", "failure_id": obs.failure_id, "failure_digest": obs.failure_digest, "client_request_id": request_id, "session_id": session, "grant_digest": resolved_grant.grant_digest, "authority_epoch": epoch})
-        with self.store.failure_session(project_id=obs.project_id, failure_id=obs.failure_id) as failure_dir:
-            try:
-                persisted_observation = self.store.read_observation(project_id=obs.project_id, failure_id=obs.failure_id)
-            except FileNotFoundError as exc:
-                raise FailureRecoveryStale("recovery requires a server-published failure observation") from exc
-            if persisted_observation.model_dump(mode="json") != obs.model_dump(mode="json"):
-                raise FailureRecoveryConflict("supplied failure observation is not the immutable server observation")
-            if obs.policy_version != FAILURE_RECOVERY_POLICY_VERSION or obs.policy_digest != FAILURE_RECOVERY_POLICY_DIGEST:
-                raise FailureRecoveryStale("failure observation policy binding is stale")
-            committed = self.store.read_checkpoint(failure_dir=failure_dir, filename="committed.json")
-            if committed is not None:
-                if committed.get("request_digest") != request_digest:
-                    raise FailureRecoveryConflict("recovery request ID is bound to different content")
-                receipt = self.store.read_receipt(project_id=obs.project_id, receipt_id=str(committed.get("receipt_id") or ""))
-                decision = self.store.read_decision(project_id=obs.project_id, decision_id=receipt.recovery_decision_id)
-                current_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
-                return FailureRecoveryResult(obs, decision, receipt, current_budget, replayed=True, provider_calls=0, effect_count=int(receipt.effect_started), replanner_calls=int(receipt.recovery_action is AgentRecoveryAction.REPLAN))
-            prior = self.store.find_receipt_for_failure(project_id=obs.project_id, failure_id=obs.failure_id, failure_digest=obs.failure_digest)
-            if prior is not None:
-                decision = self.store.read_decision(project_id=obs.project_id, decision_id=prior.recovery_decision_id)
-                current_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
-                return FailureRecoveryResult(obs, decision, prior, current_budget, replayed=True, provider_calls=0, effect_count=int(prior.effect_started), replanner_calls=int(prior.recovery_action is AgentRecoveryAction.REPLAN))
-            # Counts are authoritative projections, not client-provided state.
-            # Validate them only for a new attempt; a committed replay is
-            # intentionally resolved before this check because its receipt
-            # increments the durable aggregate.
-            budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
-            if obs.retry_count_used != budget.retries_used or obs.replan_count_used != budget.replans_used:
-                raise FailureRecoveryStale("failure observation budget projection is stale")
-            self.store.write_checkpoint(failure_dir=failure_dir, filename="reservation.json", status="RECOVERY_RESERVED", values={"request_digest": request_digest, "client_request_id": request_id, "failure_digest": obs.failure_digest})
-            self._fault("after_reservation")
-            provider_calls = 0
-            existing_decision = self.store.find_decision_for_failure(project_id=obs.project_id, failure_id=obs.failure_id)
-            if existing_decision is not None:
-                decision = existing_decision
-            else:
-                deterministic = self._deterministic_response(obs, budget)
-                if deterministic is None:
-                    response, provider_calls = self._provider_response(observation=obs, failure_dir=failure_dir, budget=budget)
+        # The aggregate lock is intentionally acquired before the failure lock
+        # and held through the receipt commit.  This makes budget check +
+        # ordinal reservation + effect/receipt publication atomic across
+        # distinct failure IDs and across processes.
+        with self.store.aggregate_session(
+            project_id=obs.project_id,
+            session_id=session,
+            autonomy_grant_id=resolved_grant.grant_id,
+            authority_epoch=epoch,
+        ) as aggregate_dir:
+            with self.store.failure_session(project_id=obs.project_id, failure_id=obs.failure_id) as failure_dir:
+                try:
+                    persisted_observation = self.store.read_observation(project_id=obs.project_id, failure_id=obs.failure_id)
+                except FileNotFoundError as exc:
+                    raise FailureRecoveryStale("recovery requires a server-published failure observation") from exc
+                if persisted_observation.model_dump(mode="json") != obs.model_dump(mode="json"):
+                    raise FailureRecoveryConflict("supplied failure observation is not the immutable server observation")
+                if obs.policy_version != FAILURE_RECOVERY_POLICY_VERSION or obs.policy_digest != FAILURE_RECOVERY_POLICY_DIGEST:
+                    raise FailureRecoveryStale("failure observation policy binding is stale")
+                committed = self.store.read_checkpoint(failure_dir=failure_dir, filename="committed.json")
+                if committed is not None:
+                    if committed.get("request_digest") != request_digest:
+                        raise FailureRecoveryConflict("recovery request ID is bound to different content")
+                    receipt = self.store.read_receipt(project_id=obs.project_id, receipt_id=str(committed.get("receipt_id") or ""))
+                    decision = self.store.read_decision(project_id=obs.project_id, decision_id=receipt.recovery_decision_id)
+                    current_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
+                    return FailureRecoveryResult(obs, decision, receipt, current_budget, replayed=True, provider_calls=0, effect_count=int(receipt.effect_started), replanner_calls=int(receipt.recovery_action is AgentRecoveryAction.REPLAN))
+                prior = self.store.find_receipt_for_failure(project_id=obs.project_id, failure_id=obs.failure_id, failure_digest=obs.failure_digest)
+                if prior is not None:
+                    decision = self.store.read_decision(project_id=obs.project_id, decision_id=prior.recovery_decision_id)
+                    current_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
+                    return FailureRecoveryResult(obs, decision, prior, current_budget, replayed=True, provider_calls=0, effect_count=int(prior.effect_started), replanner_calls=int(prior.recovery_action is AgentRecoveryAction.REPLAN))
+                # Counts are authoritative projections, not client-provided
+                # state.  The aggregate lock makes this check and the later
+                # receipt commit one cross-failure critical section.
+                budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
+                if obs.retry_count_used > budget.retries_used or obs.replan_count_used > budget.replans_used:
+                    raise FailureRecoveryStale("failure observation budget projection is stale")
+                self.store.write_checkpoint(failure_dir=failure_dir, filename="reservation.json", status="RECOVERY_RESERVED", values={"request_digest": request_digest, "client_request_id": request_id, "failure_digest": obs.failure_digest})
+                self._fault("after_reservation")
+                provider_calls = 0
+                existing_decision = self.store.find_decision_for_failure(project_id=obs.project_id, failure_id=obs.failure_id)
+                if existing_decision is not None:
+                    decision = existing_decision
                 else:
-                    response = deterministic
-                decision = self._decision(observation=obs, response=response, budget=budget, grant=resolved_grant, provider_call_count=provider_calls)
-                self.store.publish_decision_for_project(project_id=obs.project_id, decision=decision)
-                self._fault("after_decision")
-            details: dict[str, Any] = {}
-            if decision.auto_apply:
-                details = self._apply(observation=obs, decision=decision, failure_dir=failure_dir)
-            receipt = self._receipt(observation=obs, decision=decision, grant=resolved_grant, session_id=session, authority_epoch=epoch, provider_calls=provider_calls, details=details)
-            self.store.publish_receipt(project_id=obs.project_id, receipt=receipt)
-            self.store.write_checkpoint(failure_dir=failure_dir, filename="committed.json", status="RECOVERY_COMMITTED", values={"request_digest": request_digest, "client_request_id": request_id, "receipt_id": receipt.receipt_id, "receipt_digest": receipt.receipt_digest})
-            self._fault("after_commit")
-            updated_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
-            return FailureRecoveryResult(obs, decision, receipt, updated_budget, provider_calls=provider_calls, effect_count=int(receipt.effect_started), replanner_calls=int(decision.recovery_action is AgentRecoveryAction.REPLAN and decision.auto_apply))
+                    deterministic = self._deterministic_response(obs, budget)
+                    if deterministic is None:
+                        if not self._has_current_state_verifier():
+                            raise FailureRecoveryDecisionInvalid(
+                                "automatic recovery requires a current Controller snapshot verifier"
+                            )
+                        self._verify_current_state(obs)
+                        response, provider_calls = self._provider_response(observation=obs, failure_dir=failure_dir, budget=budget)
+                    else:
+                        response = deterministic
+                    decision = self._decision(observation=obs, response=response, budget=budget, grant=resolved_grant, provider_call_count=provider_calls)
+                    if decision.auto_apply:
+                        self._verify_current_state(obs)
+                        if decision.recovery_action in {
+                            AgentRecoveryAction.RETRY_EXACT,
+                            AgentRecoveryAction.TOOL_CALL,
+                        } and (
+                            not isinstance(
+                                self.successor_applicator,
+                                RecoverySuccessorApplicator,
+                            )
+                            or self.successor_applicator.recovery_authority_chain_verified
+                            is not True
+                        ):
+                            raise FailureRecoveryDecisionInvalid(
+                                "automatic recovery requires the concrete trusted successor applicator"
+                            )
+                    self.store.publish_decision_for_project(project_id=obs.project_id, decision=decision)
+                    self._fault("after_decision")
+                details: dict[str, Any] = {}
+                if decision.auto_apply:
+                    self._verify_current_state(obs)
+                    if decision.recovery_action in {
+                        AgentRecoveryAction.RETRY_EXACT,
+                        AgentRecoveryAction.TOOL_CALL,
+                    } and not isinstance(
+                        self.successor_applicator, RecoverySuccessorApplicator
+                    ):
+                        raise FailureRecoveryDecisionInvalid(
+                            "automatic recovery requires the concrete trusted successor applicator"
+                        )
+                    if decision.recovery_action in {
+                        AgentRecoveryAction.RETRY_EXACT,
+                        AgentRecoveryAction.TOOL_CALL,
+                        AgentRecoveryAction.REPLAN,
+                    }:
+                        self.store.reserve_budget(
+                            aggregate_dir=aggregate_dir,
+                            failure_id=obs.failure_id,
+                            failure_digest=obs.failure_digest,
+                            decision_id=decision.decision_id,
+                            request_digest=request_digest,
+                            recovery_action=decision.recovery_action,
+                            ordinal=(
+                                decision.retry_ordinal
+                                if decision.recovery_action
+                                in {
+                                    AgentRecoveryAction.RETRY_EXACT,
+                                    AgentRecoveryAction.TOOL_CALL,
+                                }
+                                else decision.replan_ordinal
+                            ),
+                            session_id=session,
+                            autonomy_grant_id=resolved_grant.grant_id,
+                            autonomy_grant_digest=resolved_grant.grant_digest,
+                            authority_epoch=epoch,
+                            created_at=self.clock(),
+                        )
+                        self._fault("after_budget_reservation")
+                    details = self._apply(
+                        observation=obs,
+                        decision=decision,
+                        failure_dir=failure_dir,
+                        grant=resolved_grant,
+                    )
+                receipt = self._receipt(observation=obs, decision=decision, grant=resolved_grant, session_id=session, authority_epoch=epoch, provider_calls=provider_calls, details=details)
+                self.store.publish_receipt(project_id=obs.project_id, receipt=receipt)
+                self.store.write_checkpoint(failure_dir=failure_dir, filename="committed.json", status="RECOVERY_COMMITTED", values={"request_digest": request_digest, "client_request_id": request_id, "receipt_id": receipt.receipt_id, "receipt_digest": receipt.receipt_digest})
+                self._fault("after_commit")
+                updated_budget = self._budget(project_id=obs.project_id, session_id=session, grant=resolved_grant, authority_epoch=epoch)
+                return FailureRecoveryResult(obs, decision, receipt, updated_budget, provider_calls=provider_calls, effect_count=int(receipt.effect_started), replanner_calls=int(decision.recovery_action is AgentRecoveryAction.REPLAN and decision.auto_apply))
 
     def recover(self, **kwargs: Any) -> FailureRecoveryResult:
         return self.recover_failure(**kwargs)
@@ -1744,6 +2956,9 @@ __all__ = [
     "FailureRecoveryDecision",
     "FailureRecoveryObservation",
     "FailureRecoveryResponse",
+    "RecoverySuccessorApplicator",
+    "ScientificAgentRecoverySuccessorApplicator",
+    "TrustedRecoverySuccessorApplicator",
     "build_recovery_messages",
     "classify_failure",
     "classify_typed_failure",
