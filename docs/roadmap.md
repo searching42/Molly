@@ -255,14 +255,15 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Closed by: Draft PR #59 (`M3.5-AUT-FAILURE-RECOVERY-FOUNDATION`).
   - Definition of Done: versioned server-derived failure observations classify typed failure and effect certainty independently; one recovery decision is bounded by the current AutonomyGrant, SemanticBoundary, logical-tool schemas, durable retry/replan aggregates, and the existing Permission / Authorization / StartIntent / Controller successor chain. Unknown effects fail closed with no provider retry or effect, provider calls are checkpointed at most once, immutable attempt receipts support crash/replay/concurrency reconciliation, and historical v1/v2 artifacts remain unchanged. This foundation provides the recovery contract, aggregate control plane, and trusted successor applicator; it does not yet connect a Conversation/coordinator `FAILED` continuation entrypoint. This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
 
-- [ ] **M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-FAILURE-RECOVERY-FOUNDATION`.
   - Definition of Done: the production Conversation/coordinator `FAILED` continuation invokes the foundation service with a server-published observation and current, digest-verified authority; automatic retry, logical-tool recovery, and replan successors all traverse the trusted Permission / Authorization / StartIntent / Controller chain; representative restart, duplicate, aggregate-concurrency, and exact-replay runtime evidence is captured. This item must not introduce a second Controller or execution authority.
+  - Closed by: Draft PR #60 (`M3.5-AUT-FAILURE-RECOVERY` runtime continuation). This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
 
 - [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-FAILURE-RECOVERY`.
   - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
