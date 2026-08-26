@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import multiprocessing
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
     FailureRecoveryRuntimeEligibility,
     FailureRecoveryRuntimeResult,
     ScientificAgentAutonomyGrantBinding,
+    ScientificAgentAutonomyGrantIssuer,
     ScientificAgentAutonomyGrantStore,
     ScientificAgentFailureRecoveryRuntime,
     ScientificAgentFailureRecoveryServiceFactory,
@@ -317,11 +319,14 @@ def test_production_app_wires_concrete_successor_and_opt_in_runtime(
     )
     successor = app.extensions["scientific_agent_failure_recovery_successor"]
     runtime = app.extensions["scientific_agent_failure_recovery_runtime"]
+    issuer = app.extensions["scientific_agent_failure_recovery_grant_issuer"]
     service = app.extensions["scientific_agent_conversation_session_service"]
     assert isinstance(successor, ScientificAgentRecoverySuccessorApplicator)
     assert successor.recovery_authority_chain_verified is True
     assert service.failure_recovery_runtime is runtime
     assert service.failure_recovery_enabled is True
+    assert isinstance(issuer, ScientificAgentAutonomyGrantIssuer)
+    assert app.extensions["scientific_agent_authorization_service"].autonomy_grant_issuer is not None
     factory = app.extensions["scientific_agent_failure_recovery_service_factory"]
     built = factory.build(
         provider=None,
@@ -330,6 +335,226 @@ def test_production_app_wires_concrete_successor_and_opt_in_runtime(
         authority_epoch="recovery-test-epoch",
     )
     assert callable(built.effect_reconciler)
+
+
+def test_production_authority_issuance_persists_recovery_grant_without_manual_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app's normal approval flow is the grant publication point."""
+
+    monkeypatch.setenv("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "true")
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "user-config",
+        scientific_task_registry=AtomicTaskRegistry(),
+    )
+    app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = "alice"
+    client = app.test_client()
+    created = client.post(
+        "/api/projects",
+        json={"project_id": "project-1", "name": "Project"},
+    )
+    assert created.status_code == 200, created.get_json()
+    storage = app.extensions["conversation_store"].projects
+    run_dir = storage.run_dir("project-1", "run-1")
+    input_path = run_dir / "inputs" / "dataset.csv"
+    input_path.parent.mkdir(parents=True)
+    input_path.write_text("SMILES,value\nCCO,1.0\n", encoding="utf-8")
+    storage.register_artifact_path(
+        "project-1",
+        "run-1",
+        "uploaded_dataset",
+        "inputs/dataset.csv",
+    )
+    response = AgentExecutionPlanLLMResponse(
+        requested_tool_ids=["inspect_dataset"],
+        selected_input_artifact_ids=["uploaded_dataset"],
+        task_options={"inspect_dataset": {}},
+        selected_logical_profile_ids=[],
+        limits={},
+        stop_conditions=["stop on validation failure"],
+        success_criteria=["produce a reviewable profile"],
+        rationales=["Use the registered local inspection task."],
+        assumptions=[],
+        questions=[],
+    )
+    proposed = client.post(
+        "/api/projects/project-1/agent-plan-proposals",
+        json={
+            "run_id": "run-1",
+            "goal": "Inspect one exact dataset",
+            "user_constraints": [],
+            "client_request_id": "authority-issuance-proposal",
+            "llm_provider": {
+                "provider": "stub",
+                "model": "stub",
+                "stub_response": response.model_dump(mode="json"),
+            },
+        },
+    )
+    assert proposed.status_code == 200, proposed.get_json()
+    proposal = proposed.get_json()["proposal"]
+    approved = client.post(
+        "/api/projects/project-1/agent-plan-proposals/"
+        f"{proposal['proposal_id']}/approve-and-start",
+        json={
+            "expected_proposal_digest": proposal["proposal_digest"],
+            "authorization_mode": "stepwise",
+            "requested_preauthorized_gate_ids": [],
+            "confirmed": True,
+            "client_request_id": "authority-issuance-approval",
+            "note": "Approve the exact local inspection plan.",
+        },
+    )
+    assert approved.status_code == 200, approved.get_json()
+    binding = app.extensions[
+        "scientific_agent_failure_recovery_grant_store"
+    ].resolve_current(project_id="project-1", run_id="run-1")
+    assert binding is not None
+    assert binding.grant.max_retries == 1
+    assert binding.grant.max_replans == 1
+    assert binding.authority_epoch.startswith("authorization-epoch-")
+
+    # Continue through the app's real Controller and recovery runtime using
+    # the grant just issued above; no test-only publish_server_grant call is
+    # allowed to make this path eligible.
+    controller = app.extensions["scientific_agent_harness_controller"]
+    control_store = app.extensions["scientific_agent_plan_control_store"]
+    proposal_store = app.extensions["scientific_agent_plan_proposal_store"]
+    authorization_service = app.extensions["scientific_agent_authorization_service"]
+    authorization = authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=approved.get_json()["authorization_id"],
+        verify_current=False,
+    )
+    start_intent = authorization_service.verify_start_intent(
+        project_id="project-1",
+        start_intent_id=approved.get_json()["start_intent_id"],
+        verify_current=False,
+    )
+    publication = proposal_store.read(
+        project_id="project-1",
+        proposal_id=proposal["proposal_id"],
+        verify_current=False,
+    )
+    permission = control_store.read_permission_decision(
+        project_id="project-1",
+        decision_id=start_intent.permission_decision_id,
+    )
+    execution = controller._build_execution(
+        intent=start_intent,
+        authorization=authorization,
+        publication=publication,
+        permission=permission,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id="app-production-failure-controller",
+        request_digest=_agent_digest({"fixture": "app-production-failure-controller"}),
+        created_at=authorization.created_at,
+    )
+    control_store.publish_harness_controller_execution(execution)
+    evidence = AgentTaskFailureEvidence(
+        failure_code="controller_pre_effect_failure",
+        failure_class=AgentFailureClass.TRANSIENT,
+        effect_certainty=AgentEffectCertainty.NO_EFFECT_CONFIRMED,
+        task_id="inspect_dataset",
+        logical_tool_id="inspect_dataset",
+        reason_codes=["CONTROLLER_PRE_EFFECT_FAILURE"],
+    )
+    storage.write_stage_state(
+        "project-1",
+        "run-1",
+        StageState(
+            stage="inspect_dataset",
+            status=RunStatus.FAILED,
+            started_at=authorization.created_at,
+            updated_at=authorization.created_at,
+            error={"code": "typed_pre_effect_failure"},
+            details={"typed_failure_evidence": evidence.model_dump(mode="json")},
+        ),
+    )
+    failed_inspection = controller._inspect(execution, verify_authority=False)
+    source_bindings = controller._bindings_from_facts(failed_inspection.facts)
+    source_bindings_digest = _agent_digest(
+        [item.model_dump(mode="json") for item in source_bindings]
+    )
+    failed_decision = AgentHarnessControllerDecision(
+        controller_execution_id=execution.controller_execution_id,
+        controller_execution_digest=execution.execution_digest,
+        client_request_id="app-production-failure-decision",
+        inspection_digest=failed_inspection.inspection_digest,
+        action_kind=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        task_id="inspect_dataset",
+        task_index=0,
+        attempt_ordinal=0,
+        slot_id=execution.task_slots[0].slot_id,
+        source_bindings=source_bindings,
+        source_bindings_digest=source_bindings_digest,
+        reason_codes=["TERMINAL_OBSERVED"],
+        created_at=authorization.created_at,
+        executable=False,
+    )
+    control_store.publish_harness_controller_decision(
+        project_id="project-1",
+        decision=failed_decision,
+    )
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    registry_digest = _agent_digest(storage.read_artifact_registry("project-1", "run-1"))
+    failed_receipt = AgentHarnessControllerActionReceipt(
+        controller_execution_id=execution.controller_execution_id,
+        controller_execution_digest=execution.execution_digest,
+        decision_id=failed_decision.decision_id,
+        decision_digest=failed_decision.decision_digest,
+        action_kind=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        task_id="inspect_dataset",
+        task_index=0,
+        attempt_ordinal=0,
+        slot_id=execution.task_slots[0].slot_id,
+        execution_started=False,
+        dispatch_occurred=False,
+        before_stage_digest=controller._stage_digest(stage),
+        after_stage_digest=controller._stage_digest(stage),
+        before_artifact_registry_digest=registry_digest,
+        after_artifact_registry_digest=registry_digest,
+        outcome=AgentHarnessControllerReceiptOutcome.FAILED,
+        status_after=AgentHarnessControllerStatus.FAILED,
+        source_bindings=source_bindings,
+        source_bindings_digest=source_bindings_digest,
+        reason_codes=["TERMINAL_OBSERVED"],
+        created_at=authorization.created_at,
+    )
+    control_store.publish_harness_controller_action_receipt(
+        project_id="project-1",
+        receipt=failed_receipt,
+    )
+    conversations = app.extensions["conversation_store"]
+    conversations.create_conversation(
+        "project-1",
+        conversation_id="app-recovery-conversation",
+        title="App recovery",
+    )
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    baseline = controller.read_execution_agent_snapshot(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+        expected_controller_execution_digest=execution.execution_digest,
+    )
+    _result, state, stop_reason = service._auto_progress(
+        project_id="project-1",
+        conversation_id="app-recovery-conversation",
+        state=service._default_state("project-1", "app-recovery-conversation"),
+        controller_result=baseline,
+        provider=object(),
+        provider_binding_digest="request-provider-must-not-cross-recovery",
+    )
+    assert stop_reason == "RECOVERY_SUCCESSOR_COMMITTED"
+    assert state["last_recovery_action"] == "RETRY_EXACT"
+    assert state["last_recovery_retry_ordinal"] == 1
+    assert state["recovery_effect_count"] == 1
+    assert state["controller_execution_id"] != execution.controller_execution_id
 
 
 def test_runtime_unknown_effect_is_deterministic_ask_user_without_provider_or_effect(
@@ -522,6 +747,7 @@ def test_conversation_parameter_recovery_uses_one_bounded_tool_call(
         grant_source=_GrantSource(parameter_grant),
         service_factory=factory,
         store=factory.store,
+        recovery_provider_resolver=lambda: nullcontext(provider),
     )
     service = ScientificAgentConversationSessionService(
         projects=storage,
@@ -550,6 +776,122 @@ def test_conversation_parameter_recovery_uses_one_bounded_tool_call(
     assert state["recovery_effect_count"] == 1
     assert len(successor.calls) == 1
     assert successor.calls[0]["decision"].selected_arguments == {"min_nonempty": 5}
+
+
+def test_recovery_uses_server_provider_after_failed_boundary_not_request_provider(
+    tmp_path: Path,
+) -> None:
+    """A provider selected for an ordinary turn cannot cross a mid-turn failure."""
+
+    storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
+    storage.create_project("project-1", name="Project", created_at="2026-01-01T00:00:00Z")
+    conversations = ConversationStore(projects=storage)
+    conversations.create_conversation(
+        "project-1",
+        conversation_id="conversation-1",
+        title="Recovery",
+    )
+    baseline = _controller_result()
+    controller = _Controller(baseline)
+    successor = _TrustedSuccessor()
+
+    class CountingProvider:
+        def __init__(self, response: dict) -> None:
+            self.calls = 0
+            self._delegate = StubLLMProvider(response=response)
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            return self._delegate.complete_json(**kwargs)
+
+    request_provider = CountingProvider(
+        {
+            "action": "TOOL_CALL",
+            "logical_tool_id": "clean_task",
+            "arguments": {"min_nonempty": 5},
+        }
+    )
+    server_provider = CountingProvider(
+        {
+            "action": "TOOL_CALL",
+            "logical_tool_id": "clean_task",
+            "arguments": {"min_nonempty": 5},
+        }
+    )
+    _write_typed_failure(
+        storage,
+        AgentTaskFailureEvidence(
+            failure_code="parameter_validation_failed",
+            failure_class=AgentFailureClass.PARAMETER_RECOVERABLE,
+            effect_certainty=AgentEffectCertainty.NO_EFFECT_CONFIRMED,
+            task_id="clean_task",
+            logical_tool_id="clean_task",
+            reason_codes=["PARAMETER_VALIDATION_FAILED"],
+        ),
+    )
+    factory = ScientificAgentFailureRecoveryServiceFactory(
+        storage=storage,
+        controller=controller,
+        replanner=None,
+        successor_applicator=successor,
+        tool_schemas={
+            "clean_task": {
+                "type": "object",
+                "properties": {
+                    "min_nonempty": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10,
+                    }
+                },
+                "required": ["min_nonempty"],
+                "additionalProperties": False,
+            }
+        },
+    )
+    parameter_grant = AutonomyGrant(
+        project_id="project-1",
+        allowed_tasks=["clean_task"],
+        parameter_bounds={
+            "clean_task.min_nonempty": AutonomyParameterBound(
+                minimum=0,
+                maximum=10,
+            )
+        },
+        max_retries=1,
+        valid_until="9999-12-31T23:59:59Z",
+    )
+    runtime = ScientificAgentFailureRecoveryRuntime(
+        storage=storage,
+        controller=controller,
+        grant_source=_GrantSource(parameter_grant),
+        service_factory=factory,
+        store=factory.store,
+        recovery_provider_resolver=lambda: nullcontext(server_provider),
+    )
+    service = ScientificAgentConversationSessionService(
+        projects=storage,
+        conversations=conversations,
+        plan_service=None,
+        proposal_store=None,
+        authorization_service=None,
+        controller=controller,
+        execution_agent=None,
+        failure_recovery_runtime=runtime,
+        failure_recovery_enabled=True,
+    )
+    _result, state, stop_reason = service._auto_progress(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        state=service._default_state("project-1", "conversation-1"),
+        controller_result=baseline,
+        provider=request_provider,
+        provider_binding_digest="request-provider-binding",
+    )
+    assert stop_reason == "RECOVERY_SUCCESSOR_COMMITTED"
+    assert state["recovery_provider_calls"] == 1
+    assert request_provider.calls == 0
+    assert server_provider.calls == 1
 
 
 def test_conversation_replan_publishes_successor_for_explicit_review_once(
@@ -601,12 +943,14 @@ def test_conversation_replan_publishes_successor_for_explicit_review_once(
         replanner=replanner,
         successor_applicator=None,
     )
+    replan_provider = StubLLMProvider(response={"action": "REPLAN"})
     runtime = ScientificAgentFailureRecoveryRuntime(
         storage=storage,
         controller=controller,
         grant_source=_GrantSource(replan_grant),
         service_factory=factory,
         store=factory.store,
+        recovery_provider_resolver=lambda: nullcontext(replan_provider),
     )
     service = ScientificAgentConversationSessionService(
         projects=storage,
@@ -625,7 +969,7 @@ def test_conversation_replan_publishes_successor_for_explicit_review_once(
         conversation_id="conversation-1",
         state=state,
         controller_result=baseline,
-        provider=StubLLMProvider(response={"action": "REPLAN"}),
+        provider=replan_provider,
         provider_binding_digest="",
     )
     assert stop_reason == "RECOVERY_REPLAN_REVIEW_REQUIRED"
@@ -647,7 +991,7 @@ def test_conversation_replan_publishes_successor_for_explicit_review_once(
         conversation_id="conversation-1",
         state=state,
         controller_result=baseline,
-        provider=StubLLMProvider(response={"action": "REPLAN"}),
+        provider=replan_provider,
         provider_binding_digest="",
     )
     assert replay_reason == "RECOVERY_REPLAN_REVIEW_REQUIRED"
@@ -1234,10 +1578,18 @@ def test_production_concrete_successor_closes_failed_conversation_chain(
         client_request_id="production-recovery-proposal",
     )
     control_store = AgentPlanControlStore(storage=storage)
+    grant_store = ScientificAgentAutonomyGrantStore(storage=storage)
+    grant_issuer = ScientificAgentAutonomyGrantIssuer(
+        grant_store=grant_store,
+        registry=registry,
+        grant_ttl_seconds=10_000_000_000,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
     authorization_service = ScientificAgentAuthorizationService(
         storage=storage,
         proposal_store=proposal_store,
         control_store=control_store,
+        autonomy_grant_issuer=grant_issuer.issue_from_approved_chain,
         clock=lambda: "2026-01-01T00:00:00Z",
     )
     approved = authorization_service.approve_and_start(
@@ -1393,20 +1745,12 @@ def test_production_concrete_successor_closes_failed_conversation_chain(
         registry=registry,
         clock=lambda: "2026-01-01T00:00:00Z",
     )
-    grant = AutonomyGrant(
+    issued_binding = grant_store.resolve_current(
         project_id="project-1",
-        allowed_tasks=["inspect_dataset"],
-        max_retries=1,
-        valid_until="9999-12-31T23:59:59Z",
-    )
-    grant_store = ScientificAgentAutonomyGrantStore(storage=storage)
-    grant_store.publish_server_grant(
-        grant=grant,
-        authority_epoch="production-epoch-1",
-        actor="alice",
-        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         run_id="run-1",
     )
+    assert issued_binding is not None
+    assert issued_binding.grant.max_retries == 1
     runtime = ScientificAgentFailureRecoveryRuntime(
         storage=storage,
         controller=controller,

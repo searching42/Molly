@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,11 @@ from ai4s_agent.agent_run_inspection import AgentRunInspectionService
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import build_harness_observability
 from ai4s_agent.job_manager import JobManager
-from ai4s_agent.llm_provider import LLMProviderManager
+from ai4s_agent.llm_provider import LLMProviderError, LLMProviderManager
+from ai4s_agent.llm_provider_resolution import (
+    CONTROL_PLANE_ROLE,
+    resolve_llm_provider_payload,
+)
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.literature_intake import LiteratureIntakeService
 from ai4s_agent.memory import PermissionPolicy, ProjectMemory
@@ -71,6 +76,7 @@ from ai4s_agent.scientific_agent_failure_recovery import (
     ScientificAgentRecoverySuccessorApplicator,
 )
 from ai4s_agent.scientific_agent_failure_recovery_runtime import (
+    ScientificAgentAutonomyGrantIssuer,
     ScientificAgentAutonomyGrantStore,
     ScientificAgentFailureRecoveryRuntime,
     ScientificAgentFailureRecoveryServiceFactory,
@@ -102,6 +108,31 @@ UPLOAD_COPY_CHUNK_BYTES = 1024 * 1024
 
 _adapter_execution_policy = run_control_routes._adapter_execution_policy
 _adapter_requires_snapshot_for_execute = run_control_routes._adapter_requires_snapshot_for_execute
+
+
+def _server_recovery_provider_context(*, llm_settings: LLMSettingsStore, llm_providers: LLMProviderManager):
+    """Resolve only the server-owned control-plane recovery provider.
+
+    Automatic recovery must not fall back to the user/request provider.  When
+    no explicit role binding is configured, the runtime receives a null
+    provider and the foundation remains on its deterministic ASK_USER/STOP
+    boundary.
+    """
+
+    if not getattr(llm_settings, "server_role_bindings_configured", False):
+        return nullcontext(None)
+    try:
+        resolution = resolve_llm_provider_payload(
+            {},
+            settings=llm_settings,
+            providers=llm_providers,
+            role=CONTROL_PLANE_ROLE,
+        )
+    except (LLMProviderError, ValueError):
+        return nullcontext(None)
+    if resolution.server_owned is not True:
+        return nullcontext(None)
+    return resolution.provider_context
 
 
 def _allowed_file(filename: str) -> bool:
@@ -225,6 +256,20 @@ def register_routes(
         registry=scientific_task_registry,
         tracer=harness_tracer,
     )
+    # Failure-recovery authority is issued by the server's normal
+    # approve-and-start lifecycle.  Build the issuer before constructing the
+    # authorization service so the hook is explicit in production wiring.
+    recovery_grant_store = ScientificAgentAutonomyGrantStore(storage=projects)
+    recovery_grant_issuer = ScientificAgentAutonomyGrantIssuer(
+        grant_store=recovery_grant_store,
+        registry=scientific_task_registry,
+        max_retries=app.config.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", 1),
+        max_replans=app.config.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_REPLANS", 1),
+        grant_ttl_seconds=app.config.get(
+            "AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS", 86_400
+        ),
+        enabled=_as_bool(app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")),
+    )
     register_scientific_agent_permission_routes(
         app,
         projects=projects,
@@ -233,6 +278,7 @@ def register_routes(
         resource_authority_policy_store=resource_authority_policies,
         registry=scientific_task_registry,
         tracer=harness_tracer,
+        autonomy_grant_issuer=recovery_grant_issuer.issue_from_approved_chain,
     )
     harness_controller = ScientificAgentHarnessController(
         storage=projects,
@@ -312,7 +358,10 @@ def register_routes(
     # Failure recovery is a server opt-in continuation.  Conversation only
     # receives this fixed factory/runtime; it cannot supply a grant, actor,
     # provider endpoint, or arbitrary successor callback from a request.
-    recovery_grant_store = ScientificAgentAutonomyGrantStore(storage=projects)
+    # The authorization service was constructed above with the issuer.  It is
+    # invoked only after a server-owned approve-and-start chain has durably
+    # committed; recovery successors explicitly disable the hook so they
+    # continue consuming the predecessor grant.
     recovery_actor = str(app.config.get("AI4S_AGENT_AUTHORIZATION_OWNER") or "system").strip() or "system"
     recovery_actor_source = "config:AI4S_AGENT_AUTHORIZATION_OWNER"
     recovery_successor = ScientificAgentRecoverySuccessorApplicator(
@@ -358,8 +407,13 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         registry=scientific_task_registry,
         store=recovery_factory.store,
+        recovery_provider_resolver=lambda: _server_recovery_provider_context(
+            llm_settings=llm_settings,
+            llm_providers=llm_providers,
+        ),
     )
     app.extensions["scientific_agent_failure_recovery_grant_store"] = recovery_grant_store
+    app.extensions["scientific_agent_failure_recovery_grant_issuer"] = recovery_grant_issuer
     app.extensions["scientific_agent_failure_recovery_successor"] = recovery_successor
     app.extensions["scientific_agent_failure_recovery_service_factory"] = recovery_factory
     app.extensions["scientific_agent_failure_recovery_runtime"] = recovery_runtime

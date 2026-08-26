@@ -39,6 +39,22 @@ def create_app(
         "AI4S_AGENT_FAILURE_RECOVERY_ENABLED",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "false"),
     )
+    # Recovery authority is issued by the server's approve-and-start
+    # lifecycle, never by a request or a failure callback.  These bounded
+    # defaults are only active when the explicit recovery feature flag is on
+    # and may be tightened by deployment configuration.
+    app.config.setdefault(
+        "AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES",
+        os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", "1"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_FAILURE_RECOVERY_MAX_REPLANS",
+        os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_REPLANS", "1"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS",
+        os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS", "86400"),
+    )
     if scientific_task_registry is None:
         registry_id = os.environ.get("AI4S_SCIENTIFIC_TASK_REGISTRY", "").strip()
         if registry_id == "br1-private-real-tool-v3":

@@ -193,31 +193,16 @@ def register_scientific_agent_conversation_routes(
                     role=CONTROL_PLANE_ROLE,
                 )
             elif turn_mode in _RECOVERY_TURN_MODES:
-                # Recovery uses the server's control-plane provider binding.
-                # A Conversation request must not select a temporary endpoint,
-                # model, or credential for a failure-recovery decision.  An
-                # empty payload lets configured role bindings resolve while
-                # retaining the deterministic no-provider boundary when none
-                # is available.
-                try:
-                    resolution = resolve_llm_provider_payload(
-                        {},
-                        settings=llm_settings,
-                        providers=llm_providers,
-                        role=CONTROL_PLANE_ROLE,
-                    )
-                except (LLMProviderError, ValueError) as exc:
-                    if not _approval_provider_fallback_allowed(exc):
-                        raise
-                    # A missing/unavailable control-plane provider must still
-                    # reach the runtime's deterministic no-provider policy.
-                    # Resolve the explicit null binding without consulting the
-                    # request payload or a server role profile again.
-                    resolution = resolve_llm_provider_payload(
-                        {"llm_provider": None},
-                        settings=llm_settings,
-                        providers=llm_providers,
-                    )
+                # The recovery runtime owns server-role provider resolution
+                # after its locked, authoritative FAILED snapshot.  Keep the
+                # route boundary provider-free so it cannot resolve/lease a
+                # provider before that check (and cannot pass a request
+                # temporary provider into recovery).
+                resolution = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
             else:
                 try:
                     resolution = resolve_llm_provider_payload(
@@ -349,23 +334,13 @@ def register_scientific_agent_conversation_routes(
             )
             if turn_mode in _RECOVERY_TURN_MODES:
                 # A tick can enter the same FAILED continuation path as a
-                # conversation turn.  Keep request-selected provider
-                # endpoints, models, and credentials out of that path too.
-                try:
-                    resolution = resolve_llm_provider_payload(
-                        {},
-                        settings=llm_settings,
-                        providers=llm_providers,
-                        role=CONTROL_PLANE_ROLE,
-                    )
-                except (LLMProviderError, ValueError) as exc:
-                    if not _approval_provider_fallback_allowed(exc):
-                        raise
-                    resolution = resolve_llm_provider_payload(
-                        {"llm_provider": None},
-                        settings=llm_settings,
-                        providers=llm_providers,
-                    )
+                # conversation turn.  The runtime, not this route, resolves
+                # the server-owned provider after the authoritative boundary.
+                resolution = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
             else:
                 try:
                     resolution = resolve_llm_provider_payload(

@@ -3182,7 +3182,6 @@ class ScientificAgentConversationSessionService:
         conversation_id: str,
         state: dict[str, Any],
         controller_result: ControllerAdvanceResult,
-        provider: LLMProvider | None,
     ) -> tuple[ControllerAdvanceResult | None, dict[str, Any], str]:
         """Consume exactly one recovery operation for the current FAILED state.
 
@@ -3203,7 +3202,11 @@ class ScientificAgentConversationSessionService:
             run_id=str(state.get("run_id") or controller_result.execution.run_id),
             state=state,
             controller_result=controller_result,
-            provider=provider,
+            # The runtime resolves a server-owned recovery provider only
+            # after it has re-read the authoritative FAILED snapshot.  The
+            # ordinary turn/tick provider is never forwarded across that
+            # boundary (a task may fail mid-turn).
+            provider=None,
         )
         current_controller_result = (
             runtime_result.controller_result
@@ -3672,10 +3675,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=clean_conversation,
                     run_id=clean_run,
                     state=state,
-                    provider=provider if self.failure_recovery_enabled else None,
-                    provider_binding_digest=(
-                        provider_binding_digest if self.failure_recovery_enabled else ""
-                    ),
+                    # Historical tick semantics are deterministic observation
+                    # and Controller progression.  Recovery is entered only
+                    # after an authoritative FAILED snapshot and resolves its
+                    # own server-owned provider inside the runtime.
+                    provider=None,
+                    provider_binding_digest="",
                 )
 
             proposal_id = str(state.get("proposal_id") or "")
@@ -4432,7 +4437,6 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     state=state,
                     controller_result=controller_result,
-                    provider=provider,
                 )
             terminal_l1_updates: dict[str, Any] = {}
             if status in {

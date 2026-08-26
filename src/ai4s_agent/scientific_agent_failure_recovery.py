@@ -1490,6 +1490,11 @@ class ScientificAgentRecoverySuccessorApplicator(RecoverySuccessorApplicator):
                 ),
                 actor=baseline_actor,
                 actor_source=baseline_actor_source,
+                # The successor consumes the predecessor's already-issued
+                # autonomy grant.  It must not mint a new grant while
+                # rebuilding the Permission -> Authorization -> StartIntent
+                # chain for a recovery effect.
+                issue_autonomy_grant=False,
             )
             verified_authorization = self.authorization_service.verify_authorization(
                 project_id=observation.project_id,

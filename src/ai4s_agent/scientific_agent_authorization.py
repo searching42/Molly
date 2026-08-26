@@ -1095,6 +1095,7 @@ class ScientificAgentAuthorizationService:
         permission_engine: ScientificAgentPermissionEngine | None = None,
         resource_authority_resolver: Callable[[ScientificAgentPlanPublication, str], Any]
         | None = None,
+        autonomy_grant_issuer: Callable[[ApproveAndStartResult], Any] | None = None,
         tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
@@ -1109,6 +1110,10 @@ class ScientificAgentAuthorizationService:
         )
         self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
+        # Optional server-only hook invoked after a durable approve-and-start
+        # authority chain has been verified.  Conversation/request code never
+        # receives this callback and cannot supply grant budgets.
+        self.autonomy_grant_issuer = autonomy_grant_issuer
 
     def evaluate_permission(
         self,
@@ -1196,6 +1201,7 @@ class ScientificAgentAuthorizationService:
         request: AgentPlanAuthorizationRequest,
         actor: str,
         actor_source: str,
+        issue_autonomy_grant: bool = True,
     ) -> ApproveAndStartResult:
         correlation = build_harness_telemetry_correlation(
             project_id=project_id,
@@ -1242,6 +1248,12 @@ class ScientificAgentAuthorizationService:
             attributes=privacy_safe_telemetry_attributes(start_correlation),
         ) as start_span:
             start_span.add_event("start_intent.committed", {"outcome": "committed"})
+        issuer = self.autonomy_grant_issuer
+        if issue_autonomy_grant and issuer is not None:
+            # Grant publication is part of the server authority issuance
+            # lifecycle, after Authorization and StartIntent durability.  The
+            # issuer is idempotent on the immutable authorization digest.
+            issuer(result)
         return result
 
     def verify_authorization(

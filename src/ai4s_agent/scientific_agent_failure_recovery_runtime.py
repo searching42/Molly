@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -31,6 +32,7 @@ from ai4s_agent.scientific_agent_failure_recovery import (
     ScientificAgentFailureRecoveryService,
     failure_evidence_from_controller,
 )
+from ai4s_agent.scientific_agent_plan import _exclusive_process_lock
 from ai4s_agent.llm_provider import LLMProvider
 from ai4s_agent.schemas import (
     AgentEffectCertainty,
@@ -39,6 +41,7 @@ from ai4s_agent.schemas import (
     AgentTaskFailureEvidence,
     AgentRecoveryAction,
     AutonomyGrant,
+    AutonomyParameterBound,
     SemanticBoundary,
     _agent_digest,
 )
@@ -190,24 +193,28 @@ class ScientificAgentAutonomyGrantStore:
             "active": True,
         }
         path = self._path(grant.project_id, create=True)
-        records = self._read(path)
-        for existing in records:
-            existing_grant = existing.get("grant")
-            if not isinstance(existing_grant, dict):
-                continue
-            if existing.get("authority_epoch") == epoch:
-                if existing_grant != record["grant"]:
-                    raise FailureRecoveryConflict(
-                        "authority epoch is already bound to a different grant"
+        # Multiple independent authority approvals may issue grants for one
+        # project concurrently.  Serialize the append so an atomic file
+        # replacement cannot silently drop a sibling grant.
+        with _exclusive_process_lock(path.with_name("autonomy_grants.lock")):
+            records = self._read(path)
+            for existing in records:
+                existing_grant = existing.get("grant")
+                if not isinstance(existing_grant, dict):
+                    continue
+                if existing.get("authority_epoch") == epoch:
+                    if existing_grant != record["grant"]:
+                        raise FailureRecoveryConflict(
+                            "authority epoch is already bound to a different grant"
+                        )
+                    return ScientificAgentAutonomyGrantBinding(
+                        grant=grant,
+                        authority_epoch=epoch,
+                        run_id=str(existing.get("run_id") or ""),
+                        session_id=str(existing.get("session_id") or ""),
                     )
-                return ScientificAgentAutonomyGrantBinding(
-                    grant=grant,
-                    authority_epoch=epoch,
-                    run_id=str(existing.get("run_id") or ""),
-                    session_id=str(existing.get("session_id") or ""),
-                )
-        records.append(record)
-        write_json(path, {"project_id": grant.project_id, "grants": records})
+            records.append(record)
+            write_json(path, {"project_id": grant.project_id, "grants": records})
         return ScientificAgentAutonomyGrantBinding(
             grant=grant,
             authority_epoch=epoch,
@@ -286,6 +293,161 @@ class ScientificAgentAutonomyGrantStore:
             return None
         candidates.sort(key=lambda item: (item[0], item[1]))
         return candidates[-1][2]
+
+
+class ScientificAgentAutonomyGrantIssuer:
+    """Server-owned issuance adapter for an approved authority chain.
+
+    Recovery never creates authority at a failure boundary.  This issuer is
+    called only by the existing ``approve_and_start`` authority lifecycle and
+    derives the grant scope from the immutable authorization plus server
+    configuration.  No request/recovery budget is accepted here.
+    """
+
+    def __init__(
+        self,
+        *,
+        grant_store: ScientificAgentAutonomyGrantStore,
+        registry: Any | None = None,
+        max_retries: int = 1,
+        max_replans: int = 1,
+        grant_ttl_seconds: int = 86_400,
+        enabled: bool = True,
+        clock: Callable[[], str] = now_iso,
+    ) -> None:
+        self.grant_store = grant_store
+        self.registry = registry
+        self.max_retries = self._count(max_retries, field="max_retries")
+        self.max_replans = self._count(max_replans, field="max_replans")
+        self.grant_ttl_seconds = self._count(
+            grant_ttl_seconds,
+            field="grant_ttl_seconds",
+        )
+        self.enabled = bool(enabled)
+        self.clock = clock
+
+    @staticmethod
+    def _count(value: Any, *, field: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"{field} must be a non-negative integer")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} must be a non-negative integer") from exc
+        if parsed < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+        return parsed
+
+    @staticmethod
+    def _future_timestamp(now: str, seconds: int) -> str:
+        try:
+            parsed = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("grant issuer clock must return an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("grant issuer clock must return a timezone-aware timestamp")
+        return (parsed + timedelta(seconds=seconds)).astimezone(timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+
+    def _effect_classes(self, authorization: Any) -> list[str]:
+        values: set[str] = set()
+        if self.registry is None:
+            return []
+        for task_id in getattr(authorization, "task_ids", ()):
+            try:
+                spec = self.registry.get(task_id)
+            except (TypeError, ValueError):
+                continue
+            effect = getattr(spec, "effect_class", None)
+            if effect:
+                values.add(str(getattr(effect, "value", effect)))
+        return sorted(values)
+
+    def _parameter_bounds(self, authorization: Any) -> dict[str, Any]:
+        """Bind approved compiled options exactly for successor recovery.
+
+        Automatic recovery may retry the approved values, but a parameter
+        change is an authority expansion and therefore requires a new grant.
+        """
+
+        bounds: dict[str, Any] = {}
+        options_by_task = getattr(authorization, "compiled_task_options", {})
+        if not isinstance(options_by_task, Mapping):
+            return bounds
+        for task_id, options in options_by_task.items():
+            if not isinstance(options, Mapping):
+                continue
+            for key, value in options.items():
+                bounds[f"{task_id}.{key}"] = AutonomyParameterBound(
+                    allowed_values=[value]
+                )
+        return bounds
+
+    def issue_from_approved_chain(self, result: Any) -> ScientificAgentAutonomyGrantBinding | None:
+        """Publish the durable grant for one verified server approval.
+
+        The operation is idempotent: the authorization digest is the
+        authority epoch, so a replay of ``approve_and_start`` verifies the
+        same immutable grant bytes rather than minting a new authority.
+        """
+
+        if not self.enabled or (self.max_retries == 0 and self.max_replans == 0):
+            return None
+        authorization = getattr(result, "authorization", None)
+        start_intent = getattr(result, "start_intent", None)
+        if authorization is None or start_intent is None:
+            raise ValueError("approved authority chain is incomplete")
+        if (
+            getattr(start_intent, "project_id", None)
+            != getattr(authorization, "project_id", None)
+            or getattr(start_intent, "run_id", None)
+            != getattr(authorization, "run_id", None)
+            or getattr(start_intent, "authorization_id", None)
+            != getattr(authorization, "authorization_id", None)
+            or getattr(start_intent, "authorization_digest", None)
+            != getattr(authorization, "authorization_digest", None)
+        ):
+            raise ValueError("approved authority chain has inconsistent bindings")
+        project_id = str(getattr(authorization, "project_id", "") or "")
+        run_id = str(getattr(authorization, "run_id", "") or "")
+        actor = str(getattr(authorization, "actor", "") or "").strip()
+        if not project_id or not run_id or not actor:
+            raise ValueError("approved authority chain has incomplete grant identity")
+        # Bind timestamps to the immutable authorization publication so a
+        # replay of the same approve-and-start request produces byte-identical
+        # grant content for the epoch (and cannot accidentally rebind it).
+        created_at = str(getattr(authorization, "created_at", "") or self.clock())
+        valid_until = self._future_timestamp(created_at, self.grant_ttl_seconds)
+        grant = AutonomyGrant(
+            project_id=project_id,
+            allowed_tasks=list(getattr(authorization, "task_ids", ()) or ()),
+            allowed_effect_classes=self._effect_classes(authorization),
+            parameter_bounds=self._parameter_bounds(authorization),
+            resource_profiles=sorted(
+                {
+                    str(getattr(binding, "profile_id", ""))
+                    for binding in (getattr(authorization, "profile_bindings", ()) or ())
+                    if str(getattr(binding, "profile_id", "") or "")
+                }
+            ),
+            max_retries=self.max_retries,
+            max_replans=self.max_replans,
+            valid_from=created_at,
+            valid_until=valid_until,
+            created_at=created_at,
+        )
+        authorization_digest = str(getattr(authorization, "authorization_digest", "") or "")
+        if _DIGEST.fullmatch(authorization_digest) is None:
+            raise ValueError("approved authority chain has no authorization digest")
+        epoch = "authorization-epoch-" + authorization_digest.split(":", 1)[1][:40]
+        return self.grant_store.publish_server_grant(
+            grant=grant,
+            authority_epoch=epoch,
+            actor=actor,
+            actor_source="server:authorization-issuance",
+            run_id=run_id,
+        )
 
 
 class ScientificAgentFailureRecoveryServiceFactory:
@@ -427,6 +589,10 @@ class ScientificAgentFailureRecoveryRuntime:
         authorization_service: Any | None = None,
         registry: Any | None = None,
         store: FailureRecoveryStore | None = None,
+        recovery_provider_resolver: Callable[
+            [], AbstractContextManager[LLMProvider | None] | LLMProvider | None
+        ]
+        | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.storage = storage
@@ -437,7 +603,36 @@ class ScientificAgentFailureRecoveryRuntime:
         self.authorization_service = authorization_service
         self.registry = registry
         self.store = store or getattr(service_factory, "store", None) or FailureRecoveryStore(storage=storage)
+        # Production wiring supplies a server-owned context factory.  The
+        # legacy ``provider`` argument to ``continue_failed`` remains useful
+        # for direct foundation fixtures, but Conversation never forwards its
+        # ordinary request provider into this runtime.
+        self.recovery_provider_resolver = recovery_provider_resolver
         self.clock = clock
+
+    def _provider_context(
+        self,
+        *,
+        fallback_provider: LLMProvider | None,
+    ) -> AbstractContextManager[LLMProvider | None]:
+        resolver = self.recovery_provider_resolver
+        if resolver is None:
+            return nullcontext(fallback_provider)
+        try:
+            resolved = resolver()
+        except Exception:
+            # Provider availability is a deterministic no-provider boundary;
+            # the foundation will choose ASK_USER/STOP or fail closed without
+            # crossing an arbitrary request-selected provider boundary.
+            return nullcontext(None)
+        if resolved is None:
+            return nullcontext(None)
+        if hasattr(resolved, "__enter__") and hasattr(resolved, "__exit__"):
+            return resolved  # type: ignore[return-value]
+        # Test doubles and structural LLMProvider implementations need not
+        # inherit a concrete class; the runtime only requires the provider
+        # protocol when the foundation actually makes a call.
+        return nullcontext(resolved)  # type: ignore[arg-type]
 
     @staticmethod
     def session_id(*, conversation_id: str, run_id: str) -> str:
@@ -751,7 +946,7 @@ class ScientificAgentFailureRecoveryRuntime:
         run_id: str,
         state: Mapping[str, Any] | None,
         controller_result: Any,
-        provider: LLMProvider | None,
+        provider: LLMProvider | None = None,
     ) -> FailureRecoveryRuntimeResult:
         """Inspect, observe, and invoke recovery at most once."""
 
@@ -925,51 +1120,56 @@ class ScientificAgentFailureRecoveryRuntime:
                 logical_tool_id=logical_tool_id,
                 evidence=evidence,
             )
-            service = self.service_factory.build(
-                provider=provider,
-                grant=grant,
-                session_id=session_id,
-                authority_epoch=authority_epoch,
-            )
-            # The factory normally carries the complete reviewed catalog.  A
-            # test/server factory may intentionally leave it empty; fill it
-            # before the immutable observation is built so its catalog digest
-            # remains stable on replay.
-            if hasattr(service, "tool_schemas") and not getattr(service, "tool_schemas", {}):
-                service.tool_schemas = dict(schemas)
-            if hasattr(service, "tool_semantic_boundaries") and not getattr(service, "tool_semantic_boundaries", {}):
-                service.tool_semantic_boundaries = dict(boundaries)
-            observation = existing or service.observe_failure(
-                project_id=project_id,
-                run_id=run_id,
-                controller_execution_id=snapshot.execution.controller_execution_id,
-                controller_execution_digest=snapshot.execution.execution_digest,
-                inspection_digest=inspection.inspection_digest,
-                task_id=task_id,
-                logical_tool_id=logical_tool_id,
-                evidence=evidence,
-                arguments=arguments,
-                input_artifact_digest=input_digest,
-                authority_digest=grant.grant_digest,
-                available_recovery_tools=tool_ids,
-                grant=grant,
-                session_id=session_id,
-                authority_epoch=authority_epoch,
-            )
-            request_id = "conversation-recovery-request-" + _agent_digest(
-                {
-                    "failure_digest": observation.failure_digest,
-                    "session_id": session_id,
-                    "authority_epoch": authority_epoch,
-                }
-            ).split(":", 1)[1][:40]
-            recovery = service.recover_failure(
-                observation=observation,
-                grant=grant,
-                session_id=session_id,
-                authority_epoch=authority_epoch,
-                client_request_id=request_id,
-            )
+            # Resolve the provider only after the locked, digest-verified
+            # FAILED snapshot and current grant are known.  In production the
+            # resolver is server-owned; the ordinary Conversation provider is
+            # never used when that resolver is installed.
+            with self._provider_context(fallback_provider=provider) as recovery_provider:
+                service = self.service_factory.build(
+                    provider=recovery_provider,
+                    grant=grant,
+                    session_id=session_id,
+                    authority_epoch=authority_epoch,
+                )
+                # The factory normally carries the complete reviewed catalog.
+                # A test/server factory may intentionally leave it empty; fill
+                # it before the immutable observation is built so its catalog
+                # digest remains stable on replay.
+                if hasattr(service, "tool_schemas") and not getattr(service, "tool_schemas", {}):
+                    service.tool_schemas = dict(schemas)
+                if hasattr(service, "tool_semantic_boundaries") and not getattr(service, "tool_semantic_boundaries", {}):
+                    service.tool_semantic_boundaries = dict(boundaries)
+                observation = existing or service.observe_failure(
+                    project_id=project_id,
+                    run_id=run_id,
+                    controller_execution_id=snapshot.execution.controller_execution_id,
+                    controller_execution_digest=snapshot.execution.execution_digest,
+                    inspection_digest=inspection.inspection_digest,
+                    task_id=task_id,
+                    logical_tool_id=logical_tool_id,
+                    evidence=evidence,
+                    arguments=arguments,
+                    input_artifact_digest=input_digest,
+                    authority_digest=grant.grant_digest,
+                    available_recovery_tools=tool_ids,
+                    grant=grant,
+                    session_id=session_id,
+                    authority_epoch=authority_epoch,
+                )
+                request_id = "conversation-recovery-request-" + _agent_digest(
+                    {
+                        "failure_digest": observation.failure_digest,
+                        "session_id": session_id,
+                        "authority_epoch": authority_epoch,
+                    }
+                ).split(":", 1)[1][:40]
+                recovery = service.recover_failure(
+                    observation=observation,
+                    grant=grant,
+                    session_id=session_id,
+                    authority_epoch=authority_epoch,
+                    client_request_id=request_id,
+                )
         except FailureRecoveryProviderOutcomeUnknown:
             return FailureRecoveryRuntimeResult(
                 FailureRecoveryRuntimeEligibility.FAIL_CLOSED,
@@ -1110,6 +1310,7 @@ __all__ = [
     "FailureRecoveryRuntimeEligibility",
     "FailureRecoveryRuntimeResult",
     "ScientificAgentAutonomyGrantBinding",
+    "ScientificAgentAutonomyGrantIssuer",
     "ScientificAgentAutonomyGrantStore",
     "ScientificAgentFailureRecoveryRuntime",
     "ScientificAgentFailureRecoveryServiceFactory",
