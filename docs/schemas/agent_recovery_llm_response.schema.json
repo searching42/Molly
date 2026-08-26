@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "AgentRecoveryAction": {
+      "enum": [
+        "RETRY_EXACT",
+        "TOOL_CALL",
+        "REPLAN",
+        "ASK_USER",
+        "STOP"
+      ],
+      "title": "AgentRecoveryAction",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Strict advisory response; it contains no authority or effect fields.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_recovery_llm_response.v1",
+      "default": "agent_recovery_llm_response.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "action": {
+      "$ref": "#/$defs/AgentRecoveryAction"
+    },
+    "logical_tool_id": {
+      "default": "",
+      "title": "Logical Tool Id",
+      "type": "string"
+    },
+    "arguments": {
+      "additionalProperties": true,
+      "title": "Arguments",
+      "type": "object"
+    },
+    "question": {
+      "default": "",
+      "title": "Question",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "requested_change_summary": {
+      "default": "",
+      "title": "Requested Change Summary",
+      "type": "string"
+    },
+    "confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confidence"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "AgentRecoveryLLMResponse",
+  "type": "object"
+}

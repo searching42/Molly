@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-EXECUTION-V2 — Execution Agent v2
+> Current focus: M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -125,7 +125,9 @@ M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor
         ↓
 M3.5-AUT-EXECUTION-V2 — Execution Agent v2
         ↓
-M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery
+M3.5-AUT-FAILURE-RECOVERY-FOUNDATION — Failure taxonomy and bounded recovery contract
+        ↓
+M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation
         ↓
 M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant
         ↓
@@ -246,11 +248,18 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Closed by: PR #58.
   - Definition of Done: a strict versioned `TOOL_CALL` / `ASK_USER` / `REPLAN` response and proposal contract is server-validated against a small logical scientific-tool catalog; each logical tool exposes a closed JSON Schema with bounded arguments and no physical adapter, path, host, credential, command, or worker fields; a deterministic non-executable compiler recomputes current Controller evidence, registered options, `AutonomyGrant` relation, and `SemanticBoundary`; only `SUBSET + NONE` may continue, either through the unchanged exact Controller operation or through a server-created exact bounded successor whose Permission / Authorization / StartIntent / Controller provenance is fully bound. All effect application remains through the existing Permission / Authorization / Controller chain. v1 proposal/receipt artifacts remain byte-compatible and replayable; v2 makes at most one provider call and does not retry unknown outcomes. The deterministic fast path remains ahead of v2, while `ASK_USER`, semantic boundaries, Gate/remote authority, `REPLAN`, and unsupported/future actions remain non-executable and fail closed. The production Conversation integration is server-opt-in through `AI4S_AGENT_EXECUTION_AGENT_V2_ENABLED` so historical v1 callers retain their exact contract.
 
-- [ ] **M3.5-AUT-FAILURE-RECOVERY — Failure taxonomy and bounded recovery**
+- [x] **M3.5-AUT-FAILURE-RECOVERY-FOUNDATION — Failure taxonomy and bounded recovery contract**
+  - State: `DONE`
+  - Evidence: `I/T/—`
+  - Dependency: after `M3.5-AUT-EXECUTION-V2`.
+  - Closed by: Draft PR #59 (`M3.5-AUT-FAILURE-RECOVERY-FOUNDATION`).
+  - Definition of Done: versioned server-derived failure observations classify typed failure and effect certainty independently; one recovery decision is bounded by the current AutonomyGrant, SemanticBoundary, logical-tool schemas, durable retry/replan aggregates, and the existing Permission / Authorization / StartIntent / Controller successor chain. Unknown effects fail closed with no provider retry or effect, provider calls are checkpointed at most once, immutable attempt receipts support crash/replay/concurrency reconciliation, and historical v1/v2 artifacts remain unchanged. This foundation provides the recovery contract, aggregate control plane, and trusted successor applicator; it does not yet connect a Conversation/coordinator `FAILED` continuation entrypoint. This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
+
+- [ ] **M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation**
   - State: `READY`
   - Evidence: `—/—/—`
-  - Dependency: after `M3.5-AUT-EXECUTION-V2`.
-  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+  - Dependency: after `M3.5-AUT-FAILURE-RECOVERY-FOUNDATION`.
+  - Definition of Done: the production Conversation/coordinator `FAILED` continuation invokes the foundation service with a server-published observation and current, digest-verified authority; automatic retry, logical-tool recovery, and replan successors all traverse the trusted Permission / Authorization / StartIntent / Controller chain; representative restart, duplicate, aggregate-concurrency, and exact-replay runtime evidence is captured. This item must not introduce a second Controller or execution authority.
 
 - [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
   - State: `QUEUED`

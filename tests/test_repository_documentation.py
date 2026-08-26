@@ -99,7 +99,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
     assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
     assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
-    assert "Current focus: M3.5-AUT-EXECUTION-V2 — Execution Agent v2" in roadmap
+    assert "Current focus: M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation" in roadmap
     assert "### M3.5-AUT-POLICY contract closure" in roadmap
     assert "### M3.5-AUT-L2 implementation closure" in roadmap
     assert "A new Controller action cannot inherit autonomous eligibility" in roadmap
@@ -120,6 +120,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         "M3.5-AUT-AUTH-L2",
         "M3.5-AUT-FASTPATH",
         "M3.5-AUT-EXECUTION-V2",
+        "M3.5-AUT-FAILURE-RECOVERY-FOUNDATION",
         "M3.5-AUT-FAILURE-RECOVERY",
         "M3.5-AUT-FEEDBACK",
         "M3.5-AUT-LEASE",
@@ -165,6 +166,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-AUTH-L2", "DONE"),
         ("M3.5-AUT-FASTPATH", "DONE"),
         ("M3.5-AUT-EXECUTION-V2", "DONE"),
+        ("M3.5-AUT-FAILURE-RECOVERY-FOUNDATION", "DONE"),
         ("M3.5-AUT-FAILURE-RECOVERY", "READY"),
         ("M3.5-AUT-FEEDBACK", "QUEUED"),
         ("M3.5-AUT-LEASE", "QUEUED"),
@@ -196,6 +198,16 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "State: `DONE`" in execution_v2
     assert "Evidence: `I/T/—`" in execution_v2
     assert "Closed by: PR #58." in execution_v2
+    failure_recovery_foundation = item_block(
+        active_queue, "M3.5-AUT-FAILURE-RECOVERY-FOUNDATION"
+    )
+    assert "State: `DONE`" in failure_recovery_foundation
+    assert "Evidence: `I/T/—`" in failure_recovery_foundation
+    assert "Closed by: Draft PR #59" in failure_recovery_foundation
+    failure_recovery = item_block(active_queue, "M3.5-AUT-FAILURE-RECOVERY")
+    assert "State: `READY`" in failure_recovery
+    assert "Evidence: `—/—/—`" in failure_recovery
+    assert "Conversation/coordinator `FAILED` continuation" in failure_recovery
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1

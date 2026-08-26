@@ -1,0 +1,101 @@
+{
+  "additionalProperties": false,
+  "description": "Derived budget projection rebuilt from unique durable receipts.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_recovery_budget_evidence.v1",
+      "default": "agent_recovery_budget_evidence.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evidence_id": {
+      "default": "",
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "evidence_digest": {
+      "default": "",
+      "title": "Evidence Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "autonomy_grant_id": {
+      "title": "Autonomy Grant Id",
+      "type": "string"
+    },
+    "autonomy_grant_digest": {
+      "title": "Autonomy Grant Digest",
+      "type": "string"
+    },
+    "authority_epoch": {
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "retries_used": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Retries Used",
+      "type": "integer"
+    },
+    "replans_used": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Replans Used",
+      "type": "integer"
+    },
+    "retries_remaining": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Retries Remaining",
+      "type": "integer"
+    },
+    "replans_remaining": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Replans Remaining",
+      "type": "integer"
+    },
+    "receipt_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Receipt Ids",
+      "type": "array"
+    },
+    "receipt_roster_digest": {
+      "default": "",
+      "title": "Receipt Roster Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "session_id",
+    "autonomy_grant_id",
+    "autonomy_grant_digest",
+    "authority_epoch"
+  ],
+  "title": "AgentRecoveryBudgetEvidence",
+  "type": "object"
+}
