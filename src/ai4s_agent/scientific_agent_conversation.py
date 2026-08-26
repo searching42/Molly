@@ -46,6 +46,10 @@ from ai4s_agent.scientific_agent_autonomy_l1 import (
 from ai4s_agent.scientific_agent_autonomy_policy import (
     classify_current_controller_inspection,
 )
+from ai4s_agent.scientific_agent_deterministic_fastpath import (
+    DeterministicFastPathClassification,
+    classify_deterministic_successor,
+)
 from ai4s_agent.llm_provider import LLMProvider
 from ai4s_agent.remote_resource_authority import (
     RemoteResourceAuthorityDenied,
@@ -127,6 +131,7 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
     {
         "EXECUTION_AGENT_PAUSED",
         "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
+        "DETERMINISTIC_FASTPATH_STEP",
     }
 )
 ACTIVE_SESSION_STATUSES = frozenset(
@@ -486,6 +491,13 @@ class ScientificAgentConversationSessionService:
             "last_autonomy_decision_id": "",
             "last_autonomy_decision_digest": "",
             "last_autonomy_inspection_digest": "",
+            "last_autonomy_fastpath_schema_version": "",
+            "last_autonomy_fastpath_decision_id": "",
+            "last_autonomy_fastpath_decision_digest": "",
+            "last_autonomy_fastpath_inspection_digest": "",
+            "last_autonomy_fastpath_controller_action": "",
+            "last_autonomy_fastpath_decision_source": "",
+            "last_autonomy_fastpath_llm_skipped": False,
             "autonomy_budget_usage": {},
             "autonomy_budget_limits": {},
             "autonomy_task_graph": {},
@@ -689,6 +701,13 @@ class ScientificAgentConversationSessionService:
                 "last_autonomy_decision_id",
                 "last_autonomy_decision_digest",
                 "last_autonomy_inspection_digest",
+                "last_autonomy_fastpath_schema_version",
+                "last_autonomy_fastpath_decision_id",
+                "last_autonomy_fastpath_decision_digest",
+                "last_autonomy_fastpath_inspection_digest",
+                "last_autonomy_fastpath_controller_action",
+                "last_autonomy_fastpath_decision_source",
+                "last_autonomy_fastpath_llm_skipped",
                 "autonomy_budget_usage",
                 "autonomy_budget_limits",
                 "autonomy_task_graph",
@@ -774,6 +793,13 @@ class ScientificAgentConversationSessionService:
                 "last_autonomy_decision_id",
                 "last_autonomy_decision_digest",
                 "last_autonomy_inspection_digest",
+                "last_autonomy_fastpath_schema_version",
+                "last_autonomy_fastpath_decision_id",
+                "last_autonomy_fastpath_decision_digest",
+                "last_autonomy_fastpath_inspection_digest",
+                "last_autonomy_fastpath_controller_action",
+                "last_autonomy_fastpath_decision_source",
+                "last_autonomy_fastpath_llm_skipped",
                 "autonomy_budget_usage",
                 "autonomy_budget_limits",
                 "autonomy_task_graph",
@@ -2644,6 +2670,28 @@ class ScientificAgentConversationSessionService:
             now=self.clock(),
         )
 
+    def _observed_l1_llm_calls(
+        self,
+        *,
+        controller_result: ControllerAdvanceResult | None,
+    ) -> int | None:
+        """Read the durable L1 call count for a public turn delta.
+
+        A configured provider is not evidence that the Execution Agent was
+        called.  The conversation result therefore uses the same durable
+        evidence source as the L1 budget guard and treats unavailable evidence
+        as unknown rather than manufacturing a call count.
+        """
+
+        if controller_result is None:
+            return None
+        try:
+            return self._l1_budget_snapshot(
+                controller_result=controller_result
+            ).llm_calls_used
+        except AutonomyL1EvidenceError:
+            return None
+
     def _l1_policy_guard(
         self,
         *,
@@ -2747,6 +2795,20 @@ class ScientificAgentConversationSessionService:
                 }
             )
         return updates
+
+    @staticmethod
+    def _deterministic_fastpath_updates(decision: Any) -> dict[str, Any]:
+        """Project the non-authoritative fast-path decision for observers."""
+
+        return {
+            "last_autonomy_fastpath_schema_version": decision.schema_version,
+            "last_autonomy_fastpath_decision_id": decision.decision_id,
+            "last_autonomy_fastpath_decision_digest": decision.decision_digest,
+            "last_autonomy_fastpath_inspection_digest": decision.inspection_digest,
+            "last_autonomy_fastpath_controller_action": decision.controller_action,
+            "last_autonomy_fastpath_decision_source": "deterministic_fast_path",
+            "last_autonomy_fastpath_llm_skipped": True,
+        }
 
     @staticmethod
     def _l1_human_state(
@@ -2887,6 +2949,7 @@ class ScientificAgentConversationSessionService:
         state: dict[str, Any],
         controller_result: ControllerAdvanceResult,
         operation: str,
+        request_identity: str | None = None,
     ) -> ControllerAdvanceResult:
         """Select at most one deterministic Controller action.
 
@@ -2895,10 +2958,18 @@ class ScientificAgentConversationSessionService:
         projection; it never calls a scientific adapter or remote transport.
         Including the session revision in the request id makes a later tick a
         fresh observation while preserving retry idempotency for the same tick.
+        A deterministic fast-path decision may supply its immutable digest as
+        the request identity so a crash before Controller completion replays
+        the exact request rather than dispatching a second one.
         """
 
         execution = controller_result.execution
         inspection = controller_result.inspection
+        request_suffix = (
+            request_identity
+            if request_identity is not None
+            else str(state.get("revision") or 0)
+        )
         request = AgentHarnessControllerAdvanceRequest(
             expected_controller_execution_digest=execution.execution_digest,
             client_request_id=_request_id(
@@ -2907,7 +2978,7 @@ class ScientificAgentConversationSessionService:
                 conversation_id,
                 execution.controller_execution_id,
                 inspection.inspection_digest,
-                str(state.get("revision") or 0),
+                request_suffix,
             ),
         )
         return self.controller.advance(
@@ -3936,7 +4007,11 @@ class ScientificAgentConversationSessionService:
             try:
                 policy_decision, budget, boundary, stop_reasons = self._l1_policy_guard(
                     controller_result=controller_result,
-                    needs_llm=provider is not None,
+                    # The existing L1 policy is checked before the fast-path
+                    # classifier.  LLM budget is charged only if the
+                    # classifier proves that the existing Execution Agent
+                    # path is still needed.
+                    needs_llm=False,
                 )
             except (AutonomyL1EvidenceError, ValueError):
                 state = self._transition(
@@ -4027,6 +4102,152 @@ class ScientificAgentConversationSessionService:
                     },
                 )
                 return controller_result, state, "prohibited"
+
+            fastpath_decision = None
+            if not stop_reasons:
+                fastpath_decision = classify_deterministic_successor(
+                    execution=controller_result.execution,
+                    inspection=controller_result.inspection,
+                    policy_decision=policy_decision,
+                )
+                if (
+                    fastpath_decision.classification
+                    is DeterministicFastPathClassification.FAIL_CLOSED
+                ):
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="unknown",
+                        reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                        updates={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            **self._l1_projection_updates(
+                                decision=policy_decision,
+                                snapshot=budget,
+                                status="prohibited",
+                                stop_reason="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                            ),
+                            **self._deterministic_fastpath_updates(fastpath_decision),
+                        },
+                        event_type="autonomy.deterministic_fastpath.rejected",
+                        event_data={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            "next_action": inspection.next_action.value,
+                            "decision_source": "deterministic_fast_path",
+                            "classification": fastpath_decision.classification.value,
+                        },
+                    )
+                    return controller_result, state, "fastpath_fail_closed"
+                if (
+                    fastpath_decision.classification
+                    is DeterministicFastPathClassification.DETERMINISTIC
+                ):
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="running",
+                        reason_code="DETERMINISTIC_FASTPATH_STEP",
+                        updates={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            **self._l1_projection_updates(
+                                decision=policy_decision,
+                                snapshot=budget,
+                                status="eligible",
+                            ),
+                            **self._deterministic_fastpath_updates(fastpath_decision),
+                        },
+                        event_type="autonomy.deterministic_fastpath",
+                        message="当前 Controller 状态只有一个已验证的确定性后继；继续交由 Controller 执行。",
+                        event_data={
+                            "controller_status": status.value,
+                            "current_task_id": inspection.current_task_id,
+                            "next_action": inspection.next_action.value,
+                            "decision_id": fastpath_decision.decision_id,
+                            "decision_digest": fastpath_decision.decision_digest,
+                            "decision_source": "deterministic_fast_path",
+                            "execution_agent_llm_skipped": True,
+                        },
+                    )
+                    try:
+                        controller_result = self._advance_controller_once(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            state=state,
+                            controller_result=controller_result,
+                            operation="deterministic-fastpath",
+                            request_identity=fastpath_decision.decision_digest,
+                        )
+                    except (ScientificAgentHarnessControllerError, ValueError) as exc:
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="stale_authority",
+                            reason_code="CONVERSATIONAL_AUTHORITY_STALE",
+                            updates={
+                                **self._l1_projection_updates(
+                                    decision=policy_decision,
+                                    snapshot=budget,
+                                    status="prohibited",
+                                    stop_reason="CONVERSATIONAL_AUTHORITY_STALE",
+                                ),
+                                **self._deterministic_fastpath_updates(
+                                    fastpath_decision
+                                ),
+                            },
+                            event_type="autonomy.deterministic_fastpath.failed",
+                            event_data={
+                                "decision_source": "deterministic_fast_path",
+                                "execution_agent_llm_skipped": True,
+                            },
+                        )
+                        raise ScientificAgentConversationStaleAuthority(
+                            "the deterministic Controller successor could not be applied exactly"
+                        ) from exc
+                    observed_action = ""
+                    if controller_result.receipt is not None:
+                        observed_action = controller_result.receipt.action_kind.value
+                    elif controller_result.decision is not None:
+                        observed_action = controller_result.decision.action_kind.value
+                    if observed_action != fastpath_decision.controller_action:
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="stale_authority",
+                            reason_code="CONVERSATIONAL_AUTHORITY_STALE",
+                            updates={
+                                **self._l1_projection_updates(
+                                    decision=policy_decision,
+                                    snapshot=budget,
+                                    status="prohibited",
+                                    stop_reason="CONVERSATIONAL_AUTHORITY_STALE",
+                                ),
+                                **self._deterministic_fastpath_updates(
+                                    fastpath_decision
+                                ),
+                            },
+                            event_type="autonomy.deterministic_fastpath.rejected",
+                            event_data={
+                                "decision_source": "deterministic_fast_path",
+                                "execution_agent_llm_skipped": True,
+                            },
+                        )
+                        return controller_result, state, "stale"
+                    try:
+                        post_attempt_budget = self._l1_budget_snapshot(
+                            controller_result=controller_result
+                        )
+                    except AutonomyL1EvidenceError:
+                        post_attempt_budget = budget
+                    continue
+                if provider is not None:
+                    stop_reasons = budget_stop_reason_codes(
+                        budget,
+                        action=inspection.next_action,
+                        needs_llm=True,
+                    )
             if stop_reasons:
                 reason = stop_reasons[0]
                 state = self._transition(
@@ -4316,6 +4537,8 @@ class ScientificAgentConversationSessionService:
 
     @staticmethod
     def _active_execution_message(state: dict[str, Any]) -> str:
+        if state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP":
+            return "当前确定性后继仍由 Harness Controller 管理；下一次有界 tick 或对话将重新读取并验证当前状态。"
         if state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS:
             return "当前有界步骤已暂停；下一次有界 tick 或对话将恢复当前 Controller 的 Execution Agent 决策。"
         if state.get("reason_code") == "REMOTE_EXECUTION_RUNNING":
@@ -4430,10 +4653,14 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationStaleAuthority(
                 "active Controller execution digest no longer matches the session"
             )
-        if (
-            state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
-            and provider is not None
+        resumable_reason = state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
+        if resumable_reason and (
+            provider is not None
+            or state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP"
         ):
+            llm_calls_before = self._observed_l1_llm_calls(
+                controller_result=controller_result
+            )
             controller_result, resumed_state, _stop_reason = self._auto_progress(
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -4446,6 +4673,17 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationSessionError(
                     "paused Agent session did not return a Controller projection"
                 )
+            llm_calls_after = self._observed_l1_llm_calls(
+                controller_result=controller_result
+            )
+            if llm_calls_before is None or llm_calls_after is None:
+                raise ScientificAgentConversationSessionError(
+                    "durable L1 LLM-call evidence is unavailable for this continuation"
+                )
+            # ``provider is not None`` only says that a provider was
+            # configured.  The public flag must describe an actual durable
+            # Execution Agent call during this continuation.
+            llm_used = llm_calls_after > llm_calls_before
             return self._active_execution_result(
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -4453,7 +4691,7 @@ class ScientificAgentConversationSessionService:
                 state=resumed_state,
                 publication=publication,
                 controller_result=controller_result,
-                llm_used=True,
+                llm_used=llm_used,
             )
         return self._active_execution_result(
             project_id=project_id,

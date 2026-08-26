@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor
+> Current focus: M3.5-AUT-EXECUTION-V2 — Execution Agent v2
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -231,14 +231,16 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Closed by: PR #55.
   - Definition of Done: L2 uses `AuthorityRelation` and independent `SemanticBoundary` classification; historical v1 uses exact option authority, scope-aware v2 uses the registered schema range, and authority-aware application preserves `agent_plan_revision_application_receipt.v2` provenance.
 
-- [ ] **M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-FASTPATH — Minimal deterministic-successor refactor**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-AUTH-L2` and the minimal golden-path regression guard.
+  - Closed by: PR #57.
   - Definition of Done: when the current verified Controller state has exactly one legal, authorized, argument-free deterministic successor with no semantic boundary, the server may skip the Execution Agent LLM call. The path creates no authority, never executes effects directly, never bypasses Controller, does not choose scientific branches or parameters, does not approve Gates, does not handle `UNKNOWN_EFFECT`, retry, or replan, and does not become a second state machine.
+  - Implementation note: v1 reviews only `ADOPT_COMPLETED_TASK` after verified local publication; all other and future Controller actions remain on the existing Execution Agent or human/fail-closed paths. The deterministic decision is a recomputed, non-executable projection.
 
 - [ ] **M3.5-AUT-EXECUTION-V2 — Execution Agent v2**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-FASTPATH`.
   - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
