@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import ai4s_agent.scientific_agent_deterministic_fastpath as fastpath_module
+
 from ai4s_agent.conversation_store import ConversationStore
 from ai4s_agent.scientific_agent_autonomy_policy import (
     classify_current_controller_inspection,
@@ -13,6 +15,8 @@ from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
 from ai4s_agent.scientific_agent_deterministic_fastpath import (
+    DETERMINISTIC_FASTPATH_POLICY_DIGEST,
+    DETERMINISTIC_FASTPATH_POLICY_VERSION,
     DeterministicFastPathClassification,
     DeterministicFastPathVerificationError,
     classify_deterministic_successor,
@@ -205,7 +209,7 @@ def _session_state(service, result):
 
 
 def test_unique_verified_local_successor_is_deterministic(tmp_path: Path) -> None:
-    _storage, _control_store, _controller, _initial, completed, _policy, decision = (
+    _storage, _control_store, _controller, _initial, completed, policy, decision = (
         _deterministic_fixture(tmp_path)
     )
 
@@ -216,6 +220,12 @@ def test_unique_verified_local_successor_is_deterministic(tmp_path: Path) -> Non
     assert decision.executable is False
     assert decision.controller_execution_digest == completed.execution.execution_digest
     assert decision.inspection_digest == completed.inspection.inspection_digest
+    assert decision.policy_version == DETERMINISTIC_FASTPATH_POLICY_VERSION
+    assert decision.policy_digest == DETERMINISTIC_FASTPATH_POLICY_DIGEST
+    assert decision.autonomy_policy_version == policy.policy_version
+    assert decision.autonomy_policy_digest == policy.policy_digest
+    assert decision.autonomy_policy_decision_id == policy.decision_id
+    assert decision.autonomy_policy_decision_digest == policy.decision_digest
 
 
 def test_ordinary_local_execute_state_is_not_deterministic_and_falls_back(
@@ -416,6 +426,109 @@ def test_forged_serialized_decision_is_recomputed_and_rejected(tmp_path: Path) -
             policy_decision=changed_policy,
             decision=decision,
         )
+
+
+def test_fast_path_policy_identity_change_rejects_old_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _storage, _control_store, _controller, _initial, completed, policy, decision = (
+        _deterministic_fixture(tmp_path)
+    )
+    monkeypatch.setattr(
+        fastpath_module,
+        "DETERMINISTIC_FASTPATH_POLICY_VERSION",
+        "scientific-agent-deterministic-fastpath-policy.v2",
+    )
+    monkeypatch.setattr(
+        fastpath_module,
+        "DETERMINISTIC_FASTPATH_POLICY_DIGEST",
+        _agent_digest({"policy": "B"}),
+    )
+
+    with pytest.raises(DeterministicFastPathVerificationError):
+        verify_deterministic_fast_path_decision(
+            execution=completed.execution,
+            inspection=completed.inspection,
+            policy_decision=policy,
+            decision=decision,
+        )
+
+
+def test_session_result_reports_zero_llm_calls_for_fast_path_recovery(
+    tmp_path: Path,
+) -> None:
+    storage, _control_store, controller, _initial, completed, _policy, _decision = (
+        _deterministic_fixture(tmp_path)
+    )
+    service = _conversation_service(storage=storage, controller=controller)
+    state = _session_state(service, completed)
+    service._transition(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        status="running",
+        reason_code="DETERMINISTIC_FASTPATH_STEP",
+        updates={
+            "controller_status": completed.inspection.status.value,
+            "current_task_id": completed.inspection.current_task_id,
+        },
+        event_type="test.fastpath.recovery_pending",
+    )
+
+    class ExplodingProvider:
+        calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            raise AssertionError("LLM must not be called")
+
+    provider = ExplodingProvider()
+    result = service.handle_turn(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        run_id=str(state["run_id"]),
+        provider=provider,
+        provider_binding_digest="",
+    )
+
+    assert provider.calls == 0
+    assert result.llm_used is False
+
+
+def test_session_result_reports_llm_call_for_execution_agent_fallback(
+    tmp_path: Path,
+) -> None:
+    storage, controller, initial = _gated_execution_fixture(tmp_path)
+    service = _conversation_service(storage=storage, controller=controller)
+    state = _session_state(service, initial)
+    service._transition(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        status="running",
+        reason_code="EXECUTION_AGENT_PAUSED",
+        updates={
+            "controller_status": initial.inspection.status.value,
+            "current_task_id": initial.inspection.current_task_id,
+        },
+        event_type="test.fastpath.execution_agent_pending",
+    )
+    provider = CountingStubProvider(
+        response={
+            "selected_tool_id": "controller.advance_current.v1",
+            "decision_summary": "Use the existing Controller advance path.",
+        }
+    )
+
+    result = service.handle_turn(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        run_id=str(state["run_id"]),
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert provider.calls == 1
+    assert result.llm_used is True
 
 
 def test_fast_path_controller_request_replays_without_duplicate_dispatch(

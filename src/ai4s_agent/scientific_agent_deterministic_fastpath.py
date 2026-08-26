@@ -122,11 +122,25 @@ class DeterministicFastPathDecision(BaseModel):
     successor_cardinality: int = Field(default=0, ge=0, le=64)
     classification: DeterministicFastPathClassification
     reason_codes: list[str]
+    # ``policy_*`` is always the closed-world deterministic fast-path policy.
+    # The verified autonomy policy is recorded separately below so the
+    # decision identity cannot change meaning based on its classification.
     policy_version: str
     policy_digest: str
+    autonomy_policy_version: str
+    autonomy_policy_digest: str
+    autonomy_policy_decision_id: str
+    autonomy_policy_decision_digest: str
     executable: Literal[False] = False
 
-    @field_validator("decision_id", "policy_version", "controller_execution_id", "controller_action")
+    @field_validator(
+        "decision_id",
+        "policy_version",
+        "autonomy_policy_version",
+        "autonomy_policy_decision_id",
+        "controller_execution_id",
+        "controller_action",
+    )
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(
@@ -135,7 +149,14 @@ class DeterministicFastPathDecision(BaseModel):
             allow_empty=info.field_name == "decision_id",
         )
 
-    @field_validator("controller_execution_digest", "inspection_digest", "policy_digest", "decision_digest")
+    @field_validator(
+        "controller_execution_digest",
+        "inspection_digest",
+        "policy_digest",
+        "autonomy_policy_digest",
+        "autonomy_policy_decision_digest",
+        "decision_digest",
+    )
     @classmethod
     def validate_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(
@@ -167,6 +188,11 @@ class DeterministicFastPathDecision(BaseModel):
 
     @model_validator(mode="after")
     def validate_decision(self) -> "DeterministicFastPathDecision":
+        if (
+            self.policy_version != DETERMINISTIC_FASTPATH_POLICY_VERSION
+            or self.policy_digest != DETERMINISTIC_FASTPATH_POLICY_DIGEST
+        ):
+            raise ValueError("fast-path decision is bound to an unknown policy identity")
         if self.successor_cardinality != len(self.legal_successor_actions):
             raise ValueError("fast-path successor cardinality does not match evidence")
         if self.classification is DeterministicFastPathClassification.DETERMINISTIC:
@@ -203,6 +229,14 @@ _UNKNOWN_EXECUTION_DIGEST = _agent_digest(
 )
 _UNKNOWN_INSPECTION_DIGEST = _agent_digest(
     {"schema_version": "deterministic_fastpath_unknown_inspection.v1"}
+)
+_UNKNOWN_AUTONOMY_POLICY_VERSION = "unknown-autonomy-policy.v1"
+_UNKNOWN_AUTONOMY_POLICY_DIGEST = _agent_digest(
+    {"schema_version": "deterministic_fastpath_unknown_autonomy_policy.v1"}
+)
+_UNKNOWN_AUTONOMY_DECISION_ID = "unknown_autonomy_policy_decision"
+_UNKNOWN_AUTONOMY_DECISION_DIGEST = _agent_digest(
+    {"schema_version": "deterministic_fastpath_unknown_autonomy_decision.v1"}
 )
 
 
@@ -243,6 +277,10 @@ def _build_decision(
     reason_codes: tuple[str, ...],
     policy_version: str,
     policy_digest: str,
+    autonomy_policy_version: str,
+    autonomy_policy_digest: str,
+    autonomy_policy_decision_id: str,
+    autonomy_policy_decision_digest: str,
 ) -> DeterministicFastPathDecision:
     return DeterministicFastPathDecision(
         controller_execution_id=execution_id,
@@ -255,7 +293,29 @@ def _build_decision(
         reason_codes=list(reason_codes),
         policy_version=policy_version,
         policy_digest=policy_digest,
+        autonomy_policy_version=autonomy_policy_version,
+        autonomy_policy_digest=autonomy_policy_digest,
+        autonomy_policy_decision_id=autonomy_policy_decision_id,
+        autonomy_policy_decision_digest=autonomy_policy_decision_digest,
         executable=False,
+    )
+
+
+def _autonomy_policy_provenance(
+    policy_decision: Any,
+) -> tuple[str, str, str, str]:
+    if isinstance(policy_decision, AgentAutonomyPolicyDecision):
+        return (
+            policy_decision.policy_version,
+            policy_decision.policy_digest,
+            policy_decision.decision_id,
+            policy_decision.decision_digest,
+        )
+    return (
+        _UNKNOWN_AUTONOMY_POLICY_VERSION,
+        _UNKNOWN_AUTONOMY_POLICY_DIGEST,
+        _UNKNOWN_AUTONOMY_DECISION_ID,
+        _UNKNOWN_AUTONOMY_DECISION_DIGEST,
     )
 
 
@@ -263,8 +323,15 @@ def _fail_closed(
     *,
     execution: Any,
     inspection: Any,
+    policy_decision: Any,
     reason: str,
 ) -> DeterministicFastPathDecision:
+    (
+        autonomy_policy_version,
+        autonomy_policy_digest,
+        autonomy_policy_decision_id,
+        autonomy_policy_decision_digest,
+    ) = _autonomy_policy_provenance(policy_decision)
     return _build_decision(
         execution_id=_binding_identifier(
             getattr(execution, "controller_execution_id", ""),
@@ -284,6 +351,10 @@ def _fail_closed(
         reason_codes=(reason,),
         policy_version=DETERMINISTIC_FASTPATH_POLICY_VERSION,
         policy_digest=DETERMINISTIC_FASTPATH_POLICY_DIGEST,
+        autonomy_policy_version=autonomy_policy_version,
+        autonomy_policy_digest=autonomy_policy_digest,
+        autonomy_policy_decision_id=autonomy_policy_decision_id,
+        autonomy_policy_decision_digest=autonomy_policy_decision_digest,
     )
 
 
@@ -331,8 +402,12 @@ def classify_deterministic_successor(
             "execution_digest": execution.execution_digest,
             "inspection_digest": inspection.inspection_digest,
             "controller_action": action_token,
-            "policy_version": current_policy.policy_version,
-            "policy_digest": current_policy.policy_digest,
+            "policy_version": DETERMINISTIC_FASTPATH_POLICY_VERSION,
+            "policy_digest": DETERMINISTIC_FASTPATH_POLICY_DIGEST,
+            "autonomy_policy_version": current_policy.policy_version,
+            "autonomy_policy_digest": current_policy.policy_digest,
+            "autonomy_policy_decision_id": current_policy.decision_id,
+            "autonomy_policy_decision_digest": current_policy.decision_digest,
         }
         if current_policy.classification is AgentAutonomyActionClass.REQUIRE_HUMAN:
             return _build_decision(
@@ -391,12 +466,14 @@ def classify_deterministic_successor(
         return _fail_closed(
             execution=execution,
             inspection=inspection,
+            policy_decision=policy_decision,
             reason="FASTPATH_CURRENT_EVIDENCE_INVALID",
         )
     except (TypeError, ValueError):
         return _fail_closed(
             execution=execution,
             inspection=inspection,
+            policy_decision=policy_decision,
             reason="FASTPATH_CURRENT_EVIDENCE_INVALID",
         )
 

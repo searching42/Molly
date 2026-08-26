@@ -2670,6 +2670,28 @@ class ScientificAgentConversationSessionService:
             now=self.clock(),
         )
 
+    def _observed_l1_llm_calls(
+        self,
+        *,
+        controller_result: ControllerAdvanceResult | None,
+    ) -> int | None:
+        """Read the durable L1 call count for a public turn delta.
+
+        A configured provider is not evidence that the Execution Agent was
+        called.  The conversation result therefore uses the same durable
+        evidence source as the L1 budget guard and treats unavailable evidence
+        as unknown rather than manufacturing a call count.
+        """
+
+        if controller_result is None:
+            return None
+        try:
+            return self._l1_budget_snapshot(
+                controller_result=controller_result
+            ).llm_calls_used
+        except AutonomyL1EvidenceError:
+            return None
+
     def _l1_policy_guard(
         self,
         *,
@@ -4636,6 +4658,9 @@ class ScientificAgentConversationSessionService:
             provider is not None
             or state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP"
         ):
+            llm_calls_before = self._observed_l1_llm_calls(
+                controller_result=controller_result
+            )
             controller_result, resumed_state, _stop_reason = self._auto_progress(
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -4648,6 +4673,17 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationSessionError(
                     "paused Agent session did not return a Controller projection"
                 )
+            llm_calls_after = self._observed_l1_llm_calls(
+                controller_result=controller_result
+            )
+            if llm_calls_before is None or llm_calls_after is None:
+                raise ScientificAgentConversationSessionError(
+                    "durable L1 LLM-call evidence is unavailable for this continuation"
+                )
+            # ``provider is not None`` only says that a provider was
+            # configured.  The public flag must describe an actual durable
+            # Execution Agent call during this continuation.
+            llm_used = llm_calls_after > llm_calls_before
             return self._active_execution_result(
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -4655,7 +4691,7 @@ class ScientificAgentConversationSessionService:
                 state=resumed_state,
                 publication=publication,
                 controller_result=controller_result,
-                llm_used=provider is not None,
+                llm_used=llm_used,
             )
         return self._active_execution_result(
             project_id=project_id,
