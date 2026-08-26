@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "AgentEffectCertainty": {
+      "enum": [
+        "NO_EFFECT_CONFIRMED",
+        "EFFECT_COMMITTED",
+        "EFFECT_FAILED_CONFIRMED",
+        "EFFECT_UNKNOWN"
+      ],
+      "title": "AgentEffectCertainty",
+      "type": "string"
+    },
+    "AgentFailureClass": {
+      "enum": [
+        "TRANSIENT",
+        "PARAMETER_RECOVERABLE",
+        "ALTERNATIVE_TOOL_AVAILABLE",
+        "INPUT_EVIDENCE_INSUFFICIENT",
+        "AUTHORITY_EXPANSION_REQUIRED",
+        "SEMANTIC_REVIEW_REQUIRED",
+        "UNKNOWN_EFFECT",
+        "NONRECOVERABLE"
+      ],
+      "title": "AgentFailureClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Authoritative immutable recovery input, derived only by the server.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_failure_observation.v1",
+      "default": "agent_failure_observation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "failure_id": {
+      "default": "",
+      "title": "Failure Id",
+      "type": "string"
+    },
+    "failure_digest": {
+      "default": "",
+      "title": "Failure Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "logical_tool_id": {
+      "title": "Logical Tool Id",
+      "type": "string"
+    },
+    "source_attempt_id": {
+      "default": "",
+      "title": "Source Attempt Id",
+      "type": "string"
+    },
+    "source_attempt_digest": {
+      "default": "",
+      "title": "Source Attempt Digest",
+      "type": "string"
+    },
+    "failure_class": {
+      "$ref": "#/$defs/AgentFailureClass"
+    },
+    "effect_certainty": {
+      "$ref": "#/$defs/AgentEffectCertainty"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "source_receipt_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Receipt Ids",
+      "type": "array"
+    },
+    "source_receipt_digests": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Receipt Digests",
+      "type": "array"
+    },
+    "input_artifact_digest": {
+      "default": "",
+      "title": "Input Artifact Digest",
+      "type": "string"
+    },
+    "arguments_digest": {
+      "default": "",
+      "title": "Arguments Digest",
+      "type": "string"
+    },
+    "authority_digest": {
+      "default": "",
+      "title": "Authority Digest",
+      "type": "string"
+    },
+    "session_id": {
+      "default": "",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "authority_epoch": {
+      "default": "",
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "default": "",
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "current_arguments": {
+      "additionalProperties": true,
+      "title": "Current Arguments",
+      "type": "object"
+    },
+    "available_recovery_tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Available Recovery Tools",
+      "type": "array"
+    },
+    "retry_count_used": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Retry Count Used",
+      "type": "integer"
+    },
+    "replan_count_used": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Replan Count Used",
+      "type": "integer"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "inspection_digest",
+    "task_id",
+    "logical_tool_id",
+    "failure_class",
+    "effect_certainty",
+    "policy_version",
+    "policy_digest"
+  ],
+  "title": "AgentFailureObservation",
+  "type": "object"
+}

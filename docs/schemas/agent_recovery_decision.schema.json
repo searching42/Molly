@@ -1,0 +1,166 @@
+{
+  "$defs": {
+    "AgentRecoveryAction": {
+      "enum": [
+        "RETRY_EXACT",
+        "TOOL_CALL",
+        "REPLAN",
+        "ASK_USER",
+        "STOP"
+      ],
+      "title": "AgentRecoveryAction",
+      "type": "string"
+    },
+    "AgentRecoveryOutcome": {
+      "enum": [
+        "COMMITTED",
+        "REPLAYED",
+        "REQUIRE_HUMAN",
+        "STOPPED",
+        "FAILED",
+        "RECONCILED"
+      ],
+      "title": "AgentRecoveryOutcome",
+      "type": "string"
+    },
+    "AuthorityRelation": {
+      "description": "Relationship between a proposed authority scope and an existing grant.",
+      "enum": [
+        "SUBSET",
+        "EQUIVALENT",
+        "EXPANSION",
+        "INCOMPARABLE"
+      ],
+      "title": "AuthorityRelation",
+      "type": "string"
+    },
+    "SemanticBoundary": {
+      "description": "Human scientific boundaries independent of resource authority.",
+      "enum": [
+        "NONE",
+        "SCIENTIFIC_CONFIRMATION",
+        "GOAL_CHANGE",
+        "DATASET_CHANGE",
+        "EXTERNAL_SHARING_CHANGE",
+        "PUBLICATION",
+        "PROMOTION",
+        "IRREVERSIBLE_EFFECT"
+      ],
+      "title": "SemanticBoundary",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Server-derived, non-executable binding of one recovery choice.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_recovery_decision.v1",
+      "default": "agent_recovery_decision.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "decision_id": {
+      "default": "",
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "decision_digest": {
+      "default": "",
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "failure_id": {
+      "title": "Failure Id",
+      "type": "string"
+    },
+    "failure_digest": {
+      "title": "Failure Digest",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "recovery_action": {
+      "$ref": "#/$defs/AgentRecoveryAction"
+    },
+    "selected_logical_tool_id": {
+      "default": "",
+      "title": "Selected Logical Tool Id",
+      "type": "string"
+    },
+    "selected_arguments": {
+      "additionalProperties": true,
+      "title": "Selected Arguments",
+      "type": "object"
+    },
+    "provider_response_digest": {
+      "default": "",
+      "title": "Provider Response Digest",
+      "type": "string"
+    },
+    "authority_relation": {
+      "$ref": "#/$defs/AuthorityRelation"
+    },
+    "semantic_boundary": {
+      "$ref": "#/$defs/SemanticBoundary"
+    },
+    "auto_apply": {
+      "default": false,
+      "title": "Auto Apply",
+      "type": "boolean"
+    },
+    "retry_ordinal": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Retry Ordinal",
+      "type": "integer"
+    },
+    "replan_ordinal": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Replan Ordinal",
+      "type": "integer"
+    },
+    "provider_call_count": {
+      "default": 0,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Provider Call Count",
+      "type": "integer"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "outcome": {
+      "$ref": "#/$defs/AgentRecoveryOutcome",
+      "default": "STOPPED"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "failure_id",
+    "failure_digest",
+    "observation_digest",
+    "recovery_action",
+    "authority_relation",
+    "semantic_boundary"
+  ],
+  "title": "AgentRecoveryDecision",
+  "type": "object"
+}

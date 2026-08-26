@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "AgentRecoveryAction": {
+      "enum": [
+        "RETRY_EXACT",
+        "TOOL_CALL",
+        "REPLAN",
+        "ASK_USER",
+        "STOP"
+      ],
+      "title": "AgentRecoveryAction",
+      "type": "string"
+    },
+    "AgentRecoveryOutcome": {
+      "enum": [
+        "COMMITTED",
+        "REPLAYED",
+        "REQUIRE_HUMAN",
+        "STOPPED",
+        "FAILED",
+        "RECONCILED"
+      ],
+      "title": "AgentRecoveryOutcome",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable no-replace recovery attempt and effect provenance receipt.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_recovery_attempt_receipt.v1",
+      "default": "agent_recovery_attempt_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "receipt_id": {
+      "default": "",
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "receipt_digest": {
+      "default": "",
+      "title": "Receipt Digest",
+      "type": "string"
+    },
+    "failure_id": {
+      "title": "Failure Id",
+      "type": "string"
+    },
+    "failure_digest": {
+      "title": "Failure Digest",
+      "type": "string"
+    },
+    "recovery_decision_id": {
+      "title": "Recovery Decision Id",
+      "type": "string"
+    },
+    "recovery_decision_digest": {
+      "title": "Recovery Decision Digest",
+      "type": "string"
+    },
+    "recovery_action": {
+      "$ref": "#/$defs/AgentRecoveryAction"
+    },
+    "retry_ordinal": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Retry Ordinal",
+      "type": "integer"
+    },
+    "replan_ordinal": {
+      "default": 0,
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Replan Ordinal",
+      "type": "integer"
+    },
+    "baseline_authorization_id": {
+      "default": "",
+      "title": "Baseline Authorization Id",
+      "type": "string"
+    },
+    "baseline_authorization_digest": {
+      "default": "",
+      "title": "Baseline Authorization Digest",
+      "type": "string"
+    },
+    "autonomy_grant_id": {
+      "default": "",
+      "title": "Autonomy Grant Id",
+      "type": "string"
+    },
+    "autonomy_grant_digest": {
+      "default": "",
+      "title": "Autonomy Grant Digest",
+      "type": "string"
+    },
+    "session_id": {
+      "default": "",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "authority_epoch": {
+      "default": "",
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "successor_proposal_id": {
+      "default": "",
+      "title": "Successor Proposal Id",
+      "type": "string"
+    },
+    "successor_proposal_digest": {
+      "default": "",
+      "title": "Successor Proposal Digest",
+      "type": "string"
+    },
+    "successor_authorization_id": {
+      "default": "",
+      "title": "Successor Authorization Id",
+      "type": "string"
+    },
+    "successor_start_intent_id": {
+      "default": "",
+      "title": "Successor Start Intent Id",
+      "type": "string"
+    },
+    "successor_controller_execution_id": {
+      "default": "",
+      "title": "Successor Controller Execution Id",
+      "type": "string"
+    },
+    "effect_started": {
+      "default": false,
+      "title": "Effect Started",
+      "type": "boolean"
+    },
+    "effect_receipt_id": {
+      "default": "",
+      "title": "Effect Receipt Id",
+      "type": "string"
+    },
+    "effect_receipt_digest": {
+      "default": "",
+      "title": "Effect Receipt Digest",
+      "type": "string"
+    },
+    "outcome": {
+      "$ref": "#/$defs/AgentRecoveryOutcome"
+    },
+    "provider_call_count": {
+      "default": 0,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Provider Call Count",
+      "type": "integer"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "failure_id",
+    "failure_digest",
+    "recovery_decision_id",
+    "recovery_decision_digest",
+    "recovery_action",
+    "outcome"
+  ],
+  "title": "AgentRecoveryAttemptReceipt",
+  "type": "object"
+}

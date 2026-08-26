@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "AgentEffectCertainty": {
+      "enum": [
+        "NO_EFFECT_CONFIRMED",
+        "EFFECT_COMMITTED",
+        "EFFECT_FAILED_CONFIRMED",
+        "EFFECT_UNKNOWN"
+      ],
+      "title": "AgentEffectCertainty",
+      "type": "string"
+    },
+    "AgentFailureClass": {
+      "enum": [
+        "TRANSIENT",
+        "PARAMETER_RECOVERABLE",
+        "ALTERNATIVE_TOOL_AVAILABLE",
+        "INPUT_EVIDENCE_INSUFFICIENT",
+        "AUTHORITY_EXPANSION_REQUIRED",
+        "SEMANTIC_REVIEW_REQUIRED",
+        "UNKNOWN_EFFECT",
+        "NONRECOVERABLE"
+      ],
+      "title": "AgentFailureClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Minimal server-owned typed evidence emitted at a task boundary.\n\nIt is intentionally smaller than an exception or a log record.  Raw\ntraceback, paths, hosts, commands, credentials, and provider payloads are\nnot representable in this contract.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_task_failure_evidence.v1",
+      "default": "agent_task_failure_evidence.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evidence_id": {
+      "default": "",
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "evidence_digest": {
+      "default": "",
+      "title": "Evidence Digest",
+      "type": "string"
+    },
+    "failure_code": {
+      "title": "Failure Code",
+      "type": "string"
+    },
+    "failure_class": {
+      "$ref": "#/$defs/AgentFailureClass"
+    },
+    "effect_certainty": {
+      "$ref": "#/$defs/AgentEffectCertainty"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "logical_tool_id": {
+      "default": "",
+      "title": "Logical Tool Id",
+      "type": "string"
+    },
+    "implicated_option_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Implicated Option Ids",
+      "type": "array"
+    },
+    "safe_alternative_tool_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Safe Alternative Tool Ids",
+      "type": "array"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "source_receipt_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Receipt Ids",
+      "type": "array"
+    },
+    "source_receipt_digests": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Receipt Digests",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "failure_code",
+    "failure_class",
+    "effect_certainty"
+  ],
+  "title": "AgentTaskFailureEvidence",
+  "type": "object"
+}

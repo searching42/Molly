@@ -60,6 +60,9 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
 )
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
+    AgentEffectCertainty,
+    AgentFailureClass,
+    AgentTaskFailureEvidence,
     ArtifactRef,
     GateDecision,
     GateName,
@@ -1389,6 +1392,11 @@ class RunPlanExecutor:
                         **self._failure_evidence_details(
                             run_id=run_id,
                             reason_codes=("duplicate_dispatch_detected",),
+                            task_id=task.task_id,
+                            logical_tool_id=task.task_id,
+                            failure_code="duplicate_dispatch",
+                            failure_class=AgentFailureClass.NONRECOVERABLE,
+                            effect_certainty=AgentEffectCertainty.NO_EFFECT_CONFIRMED,
                         ),
                     },
                 )
@@ -1465,6 +1473,11 @@ class RunPlanExecutor:
                         details=self._failure_evidence_details(
                             run_id=run_id,
                             reason_codes=exc.reason_codes,
+                            task_id=task.task_id,
+                            logical_tool_id=task.task_id,
+                            failure_code="typed_adapter_failure",
+                            failure_class=AgentFailureClass.NONRECOVERABLE,
+                            effect_certainty=AgentEffectCertainty.EFFECT_FAILED_CONFIRMED,
                         ),
                     )
                     return {
@@ -1515,6 +1528,11 @@ class RunPlanExecutor:
                         details=self._failure_evidence_details(
                             run_id=run_id,
                             reason_codes=("adapter_runtime_failed",),
+                            task_id=task.task_id,
+                            logical_tool_id=task.task_id,
+                            failure_code="adapter_outcome_unknown",
+                            failure_class=AgentFailureClass.UNKNOWN_EFFECT,
+                            effect_certainty=AgentEffectCertainty.EFFECT_UNKNOWN,
                         ),
                     )
                     return {
@@ -1589,6 +1607,11 @@ class RunPlanExecutor:
                     details=self._failure_evidence_details(
                         run_id=run_id,
                         reason_codes=reason_codes,
+                        task_id=task.task_id,
+                        logical_tool_id=task.task_id,
+                        failure_code="adapter_reported_failure",
+                        failure_class=AgentFailureClass.NONRECOVERABLE,
+                        effect_certainty=AgentEffectCertainty.EFFECT_FAILED_CONFIRMED,
                     ),
                 )
                 return {
@@ -1649,6 +1672,11 @@ class RunPlanExecutor:
                     details=self._failure_evidence_details(
                         run_id=run_id,
                         reason_codes=("output_parse_failed",),
+                        task_id=task.task_id,
+                        logical_tool_id=task.task_id,
+                        failure_code="artifact_collection_failed",
+                        failure_class=AgentFailureClass.NONRECOVERABLE,
+                        effect_certainty=AgentEffectCertainty.EFFECT_FAILED_CONFIRMED,
                     ),
                 )
                 return {
@@ -5342,14 +5370,35 @@ class RunPlanExecutor:
         *,
         run_id: str,
         reason_codes: tuple[str, ...],
+        task_id: str = "",
+        logical_tool_id: str = "",
+        failure_code: str = "",
+        failure_class: AgentFailureClass | None = None,
+        effect_certainty: AgentEffectCertainty | None = None,
     ) -> dict[str, Any]:
-        if not cls._source_evidence_enabled(run_id):
-            return {}
-        return {
-            "failure_evidence": build_failure_evidence(
+        details: dict[str, Any] = {}
+        if cls._source_evidence_enabled(run_id):
+            details["failure_evidence"] = build_failure_evidence(
                 reason_codes=reason_codes
             )
-        }
+        # This compact typed record is the only executor-to-recovery bridge.
+        # It is written only when the call site has authoritative boundary
+        # evidence; no exception text is interpreted here.
+        if failure_class is not None and effect_certainty is not None and failure_code:
+            try:
+                details["typed_failure_evidence"] = AgentTaskFailureEvidence(
+                    failure_code=failure_code,
+                    failure_class=failure_class,
+                    effect_certainty=effect_certainty,
+                    task_id=task_id,
+                    logical_tool_id=logical_tool_id,
+                    reason_codes=[str(code).upper() for code in reason_codes],
+                ).model_dump(mode="json")
+            except ValueError:
+                # A malformed optional evidence projection must not alter the
+                # existing execution outcome or leak unsafe data.
+                pass
+        return details
 
     @staticmethod
     def _dispatch_source_digest(

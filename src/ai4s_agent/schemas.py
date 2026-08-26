@@ -2503,6 +2503,703 @@ class SemanticBoundary(str, Enum):
     IRREVERSIBLE_EFFECT = "IRREVERSIBLE_EFFECT"
 
 
+# Failure recovery is deliberately a separate, versioned contract.  These
+# enums are not extensions of the historical Controller or Execution Agent
+# vocabularies: a recovery observation is an immutable server projection and a
+# recovery response is advisory input only.
+class AgentFailureClass(str, Enum):
+    TRANSIENT = "TRANSIENT"
+    PARAMETER_RECOVERABLE = "PARAMETER_RECOVERABLE"
+    ALTERNATIVE_TOOL_AVAILABLE = "ALTERNATIVE_TOOL_AVAILABLE"
+    INPUT_EVIDENCE_INSUFFICIENT = "INPUT_EVIDENCE_INSUFFICIENT"
+    AUTHORITY_EXPANSION_REQUIRED = "AUTHORITY_EXPANSION_REQUIRED"
+    SEMANTIC_REVIEW_REQUIRED = "SEMANTIC_REVIEW_REQUIRED"
+    UNKNOWN_EFFECT = "UNKNOWN_EFFECT"
+    NONRECOVERABLE = "NONRECOVERABLE"
+
+
+# Effect certainty is intentionally orthogonal to the failure class.  In
+# particular, a timeout or provider error cannot be promoted to TRANSIENT
+# without authoritative evidence that no effect crossed the boundary.
+class AgentEffectCertainty(str, Enum):
+    NO_EFFECT_CONFIRMED = "NO_EFFECT_CONFIRMED"
+    EFFECT_COMMITTED = "EFFECT_COMMITTED"
+    EFFECT_FAILED_CONFIRMED = "EFFECT_FAILED_CONFIRMED"
+    EFFECT_UNKNOWN = "EFFECT_UNKNOWN"
+
+
+class AgentRecoveryAction(str, Enum):
+    RETRY_EXACT = "RETRY_EXACT"
+    TOOL_CALL = "TOOL_CALL"
+    REPLAN = "REPLAN"
+    ASK_USER = "ASK_USER"
+    STOP = "STOP"
+
+
+class AgentRecoveryOutcome(str, Enum):
+    COMMITTED = "COMMITTED"
+    REPLAYED = "REPLAYED"
+    REQUIRE_HUMAN = "REQUIRE_HUMAN"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
+    RECONCILED = "RECONCILED"
+
+
+# Short aliases are useful to callers that use the terminology from the
+# roadmap while keeping the explicit Agent* names consistent with schemas.py.
+FailureClass = AgentFailureClass
+FailureType = AgentFailureClass
+AgentFailureType = AgentFailureClass
+EffectCertainty = AgentEffectCertainty
+RecoveryAction = AgentRecoveryAction
+RecoveryDecisionType = AgentRecoveryAction
+AgentRecoveryDecisionType = AgentRecoveryAction
+
+
+AGENT_TASK_FAILURE_EVIDENCE_V1 = "agent_task_failure_evidence.v1"
+AGENT_FAILURE_OBSERVATION_V1 = "agent_failure_observation.v1"
+AGENT_RECOVERY_LLM_RESPONSE_V1 = "agent_recovery_llm_response.v1"
+AGENT_RECOVERY_DECISION_V1 = "agent_recovery_decision.v1"
+AGENT_RECOVERY_ATTEMPT_RECEIPT_V1 = "agent_recovery_attempt_receipt.v1"
+AGENT_RECOVERY_BUDGET_EVIDENCE_V1 = "agent_recovery_budget_evidence.v1"
+
+
+def _recovery_reason_codes(value: list[str], *, field: str = "reason_codes") -> list[str]:
+    cleaned = _agent_string_list(value, field=field, sort_values=True, max_items=128)
+    if any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+        raise ValueError(f"{field} must contain uppercase canonical codes")
+    return cleaned
+
+
+def _recovery_digest_list(value: list[str], *, field: str) -> list[str]:
+    cleaned = _agent_string_list(value, field=field, sort_values=False, max_items=256)
+    return [_agent_digest_value(item, field=f"{field}[{index}]") for index, item in enumerate(cleaned)]
+
+
+class AgentTaskFailureEvidence(BaseModel):
+    """Minimal server-owned typed evidence emitted at a task boundary.
+
+    It is intentionally smaller than an exception or a log record.  Raw
+    traceback, paths, hosts, commands, credentials, and provider payloads are
+    not representable in this contract.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_TASK_FAILURE_EVIDENCE_V1] = AGENT_TASK_FAILURE_EVIDENCE_V1
+    evidence_id: str = ""
+    evidence_digest: str = ""
+    failure_code: str
+    failure_class: AgentFailureClass
+    effect_certainty: AgentEffectCertainty
+    task_id: str = ""
+    logical_tool_id: str = ""
+    implicated_option_ids: list[str] = Field(default_factory=list)
+    safe_alternative_tool_ids: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    source_receipt_ids: list[str] = Field(default_factory=list)
+    source_receipt_digests: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=_now_iso)
+    executable: Literal[False] = False
+
+    @field_validator("evidence_id", "task_id", "logical_tool_id")
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"evidence_id", "task_id", "logical_tool_id"},
+        )
+
+    @field_validator("failure_code")
+    @classmethod
+    def validate_failure_code(cls, value: str) -> str:
+        return _agent_identifier(value, field="failure_code")
+
+    @field_validator("evidence_digest")
+    @classmethod
+    def validate_evidence_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="evidence_digest", allow_empty=True)
+
+    @field_validator("implicated_option_ids", "safe_alternative_tool_ids")
+    @classmethod
+    def validate_id_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=128)
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reasons(cls, value: list[str]) -> list[str]:
+        return _recovery_reason_codes(value)
+
+    @field_validator("source_receipt_ids")
+    @classmethod
+    def validate_receipt_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="source_receipt_ids", sort_values=False, max_items=256)
+
+    @field_validator("source_receipt_digests")
+    @classmethod
+    def validate_receipt_digests(cls, value: list[str]) -> list[str]:
+        return _recovery_digest_list(value, field="source_receipt_digests")
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> "AgentTaskFailureEvidence":
+        if len(self.source_receipt_ids) != len(self.source_receipt_digests):
+            raise ValueError("source receipt IDs and digests must have equal length")
+        if self.failure_class is AgentFailureClass.UNKNOWN_EFFECT and self.effect_certainty is not AgentEffectCertainty.EFFECT_UNKNOWN:
+            raise ValueError("UNKNOWN_EFFECT requires EFFECT_UNKNOWN")
+        # Failure type and effect certainty are independent dimensions.  A
+        # server may know that a failure is parameter-recoverable while still
+        # being unable to prove whether a prior effect crossed the boundary;
+        # policy must then fail closed on the certainty field.
+        expected = _agent_digest(self.semantic_material())
+        if self.evidence_digest and self.evidence_digest != expected:
+            raise ValueError("task failure evidence digest mismatch")
+        object.__setattr__(self, "evidence_digest", expected)
+        expected_id = f"failure-evidence-{expected.split(':', 1)[1][:32]}"
+        if self.evidence_id and self.evidence_id != expected_id:
+            raise ValueError("evidence_id must derive from evidence_digest")
+        object.__setattr__(self, "evidence_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in ("evidence_id", "evidence_digest", "created_at"):
+            payload.pop(key, None)
+        return payload
+
+
+class AgentFailureObservation(BaseModel):
+    """Authoritative immutable recovery input, derived only by the server."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_FAILURE_OBSERVATION_V1] = AGENT_FAILURE_OBSERVATION_V1
+    failure_id: str = ""
+    failure_digest: str = ""
+    project_id: str
+    run_id: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    inspection_digest: str
+    task_id: str
+    logical_tool_id: str
+    source_attempt_id: str = ""
+    source_attempt_digest: str = ""
+    failure_class: AgentFailureClass
+    effect_certainty: AgentEffectCertainty
+    reason_codes: list[str] = Field(default_factory=list)
+    source_receipt_ids: list[str] = Field(default_factory=list)
+    source_receipt_digests: list[str] = Field(default_factory=list)
+    input_artifact_digest: str = ""
+    arguments_digest: str = ""
+    authority_digest: str = ""
+    # These anchors are server-derived so a successor Controller execution or
+    # a restart cannot silently start a fresh retry/replan aggregate.
+    session_id: str = ""
+    authority_epoch: str = ""
+    tool_catalog_digest: str = ""
+    current_arguments: dict[str, Any] = Field(default_factory=dict)
+    available_recovery_tools: list[str] = Field(default_factory=list)
+    retry_count_used: int = Field(default=0, ge=0, le=1_000_000)
+    replan_count_used: int = Field(default=0, ge=0, le=1_000_000)
+    policy_version: str
+    policy_digest: str
+    created_at: str = Field(default_factory=_now_iso)
+    executable: Literal[False] = False
+
+    @field_validator("failure_id", "project_id", "run_id", "controller_execution_id", "task_id", "logical_tool_id", "source_attempt_id", "session_id", "authority_epoch")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"failure_id", "source_attempt_id", "session_id", "authority_epoch"})
+
+    @field_validator("failure_digest", "controller_execution_digest", "inspection_digest", "source_attempt_digest", "input_artifact_digest", "arguments_digest", "authority_digest", "tool_catalog_digest", "policy_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"failure_digest", "source_attempt_digest", "input_artifact_digest", "arguments_digest", "authority_digest", "tool_catalog_digest"})
+
+    @field_validator("policy_version")
+    @classmethod
+    def validate_policy_version(cls, value: str) -> str:
+        return _agent_identifier(value, field="policy_version")
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_observation_reasons(cls, value: list[str]) -> list[str]:
+        return _recovery_reason_codes(value)
+
+    @field_validator("source_receipt_ids")
+    @classmethod
+    def validate_observation_receipt_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="source_receipt_ids", sort_values=False, max_items=256)
+
+    @field_validator("source_receipt_digests")
+    @classmethod
+    def validate_observation_receipt_digests(cls, value: list[str]) -> list[str]:
+        return _recovery_digest_list(value, field="source_receipt_digests")
+
+    @field_validator("current_arguments")
+    @classmethod
+    def validate_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "current_arguments")
+
+    @field_validator("available_recovery_tools")
+    @classmethod
+    def validate_recovery_tools(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="available_recovery_tools", sort_values=True, max_items=128)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_observation_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> "AgentFailureObservation":
+        if len(self.source_receipt_ids) != len(self.source_receipt_digests):
+            raise ValueError("source receipt IDs and digests must have equal length")
+        if self.failure_class is AgentFailureClass.UNKNOWN_EFFECT and self.effect_certainty is not AgentEffectCertainty.EFFECT_UNKNOWN:
+            raise ValueError("UNKNOWN_EFFECT requires EFFECT_UNKNOWN")
+        # Keep the two classifications orthogonal.  Recovery policy rejects
+        # EFFECT_UNKNOWN for every automatic action, regardless of class.
+        def reject_physical(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if str(key).strip().lower().replace("-", "_") in {
+                        "adapter", "api_key", "argv", "command", "credential", "credentials",
+                        "env", "host", "hostname", "module", "path", "shell", "ssh", "url",
+                        "working_directory", "provider_endpoint", "remote_worker",
+                    }:
+                        raise ValueError("failure observation contains a physical execution field")
+                    reject_physical(child)
+            elif isinstance(value, list):
+                for child in value:
+                    reject_physical(child)
+        reject_physical(self.current_arguments)
+        expected_arguments = _agent_digest(self.current_arguments)
+        if self.arguments_digest and self.arguments_digest != expected_arguments:
+            raise ValueError("failure observation arguments digest mismatch")
+        object.__setattr__(self, "arguments_digest", expected_arguments)
+        expected = _agent_digest(self.semantic_material())
+        if self.failure_digest and self.failure_digest != expected:
+            raise ValueError("failure observation digest mismatch")
+        object.__setattr__(self, "failure_digest", expected)
+        expected_id = f"failure-{expected.split(':', 1)[1][:32]}"
+        if self.failure_id and self.failure_id != expected_id:
+            raise ValueError("failure_id must derive from failure_digest")
+        object.__setattr__(self, "failure_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in ("failure_id", "failure_digest", "created_at"):
+            payload.pop(key, None)
+        return payload
+
+
+class AgentRecoveryLLMResponse(BaseModel):
+    """Strict advisory response; it contains no authority or effect fields."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_RECOVERY_LLM_RESPONSE_V1] = AGENT_RECOVERY_LLM_RESPONSE_V1
+    action: AgentRecoveryAction
+    logical_tool_id: str = ""
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    question: str = ""
+    reason: str = ""
+    requested_change_summary: str = ""
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_decision_type_alias(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "action" not in payload:
+            if "decision_type" in payload:
+                payload["action"] = payload.pop("decision_type")
+            elif "recovery_action" in payload:
+                payload["action"] = payload.pop("recovery_action")
+        if "logical_tool_id" not in payload:
+            if "tool_id" in payload:
+                payload["logical_tool_id"] = payload.pop("tool_id")
+            elif "selected_tool_id" in payload:
+                payload["logical_tool_id"] = payload.pop("selected_tool_id")
+        return payload
+
+    @property
+    def decision_type(self) -> AgentRecoveryAction:
+        return self.action
+
+    @field_validator("logical_tool_id")
+    @classmethod
+    def validate_response_tool(cls, value: str) -> str:
+        return _agent_identifier(value, field="logical_tool_id", allow_empty=True)
+
+    @field_validator("arguments")
+    @classmethod
+    def validate_response_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "arguments")
+
+    @field_validator("question", "reason", "requested_change_summary")
+    @classmethod
+    def validate_response_prose(cls, value: str, info: Any) -> str:
+        return _agent_safe_llm_prose(value, field=info.field_name, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_response_shape(self) -> "AgentRecoveryLLMResponse":
+        def reject_physical(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if str(key).strip().lower().replace("-", "_") in {
+                        "adapter", "api_key", "argv", "command", "credential", "credentials",
+                        "env", "host", "hostname", "module", "path", "shell", "ssh", "url",
+                        "working_directory", "provider_endpoint", "remote_worker",
+                    }:
+                        raise ValueError("recovery response contains a physical execution field")
+                    reject_physical(child)
+            elif isinstance(value, list):
+                for child in value:
+                    reject_physical(child)
+
+        reject_physical(self.arguments)
+        if self.action is AgentRecoveryAction.RETRY_EXACT:
+            if self.logical_tool_id or self.arguments:
+                raise ValueError("RETRY_EXACT must not contain tool or arguments")
+        if self.action is AgentRecoveryAction.TOOL_CALL and not self.logical_tool_id:
+            raise ValueError("TOOL_CALL requires logical_tool_id")
+        if self.action is not AgentRecoveryAction.TOOL_CALL and (self.logical_tool_id or self.arguments):
+            raise ValueError("only TOOL_CALL may contain a logical tool or arguments")
+        if self.action in {AgentRecoveryAction.REPLAN, AgentRecoveryAction.ASK_USER, AgentRecoveryAction.STOP} and self.arguments:
+            raise ValueError("this recovery action must not contain arguments")
+        if self.action is AgentRecoveryAction.ASK_USER and not self.question:
+            raise ValueError("ASK_USER requires a question")
+        return self
+
+
+class AgentRecoveryDecision(BaseModel):
+    """Server-derived, non-executable binding of one recovery choice."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_RECOVERY_DECISION_V1] = AGENT_RECOVERY_DECISION_V1
+    decision_id: str = ""
+    decision_digest: str = ""
+    failure_id: str
+    failure_digest: str
+    observation_digest: str
+    recovery_action: AgentRecoveryAction
+    selected_logical_tool_id: str = ""
+    selected_arguments: dict[str, Any] = Field(default_factory=dict)
+    provider_response_digest: str = ""
+    authority_relation: AuthorityRelation
+    semantic_boundary: SemanticBoundary
+    auto_apply: bool = False
+    retry_ordinal: int = Field(default=0, ge=0, le=1_000_000)
+    replan_ordinal: int = Field(default=0, ge=0, le=1_000_000)
+    provider_call_count: int = Field(default=0, ge=0, le=1)
+    reason_codes: list[str] = Field(default_factory=list)
+    outcome: AgentRecoveryOutcome = AgentRecoveryOutcome.STOPPED
+    created_at: str = Field(default_factory=_now_iso)
+    executable: Literal[False] = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_action_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "recovery_action" not in payload:
+            if "decision_type" in payload:
+                payload["recovery_action"] = payload.pop("decision_type")
+            elif "action" in payload:
+                payload["recovery_action"] = payload.pop("action")
+        return payload
+
+    @property
+    def action(self) -> AgentRecoveryAction:
+        return self.recovery_action
+
+    @property
+    def decision_type(self) -> AgentRecoveryAction:
+        return self.recovery_action
+
+    @field_validator("decision_id", "failure_id")
+    @classmethod
+    def validate_decision_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "decision_id")
+
+    @field_validator("decision_digest", "failure_digest", "observation_digest", "provider_response_digest")
+    @classmethod
+    def validate_decision_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"decision_digest", "provider_response_digest"})
+
+    @field_validator("selected_logical_tool_id")
+    @classmethod
+    def validate_selected_tool(cls, value: str) -> str:
+        return _agent_identifier(value, field="selected_logical_tool_id", allow_empty=True)
+
+    @field_validator("selected_arguments")
+    @classmethod
+    def validate_selected_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "selected_arguments")
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_decision_reasons(cls, value: list[str]) -> list[str]:
+        return _recovery_reason_codes(value)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_decision_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_decision_shape(self) -> "AgentRecoveryDecision":
+        def reject_physical(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if str(key).strip().lower().replace("-", "_") in {
+                        "adapter", "api_key", "argv", "command", "credential", "credentials",
+                        "env", "host", "hostname", "module", "path", "shell", "ssh", "url",
+                        "working_directory", "provider_endpoint", "remote_worker",
+                    }:
+                        raise ValueError("recovery decision contains a physical execution field")
+                    reject_physical(child)
+            elif isinstance(value, list):
+                for child in value:
+                    reject_physical(child)
+
+        reject_physical(self.selected_arguments)
+        relation_safe = (
+            self.authority_relation in {AuthorityRelation.SUBSET, AuthorityRelation.EQUIVALENT}
+            if self.recovery_action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.REPLAN}
+            else self.authority_relation is AuthorityRelation.SUBSET
+        )
+        expected_auto = relation_safe and self.semantic_boundary is SemanticBoundary.NONE and self.recovery_action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL, AgentRecoveryAction.REPLAN}
+        if self.auto_apply != expected_auto:
+            raise ValueError("auto_apply must be server-derived from authority, boundary, and action")
+        if self.recovery_action is AgentRecoveryAction.RETRY_EXACT and self.selected_arguments:
+            raise ValueError("exact retry decision must not carry revised arguments")
+        if self.recovery_action in {AgentRecoveryAction.TOOL_CALL, AgentRecoveryAction.RETRY_EXACT} and not self.selected_logical_tool_id:
+            raise ValueError("tool decision requires a selected logical tool")
+        if self.recovery_action not in {AgentRecoveryAction.TOOL_CALL, AgentRecoveryAction.RETRY_EXACT} and self.selected_logical_tool_id:
+            raise ValueError("this recovery decision may not select a logical tool")
+        if self.recovery_action is not AgentRecoveryAction.TOOL_CALL and self.selected_arguments:
+            raise ValueError("only TOOL_CALL decision may carry selected arguments")
+        if self.provider_call_count == 0 and self.provider_response_digest:
+            raise ValueError("deterministic recovery decision must not carry a provider digest")
+        if self.provider_call_count == 1 and not self.provider_response_digest:
+            raise ValueError("provider-backed recovery decision requires a provider digest")
+        if self.recovery_action in {AgentRecoveryAction.RETRY_EXACT, AgentRecoveryAction.TOOL_CALL}:
+            if self.retry_ordinal <= 0 or self.replan_ordinal != 0:
+                raise ValueError("retry decision ordinals are inconsistent")
+        elif self.recovery_action is AgentRecoveryAction.REPLAN:
+            if self.replan_ordinal <= 0 or self.retry_ordinal != 0:
+                raise ValueError("replan decision ordinals are inconsistent")
+        elif self.retry_ordinal != 0 or self.replan_ordinal != 0:
+            raise ValueError("non-recovery decision must not consume retry/replan ordinals")
+        if self.failure_digest != self.observation_digest:
+            raise ValueError("recovery decision must bind the observation digest")
+        expected = _agent_digest(self.semantic_material())
+        if self.decision_digest and self.decision_digest != expected:
+            raise ValueError("recovery decision digest mismatch")
+        object.__setattr__(self, "decision_digest", expected)
+        expected_id = f"recovery-decision-{expected.split(':', 1)[1][:32]}"
+        if self.decision_id and self.decision_id != expected_id:
+            raise ValueError("decision_id must derive from decision_digest")
+        object.__setattr__(self, "decision_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in ("decision_id", "decision_digest", "created_at"):
+            payload.pop(key, None)
+        return payload
+
+
+class AgentRecoveryAttemptReceipt(BaseModel):
+    """Immutable no-replace recovery attempt and effect provenance receipt."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_RECOVERY_ATTEMPT_RECEIPT_V1] = AGENT_RECOVERY_ATTEMPT_RECEIPT_V1
+    receipt_id: str = ""
+    receipt_digest: str = ""
+    failure_id: str
+    failure_digest: str
+    recovery_decision_id: str
+    recovery_decision_digest: str
+    recovery_action: AgentRecoveryAction
+    retry_ordinal: int = Field(default=0, ge=0, le=1_000_000)
+    replan_ordinal: int = Field(default=0, ge=0, le=1_000_000)
+    baseline_authorization_id: str = ""
+    baseline_authorization_digest: str = ""
+    autonomy_grant_id: str = ""
+    autonomy_grant_digest: str = ""
+    session_id: str = ""
+    authority_epoch: str = ""
+    successor_proposal_id: str = ""
+    successor_proposal_digest: str = ""
+    successor_authorization_id: str = ""
+    successor_start_intent_id: str = ""
+    successor_controller_execution_id: str = ""
+    effect_started: bool = False
+    effect_receipt_id: str = ""
+    effect_receipt_digest: str = ""
+    outcome: AgentRecoveryOutcome
+    provider_call_count: int = Field(default=0, ge=0, le=1)
+    created_at: str = Field(default_factory=_now_iso)
+    executable: Literal[False] = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_action_alias(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "recovery_action" not in payload:
+            if "action" in payload:
+                payload["recovery_action"] = payload.pop("action")
+            elif "decision_type" in payload:
+                payload["recovery_action"] = payload.pop("decision_type")
+        if "receipt_id" not in payload:
+            if "recovery_attempt_id" in payload:
+                payload["receipt_id"] = payload.pop("recovery_attempt_id")
+            elif "attempt_id" in payload:
+                payload["receipt_id"] = payload.pop("attempt_id")
+        return payload
+
+    @property
+    def recovery_attempt_id(self) -> str:
+        return self.receipt_id
+
+    @property
+    def action(self) -> AgentRecoveryAction:
+        return self.recovery_action
+
+    @field_validator("receipt_id", "failure_id", "recovery_decision_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id")
+    @classmethod
+    def validate_receipt_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name in {"receipt_id", "baseline_authorization_id", "autonomy_grant_id", "session_id", "authority_epoch", "successor_proposal_id", "successor_authorization_id", "successor_start_intent_id", "successor_controller_execution_id", "effect_receipt_id"})
+
+    @field_validator("receipt_digest", "failure_digest", "recovery_decision_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "effect_receipt_digest")
+    @classmethod
+    def validate_receipt_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"receipt_digest", "baseline_authorization_digest", "autonomy_grant_digest", "successor_proposal_digest", "effect_receipt_digest"})
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_receipt_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "AgentRecoveryAttemptReceipt":
+        if bool(self.baseline_authorization_id) != bool(self.baseline_authorization_digest):
+            raise ValueError("baseline authorization ID and digest must be provided together")
+        if bool(self.autonomy_grant_id) != bool(self.autonomy_grant_digest):
+            raise ValueError("autonomy grant ID and digest must be provided together")
+        if bool(self.session_id) != bool(self.authority_epoch):
+            raise ValueError("session and authority epoch anchors must be provided together")
+        if bool(self.effect_receipt_id) != bool(self.effect_receipt_digest):
+            raise ValueError("effect receipt ID and digest must be provided together")
+        if self.effect_started and not self.successor_controller_execution_id and not self.effect_receipt_id:
+            raise ValueError("effect_started requires successor Controller or effect receipt binding")
+        expected = _agent_digest(self.semantic_material())
+        if self.receipt_digest and self.receipt_digest != expected:
+            raise ValueError("recovery attempt receipt digest mismatch")
+        object.__setattr__(self, "receipt_digest", expected)
+        expected_id = f"recovery-attempt-{expected.split(':', 1)[1][:32]}"
+        if self.receipt_id and self.receipt_id != expected_id:
+            raise ValueError("receipt_id must derive from receipt_digest")
+        object.__setattr__(self, "receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in ("receipt_id", "receipt_digest", "created_at"):
+            payload.pop(key, None)
+        return payload
+
+
+class AgentRecoveryBudgetEvidence(BaseModel):
+    """Derived budget projection rebuilt from unique durable receipts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AGENT_RECOVERY_BUDGET_EVIDENCE_V1] = AGENT_RECOVERY_BUDGET_EVIDENCE_V1
+    evidence_id: str = ""
+    evidence_digest: str = ""
+    project_id: str
+    session_id: str
+    autonomy_grant_id: str
+    autonomy_grant_digest: str
+    authority_epoch: str
+    retries_used: int = Field(default=0, ge=0, le=1_000_000)
+    replans_used: int = Field(default=0, ge=0, le=1_000_000)
+    retries_remaining: int = Field(default=0, ge=0, le=1_000_000)
+    replans_remaining: int = Field(default=0, ge=0, le=1_000_000)
+    receipt_ids: list[str] = Field(default_factory=list)
+    receipt_roster_digest: str = ""
+    created_at: str = Field(default_factory=_now_iso)
+    executable: Literal[False] = False
+
+    @field_validator("evidence_id", "project_id", "session_id", "autonomy_grant_id", "authority_epoch")
+    @classmethod
+    def validate_budget_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "evidence_id")
+
+    @field_validator("evidence_digest", "autonomy_grant_digest", "receipt_roster_digest")
+    @classmethod
+    def validate_budget_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=info.field_name in {"evidence_digest", "receipt_roster_digest"})
+
+    @field_validator("receipt_ids")
+    @classmethod
+    def validate_budget_receipts(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="receipt_ids", sort_values=True, max_items=1_000_000)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_budget_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_budget(self) -> "AgentRecoveryBudgetEvidence":
+        if self.retries_remaining < 0 or self.replans_remaining < 0:
+            raise ValueError("recovery budget remaining values must be non-negative")
+        expected_roster = _agent_digest(self.receipt_ids)
+        if self.receipt_roster_digest and self.receipt_roster_digest != expected_roster:
+            raise ValueError("recovery receipt roster digest mismatch")
+        object.__setattr__(self, "receipt_roster_digest", expected_roster)
+        expected = _agent_digest(self.semantic_material())
+        if self.evidence_digest and self.evidence_digest != expected:
+            raise ValueError("recovery budget evidence digest mismatch")
+        object.__setattr__(self, "evidence_digest", expected)
+        expected_id = f"recovery-budget-{expected.split(':', 1)[1][:32]}"
+        if self.evidence_id and self.evidence_id != expected_id:
+            raise ValueError("budget evidence ID must derive from its digest")
+        object.__setattr__(self, "evidence_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in ("evidence_id", "evidence_digest", "receipt_roster_digest", "created_at"):
+            payload.pop(key, None)
+        return payload
+
+
+RecoveryResponse = AgentRecoveryLLMResponse
+RecoveryDecision = AgentRecoveryDecision
+RecoveryAttemptReceipt = AgentRecoveryAttemptReceipt
+FailureObservation = AgentFailureObservation
+
+
 class AgentPermissionShadowAlignment(str, Enum):
     MATCH = "MATCH"
     NEW_STRICTER = "NEW_STRICTER"
@@ -10583,6 +11280,12 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_authorization": AgentPlanAuthorization,
     "autonomy_grant": AutonomyGrant,
     "authority_evaluation": AuthorityEvaluation,
+    "agent_task_failure_evidence": AgentTaskFailureEvidence,
+    "agent_failure_observation": AgentFailureObservation,
+    "agent_recovery_llm_response": AgentRecoveryLLMResponse,
+    "agent_recovery_decision": AgentRecoveryDecision,
+    "agent_recovery_attempt_receipt": AgentRecoveryAttemptReceipt,
+    "agent_recovery_budget_evidence": AgentRecoveryBudgetEvidence,
     "agent_plan_start_intent": AgentPlanStartIntent,
     "agent_harness_controller_start_request": AgentHarnessControllerStartRequest,
     "agent_harness_controller_execution": AgentHarnessControllerExecution,
