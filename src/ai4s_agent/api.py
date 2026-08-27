@@ -84,6 +84,10 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
+from ai4s_agent.scientific_agent_evidence import (
+    EvidenceGrantService,
+    EvidenceGrantStore,
+)
 from ai4s_agent.scientific_agent_result_projection import (
     ScientificAgentResultProjectionService,
 )
@@ -175,6 +179,11 @@ def register_routes(
     jobs = JobManager(runs_dir=runs)
     projects = ProjectStorage(workspace_dir=workspace)
     conversations = ConversationStore(projects=projects)
+    evidence_grant_store = EvidenceGrantStore(storage=projects)
+    evidence_grant_service = EvidenceGrantService(
+        storage=projects,
+        grant_store=evidence_grant_store,
+    )
     datasets = DatasetWorkflowService(projects=projects, conversations=conversations)
     literature_intakes = LiteratureIntakeService(
         projects=projects,
@@ -224,6 +233,8 @@ def register_routes(
     app.extensions["control_plane_event_projector"] = control_plane_events
     app.extensions["llm_provider_manager"] = llm_providers
     app.extensions["conversation_store"] = conversations
+    app.extensions["scientific_agent_evidence_grant_store"] = evidence_grant_store
+    app.extensions["scientific_agent_evidence_grant_service"] = evidence_grant_service
     app.extensions["dataset_workflow_service"] = datasets
     app.extensions["literature_intake_service"] = literature_intakes
     app.extensions["remote_execution_lifecycle"] = remote_executions
@@ -286,7 +297,11 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         control_store=app.extensions["scientific_agent_plan_control_store"],
         resource_authority_service=app.extensions["remote_resource_authority_service"],
-        executor=RunPlanExecutor(storage=projects, registry=scientific_task_registry),
+        executor=RunPlanExecutor(
+            storage=projects,
+            registry=scientific_task_registry,
+            evidence_service=evidence_grant_service,
+        ),
         remote_executions=remote_executions,
         tracer=harness_tracer,
     )
@@ -435,6 +450,7 @@ def register_routes(
         result_projection_service=result_projection_service,
         replanner=replanner,
         failure_recovery_runtime=recovery_runtime,
+        evidence_service=evidence_grant_service,
         failure_recovery_enabled=_as_bool(
             app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")
         ),

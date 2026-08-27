@@ -59,6 +59,10 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_regular_file_bound,
 )
 from ai4s_agent.planner import AtomicTaskRegistry
+from ai4s_agent.scientific_agent_evidence import (
+    BR2_EVIDENCE_CONSUMER_TASK_ID,
+    EvidenceGrantService,
+)
 from ai4s_agent.schemas import (
     AgentEffectCertainty,
     AgentFailureClass,
@@ -68,6 +72,8 @@ from ai4s_agent.schemas import (
     GateName,
     RunPlan,
     RunStatus,
+    ScientificEvidenceAdmissionV1,
+    ScientificEvidenceConsumptionReceiptV1,
     StageHistoryItem,
     StageState,
     _agent_digest,
@@ -132,6 +138,7 @@ _BR2_MAPPING_TASK_IDS = frozenset(
         "prepare_oled_candidate_raw_dataset",
     }
 )
+_BR2_ADMISSION_CONSUMER_TASK_ID = BR2_EVIDENCE_CONSUMER_TASK_ID
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
@@ -158,9 +165,16 @@ class RunPlanExecutor:
     with gates instead of trying to approve or bypass user-controlled actions.
     """
 
-    def __init__(self, *, storage: ProjectStorage, registry: AtomicTaskRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        storage: ProjectStorage,
+        registry: AtomicTaskRegistry | None = None,
+        evidence_service: EvidenceGrantService | None = None,
+    ) -> None:
         self.storage = storage
         self.registry = registry or AtomicTaskRegistry()
+        self.evidence_service = evidence_service
 
     def execute(
         self,
@@ -169,6 +183,7 @@ class RunPlanExecutor:
         run_plan: RunPlan,
         input_artifacts: dict[str, str] | None = None,
         task_options: TaskOptions | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
         run_dir = self.storage.run_dir(project_id, run_id)
@@ -183,6 +198,7 @@ class RunPlanExecutor:
             actor="",
             executed=[],
             task_options=self._normalize_task_options(task_options),
+            conversation_id=conversation_id,
         )
 
     def resume_after_gate(
@@ -195,6 +211,7 @@ class RunPlanExecutor:
         note: str = "",
         input_artifacts: dict[str, str] | None = None,
         task_options: TaskOptions | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
         clean_actor = str(actor or "").strip()
@@ -260,6 +277,7 @@ class RunPlanExecutor:
             executed=executed,
             task_options=normalized_task_options,
             approved_task_id=state.stage,
+            conversation_id=conversation_id,
         )
 
     def derive_one_task_server_binding(
@@ -416,6 +434,7 @@ class RunPlanExecutor:
         expected_compiled_options_digest: str,
         expected_input_artifacts_digest: str,
         expected_output_contract_digest: str,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         """Prepare exactly one gated local task and stop at WAITING_USER."""
 
@@ -445,6 +464,7 @@ class RunPlanExecutor:
             executed=self._executed_tasks_before(task_index, run_plan),
             task_options={task.task_id: dict(task_options)},
             stop_after_index=task_index,
+            conversation_id=conversation_id,
         )
 
     def execute_one_task(
@@ -461,6 +481,7 @@ class RunPlanExecutor:
         expected_output_contract_digest: str,
         actual_dispatch_recorder: Callable[[str], None] | None = None,
         task_completion_recorder: Callable[[], None] | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         """Execute exactly one current local task that has no Gate."""
 
@@ -489,6 +510,7 @@ class RunPlanExecutor:
             task_options={task.task_id: dict(task_options)},
             stop_after_index=task_index,
             actual_dispatch_recorder=actual_dispatch_recorder,
+            conversation_id=conversation_id,
         )
         self._verify_one_task_result_outputs(
             project_id=project_id,
@@ -497,6 +519,7 @@ class RunPlanExecutor:
             result=result,
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
+            conversation_id=conversation_id,
         )
         if (
             task_completion_recorder is not None
@@ -605,6 +628,7 @@ class RunPlanExecutor:
         expected_output_contract_digest: str,
         actual_dispatch_recorder: Callable[[str], None] | None = None,
         task_completion_recorder: Callable[[], None] | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         """Exact-read committed Gate decisions, then execute only that task."""
 
@@ -675,6 +699,7 @@ class RunPlanExecutor:
             approved_task_id=task.task_id,
             stop_after_index=task_index,
             actual_dispatch_recorder=actual_dispatch_recorder,
+            conversation_id=conversation_id,
         )
         self._verify_one_task_result_outputs(
             project_id=project_id,
@@ -683,6 +708,7 @@ class RunPlanExecutor:
             result=result,
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
+            conversation_id=conversation_id,
         )
         if (
             task_completion_recorder is not None
@@ -780,6 +806,7 @@ class RunPlanExecutor:
         result: dict[str, Any],
         task_options: dict[str, Any],
         expected_compiled_options_digest: str,
+        conversation_id: str = "",
     ) -> None:
         if result.get("ok") is not True or result.get("status") != RunStatus.SUCCEEDED.value:
             return
@@ -803,6 +830,12 @@ class RunPlanExecutor:
             run_id=run_plan.run_id,
             task_id=task.task_id,
         )
+        if task.task_id == _BR2_ADMISSION_CONSUMER_TASK_ID:
+            self._verify_br2_admission_consumer_output(
+                project_id=project_id,
+                run_id=run_plan.run_id,
+                conversation_id=conversation_id,
+            )
 
     def verify_one_task_committed_outputs(
         self,
@@ -817,6 +850,7 @@ class RunPlanExecutor:
         expected_compiled_options_digest: str,
         expected_input_artifacts_digest: str,
         expected_output_contract_digest: str,
+        conversation_id: str = "",
     ) -> None:
         """Exact-replay a committed one-task success without adapter dispatch.
 
@@ -862,6 +896,12 @@ class RunPlanExecutor:
             run_id=run_plan.run_id,
             task_id=task.task_id,
         )
+        if task.task_id == _BR2_ADMISSION_CONSUMER_TASK_ID:
+            self._verify_br2_admission_consumer_output(
+                project_id=project_id,
+                run_id=run_plan.run_id,
+                conversation_id=conversation_id,
+            )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
             return
@@ -898,6 +938,7 @@ class RunPlanExecutor:
             actor=str(actor or "").strip(),
             approved_gates=set(spec.gates),
             options=dict(task_options),
+            conversation_id=conversation_id,
         )
         self._verify_immutable_task_publication(
             task_id=task.task_id,
@@ -1239,6 +1280,134 @@ class RunPlanExecutor:
         if review.candidate_record_count != len(package.candidate_records):
             raise ValueError("BR2 candidate dataset review count changed")
 
+    def _verify_br2_admission_for_task(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        conversation_id: str,
+        artifact_paths: dict[str, str] | None = None,
+    ) -> ScientificEvidenceAdmissionV1:
+        """Verify the canonical admission immediately before its consumer."""
+
+        clean_conversation = str(conversation_id or "").strip()
+        if not clean_conversation:
+            raise ValueError(
+                "BR2 admission consumption requires a Conversation-bound Controller"
+            )
+        run_dir = self.storage.run_dir(project_id, run_id)
+        registry = self.storage.read_artifact_registry(project_id, run_id)
+        relative = str(registry.get("scientific_evidence_admission") or "").strip()
+        if not relative:
+            raise ValueError("BR2 scientific evidence admission is not registered")
+        paths = artifact_paths or self._artifact_paths_from_registry(
+            project_id,
+            run_id,
+            run_dir,
+        )
+        admission_path = Path(
+            self._require_artifact(paths, "scientific_evidence_admission")
+        ).absolute()
+        admission_bytes, _ = _read_regular_file_bound(
+            admission_path,
+            max_bytes=4 * 1024 * 1024,
+            reject_symlink_components=True,
+        )
+        try:
+            admission = ScientificEvidenceAdmissionV1.model_validate(
+                json.loads(admission_bytes.decode("utf-8"))
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError("BR2 scientific evidence admission is invalid") from exc
+        expected_relative = (
+            f"evidence_admissions/{admission.admission_id}.json"
+        )
+        if relative != expected_relative or admission_path != (
+            run_dir / expected_relative
+        ).absolute():
+            raise ValueError("BR2 scientific evidence admission path is not canonical")
+        audit_key = f"evidence_admission_{admission.admission_id}"
+        if registry.get(audit_key) != relative or any(
+            key.startswith("evidence_admission_") and key != audit_key
+            for key in registry
+        ):
+            raise ValueError("BR2 scientific evidence admission registry binding is not canonical")
+        service = self.evidence_service or EvidenceGrantService(storage=self.storage)
+        verified = service.verify_br2_admission(
+            project_id=project_id,
+            run_id=run_id,
+            conversation_id=clean_conversation,
+            admission_id=admission.admission_id,
+        )
+        if verified.model_dump(mode="json") != admission.model_dump(mode="json"):
+            raise ValueError("BR2 scientific evidence admission publication changed")
+        return verified
+
+    def _verify_br2_admission_consumer_output(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Verify the typed receipt produced by the admission consumer."""
+
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_id,
+            run_dir,
+        )
+        admission = self._verify_br2_admission_for_task(
+            project_id=project_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            artifact_paths=artifact_paths,
+        )
+        receipt_path = Path(
+            self._require_artifact(artifact_paths, "confirmed_oled_evidence")
+        ).absolute()
+        expected_receipt_path = (
+            run_dir / "br2_contextual_mapping" / "confirmed_oled_evidence.json"
+        ).absolute()
+        if receipt_path != expected_receipt_path:
+            raise ValueError("BR2 evidence consumption receipt path is not canonical")
+        receipt_bytes, _ = _read_regular_file_bound(
+            receipt_path,
+            max_bytes=4 * 1024 * 1024,
+            reject_symlink_components=True,
+        )
+        try:
+            receipt = ScientificEvidenceConsumptionReceiptV1.model_validate(
+                json.loads(receipt_bytes.decode("utf-8"))
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError("BR2 evidence consumption receipt is invalid") from exc
+        expected = {
+            "project_id": project_id,
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            "source_id": admission.source_id,
+            "source_digest": admission.source_digest,
+            "candidate_package_digest": admission.candidate_package_digest,
+            "review_digest": admission.review_digest,
+            "paper_id": admission.paper_id,
+            "admission_id": admission.admission_id,
+            "admission_digest": admission.admission_digest,
+            "grant_id": admission.grant_id,
+            "grant_digest": admission.grant_digest,
+            "scope": admission.scope,
+            "actor": admission.actor,
+            "actor_source": admission.actor_source,
+            "semantic_boundary": admission.semantic_boundary,
+        }
+        observed = {
+            key: getattr(receipt, key)
+            for key in expected
+        }
+        if observed != expected:
+            raise ValueError("BR2 evidence consumption receipt binding changed")
+
     def _execute_from(
         self,
         *,
@@ -1251,6 +1420,7 @@ class RunPlanExecutor:
         actor: str,
         executed: list[str],
         task_options: TaskOptions,
+        conversation_id: str = "",
         approved_task_id: str | None = None,
         stop_after_index: int | None = None,
         actual_dispatch_recorder: Callable[[str], None] | None = None,
@@ -1417,7 +1587,18 @@ class RunPlanExecutor:
                 actor=actor,
                 approved_gates=approved_gates if task_approval_applies else set(),
                 options=options,
+                conversation_id=conversation_id,
             )
+            if task.task_id == _BR2_ADMISSION_CONSUMER_TASK_ID:
+                # This is the production downstream seam: no adapter dispatch,
+                # stage transition, or effect receipt is allowed until the
+                # current Conversation-bound admission is reverified.
+                self._verify_br2_admission_for_task(
+                    project_id=project_id,
+                    run_id=run_id,
+                    conversation_id=conversation_id,
+                    artifact_paths=artifact_paths,
+                )
             self._write_stage(
                 project_id=project_id,
                 run_id=run_id,
@@ -2081,8 +2262,30 @@ class RunPlanExecutor:
         actor: str = "",
         approved_gates: set[str] | None = None,
         options: dict[str, Any] | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == _BR2_ADMISSION_CONSUMER_TASK_ID:
+            task_options = self._payload_options(options)
+            if task_options:
+                raise ValueError(f"{task_id} does not accept task options")
+            payload: dict[str, Any] = {
+                "project_id": run_dir.parents[1].name,
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "output_root": str(run_dir / "br2_contextual_mapping"),
+                "workspace_dir": str(self.storage.workspace_dir),
+                "scientific_evidence_admission_path": self._absolute_artifact_path(
+                    artifact_paths,
+                    "scientific_evidence_admission",
+                ),
+            }
+            for artifact_id in self.registry.get(task_id).required_artifacts:
+                payload[f"{artifact_id}_path"] = self._absolute_artifact_path(
+                    artifact_paths,
+                    artifact_id,
+                )
+            return payload
         if task_id in _BR2_MAPPING_TASK_IDS:
             task_options = self._payload_options(options)
             if task_options:
@@ -3475,6 +3678,39 @@ class RunPlanExecutor:
         payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
+        if task_id == _BR2_ADMISSION_CONSUMER_TASK_ID:
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            spec = self.registry.get(task_id)
+            if set(outputs) != set(spec.output_artifacts):
+                raise ValueError("BR2 admission consumer output roster is incomplete")
+            registered_paths: dict[str, str] = {}
+            for artifact_id in spec.output_artifacts:
+                output_path = Path(str(outputs[artifact_id])).expanduser().absolute()
+                if output_path.is_symlink() or not output_path.is_file():
+                    raise ValueError("BR2 admission consumer output is not a regular file")
+                relative = self._relative(run_dir, output_path)
+                self._register(project_id, run_id, artifact_id, relative)
+                registered_paths[artifact_id] = relative
+                artifact_paths[artifact_id] = str(output_path)
+            try:
+                # Re-read the immutable output and the exact admission after
+                # Registry publication; the completion receipt is not trusted
+                # merely because the adapter returned success.
+                self._verify_br2_admission_consumer_output(
+                    project_id=project_id,
+                    run_id=run_id,
+                    conversation_id=str(payload.get("conversation_id") or ""),
+                )
+            except Exception:
+                self.storage.remove_artifact_registry_paths_if_all_equal(
+                    project_id,
+                    run_id,
+                    registered_paths,
+                )
+                for artifact_id in spec.output_artifacts:
+                    artifact_paths.pop(artifact_id, None)
+                raise
+            return
         if task_id in _BR2_MAPPING_TASK_IDS:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             spec = self.registry.get(task_id)

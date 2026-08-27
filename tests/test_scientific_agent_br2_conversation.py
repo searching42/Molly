@@ -95,6 +95,7 @@ def test_br2_conversation_binds_one_uploaded_pdf_to_existing_run_artifact(
         "extract_oled_evidence",
         "map_oled_contextual_semantics",
         "prepare_oled_candidate_raw_dataset",
+        "consume_oled_candidate_evidence_admission",
     ]
 
     run_dir = tmp_path / "workspace" / "projects" / "br2-conversation" / "runs" / "br2-conversation-run"

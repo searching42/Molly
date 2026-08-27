@@ -305,12 +305,12 @@ class ConversationAgent:
 
     @classmethod
     def recognize_plan_approval(cls, content: str) -> bool:
-        """Recognize only an exact, unqualified approval phrase.
+        """Classify an exact phrase for review/UI hints only.
 
-        This boundary is deliberately deterministic.  It is used only when a
-        current persisted proposal is already waiting for approval; an LLM
-        response can explain that state but can never turn an ambiguous user
-        sentence into execution authority.
+        Conversation/session code must not use this classifier as authority.
+        Plan, Gate, remote, and evidence approval require their typed server
+        actions; retaining this pure classifier keeps older explanation/tests
+        source-compatible without granting it any side effect.
         """
 
         raw = str(content or "").strip().lower()
@@ -322,7 +322,7 @@ class ConversationAgent:
 
     @classmethod
     def recognize_dataset_gate_approval(cls, content: str) -> bool:
-        """Recognize the exact approval for the current verified dataset snapshot."""
+        """Classify a dataset phrase for non-authoritative review/UI hints."""
 
         return cls._recognize_exact_phrase(
             str(content or "").strip().lower(), cls.DATASET_GATE_APPROVAL_PHRASES
@@ -330,7 +330,7 @@ class ConversationAgent:
 
     @classmethod
     def recognize_gate_approval(cls, content: str) -> bool:
-        """Recognize only the exact generic current-Gate approval phrase."""
+        """Classify a Gate phrase for non-authoritative review/UI hints."""
 
         return cls._recognize_exact_phrase(
             str(content or "").strip().lower(), cls.GATE_APPROVAL_PHRASES
@@ -338,7 +338,7 @@ class ConversationAgent:
 
     @classmethod
     def recognize_remote_approval(cls, content: str) -> bool:
-        """Recognize only the exact current remote-execution approval phrase."""
+        """Classify a remote phrase for non-authoritative review/UI hints."""
 
         return cls._recognize_exact_phrase(
             str(content or "").strip().lower(), cls.REMOTE_APPROVAL_PHRASES
@@ -361,7 +361,7 @@ class ConversationAgent:
 
     @classmethod
     def is_explicit_plan_approval(cls, content: str) -> bool:
-        """Compatibility/readability alias for the approval boundary."""
+        """Compatibility alias for the non-authoritative phrase classifier."""
 
         return cls.recognize_plan_approval(content)
 

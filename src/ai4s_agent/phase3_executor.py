@@ -139,6 +139,7 @@ def install_phase3_executor_support() -> None:
         actor: str = "",
         approved_gates: set[str] | None = None,
         options: dict[str, Any] | None = None,
+        conversation_id: str = "",
     ) -> dict[str, Any]:
         if task_id == "parse_document_pdfplumber" and str(
             (options or {}).get("expected_corpus_sha256") or ""
@@ -152,6 +153,7 @@ def install_phase3_executor_support() -> None:
                 actor=actor,
                 approved_gates=approved_gates,
                 options=options,
+                conversation_id=conversation_id,
             )
         if task_id in _PHASE3_OUTPUT_DIRS:
             return _phase3_payload_for(
@@ -173,6 +175,7 @@ def install_phase3_executor_support() -> None:
             actor=actor,
             approved_gates=approved_gates,
             options=options,
+            conversation_id=conversation_id,
         )
 
     def collect_artifacts_with_phase3(

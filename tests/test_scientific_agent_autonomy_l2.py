@@ -366,7 +366,7 @@ def test_l2_failure_route_reuses_subset_authority_without_user_reapproval(
     assert body["decision"]["executable"] is False
 
 
-def test_l2_material_successor_receives_fresh_authority_after_conversational_approval(
+def test_l2_material_successor_receives_fresh_authority_after_structured_approval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _app, client, service, state, current = _start_waiting_gate_session_with_client(
@@ -468,17 +468,20 @@ def test_l2_material_successor_receives_fresh_authority_after_conversational_app
             actor_source=baseline_authorization.actor_source,
         )
 
-    appended = client.post(
-        f"/api/projects/{project_id}/conversations/{conversation_id}/messages",
+    approved_plan = client.post(
+        endpoint + "/approve",
         json={
-            "role": "user",
-            "content": "确认执行",
-            "client_message_id": "user-message-l2-successor-approval",
+            "expected_proposal_digest": replanned_body["proposal"]["proposal_digest"],
+            "authorization_mode": "stepwise",
+            "requested_preauthorized_gate_ids": [],
+            "confirmed": True,
+            "client_request_id": "structured-plan-l2-successor-approval",
+            "note": "Explicit structured test approval.",
         },
     )
-    assert appended.status_code == 201, appended.get_json()
+    assert approved_plan.status_code == 200, approved_plan.get_json()
     approved = client.post(
-        endpoint + "/turn",
+        endpoint + "/tick",
         json={"run_id": state["run_id"], "llm_provider": _stub_provider()},
     )
     assert approved.status_code == 200, approved.get_json()

@@ -27,6 +27,7 @@ from ai4s_agent.observability_correlation import (
 )
 from ai4s_agent.oled_scientific_agent_source_evidence import read_dispatch_receipts
 from ai4s_agent.resource_profiles import build_transfer_manifest_from_payloads
+from ai4s_agent.scientific_agent_evidence import BR2_EVIDENCE_CONSUMER_TASK_ID
 from ai4s_agent.schemas import (
     AgentHarnessAuthorityClass,
     AgentHarnessControllerAction,
@@ -623,7 +624,13 @@ class ScientificAgentHarnessController:
         request: AgentHarnessControllerStartRequest,
         actor: str,
         actor_source: str,
+        conversation_id: str = "",
     ) -> ControllerAdvanceResult:
+        clean_conversation = (
+            _safe_scope_id(conversation_id, field="conversation_id")
+            if str(conversation_id or "").strip()
+            else ""
+        )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="create",
@@ -631,6 +638,7 @@ class ScientificAgentHarnessController:
             request=request.model_dump(mode="json"),
             actor=actor,
             actor_source=actor_source,
+            conversation_id=clean_conversation,
         )
         scope = self._scope_id("create", start_intent_id)
         with self.tracer.start_span(
@@ -666,6 +674,10 @@ class ScientificAgentHarnessController:
                         or execution.client_request_id != request.client_request_id
                         or execution.actor != actor
                         or execution.actor_source != actor_source
+                        or (
+                            clean_conversation
+                            and execution.conversation_id != clean_conversation
+                        )
                     ):
                         raise ScientificAgentHarnessControllerConflict(
                             "start intent is already consumed by another request"
@@ -701,6 +713,7 @@ class ScientificAgentHarnessController:
                         permission=permission,
                         actor=actor,
                         actor_source=actor_source,
+                        conversation_id=clean_conversation,
                         client_request_id=request.client_request_id,
                         request_digest=request_digest,
                         created_at=self.clock(),
@@ -1470,6 +1483,7 @@ class ScientificAgentHarnessController:
             permission=permission,
             actor=execution.actor,
             actor_source=execution.actor_source,
+            conversation_id=execution.conversation_id,
             client_request_id=execution.client_request_id,
             request_digest=execution.request_digest,
             created_at=execution.created_at,
@@ -1489,6 +1503,7 @@ class ScientificAgentHarnessController:
         permission: Any,
         actor: str,
         actor_source: str,
+        conversation_id: str = "",
         client_request_id: str,
         request_digest: str,
         created_at: str,
@@ -1637,6 +1652,7 @@ class ScientificAgentHarnessController:
         return AgentHarnessControllerExecution(
             project_id=authorization.project_id,
             run_id=authorization.run_id,
+            conversation_id=conversation_id,
             start_intent_id=intent.start_intent_id,
             start_intent_digest=intent.start_intent_digest,
             authorization_id=authorization.authorization_id,
@@ -3089,6 +3105,7 @@ class ScientificAgentHarnessController:
             project_id=execution.project_id, run_plan=authorization.run_plan,
             task_index=slot.planned_task_index, task_id=slot.task_id,
             task_options=options,
+            conversation_id=execution.conversation_id,
             expected_local_adapter_execution_binding_digest=slot.local_adapter_execution_binding_digest,
             expected_compiled_options_digest=slot.compiled_options_digest,
             expected_input_artifacts_digest=binding["input_artifacts_digest"],
@@ -3298,6 +3315,7 @@ class ScientificAgentHarnessController:
                     expected_compiled_options_digest=slot.compiled_options_digest,
                     expected_input_artifacts_digest=dispatch.input_artifacts_digest,
                     expected_output_contract_digest=slot.output_contract_digest,
+                    conversation_id=execution.conversation_id,
                 )
             except ValueError as exc:
                 raise ScientificAgentHarnessControllerVerificationError(
@@ -4142,6 +4160,58 @@ class ScientificAgentHarnessController:
         stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         stage_digest = self._stage_digest(stage)
         registry_digest = _agent_digest(registry)
+        admission_registry_keys = {
+            key
+            for key in registry
+            if key == "scientific_evidence_admission"
+            or key.startswith("evidence_admission_")
+        }
+        admission_registry_allowed = False
+        if admission_registry_keys:
+            consumer_in_plan = any(
+                task.task_id == BR2_EVIDENCE_CONSUMER_TASK_ID
+                for task in authorization.run_plan.tasks
+            )
+            consumer_boundary = bool(
+                execution.conversation_id
+                and consumer_in_plan
+                and stage is not None
+                and (
+                    stage.stage == BR2_EVIDENCE_CONSUMER_TASK_ID
+                    or stage.next_stage == BR2_EVIDENCE_CONSUMER_TASK_ID
+                )
+            )
+            if not consumer_boundary:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "BR2 evidence admission appeared outside its consumer boundary"
+                )
+            try:
+                verified_admission = self.executor._verify_br2_admission_for_task(
+                    project_id=execution.project_id,
+                    run_id=execution.run_id,
+                    conversation_id=execution.conversation_id,
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "BR2 evidence admission is not verified"
+                ) from exc
+            expected_admission_keys = {
+                "scientific_evidence_admission",
+                f"evidence_admission_{verified_admission.admission_id}",
+            }
+            if admission_registry_keys != expected_admission_keys:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "BR2 evidence admission registry roster is invalid"
+                )
+            admission_registry_allowed = True
+        registry_anchor_digests = {registry_digest}
+        if admission_registry_allowed:
+            registry_without_admission = {
+                key: value
+                for key, value in registry.items()
+                if key not in admission_registry_keys
+            }
+            registry_anchor_digests.add(_agent_digest(registry_without_admission))
         if not unreceipted:
             if latest is None:
                 raise ScientificAgentHarnessControllerVerificationError(
@@ -4149,7 +4219,7 @@ class ScientificAgentHarnessController:
                 )
             if (
                 latest.after_stage_digest != stage_digest
-                or latest.after_artifact_registry_digest != registry_digest
+                or latest.after_artifact_registry_digest not in registry_anchor_digests
             ):
                 if self._manual_first_local_completion_is_adoptable(
                     execution=execution,
@@ -4182,7 +4252,7 @@ class ScientificAgentHarnessController:
                 }
                 and latest is not None
                 and latest.after_stage_digest == stage_digest
-                and latest.after_artifact_registry_digest == registry_digest
+                and latest.after_artifact_registry_digest in registry_anchor_digests
                 and latest.task_index is not None
                 and decision.task_index == latest.task_index + 1
                 and stage.status == RunStatus.SUCCEEDED
@@ -4204,7 +4274,7 @@ class ScientificAgentHarnessController:
                 }
                 and latest.task_index == decision.task_index
                 and latest.after_stage_digest == stage_digest
-                and latest.after_artifact_registry_digest == registry_digest
+                and latest.after_artifact_registry_digest in registry_anchor_digests
                 and stage.status == RunStatus.SUCCEEDED
                 and stage.next_stage == decision.task_id
             )
@@ -4220,7 +4290,7 @@ class ScientificAgentHarnessController:
                 and latest.task_index is not None
                 and decision.task_index == latest.task_index + 1
                 and latest.after_stage_digest == stage_digest
-                and latest.after_artifact_registry_digest == registry_digest
+                and latest.after_artifact_registry_digest in registry_anchor_digests
             )
             if not (
                 preparing_exact_successor
@@ -4240,6 +4310,8 @@ class ScientificAgentHarnessController:
             for task in authorization.run_plan.tasks[:task_limit]
             for artifact_id in task.output_artifacts
         }
+        if admission_registry_allowed:
+            allowed_new_ids.update(admission_registry_keys)
         for remote_slot in execution.task_slots[:task_limit]:
             if remote_slot.execution_route != "remote_execution_service":
                 continue
@@ -4617,8 +4689,17 @@ class ScientificAgentHarnessController:
         return f"scope-{digest.split(':', 1)[1][:32]}"
 
     @staticmethod
-    def _request_digest(*, project_id: str, operation: str, scope_id: str, request: Mapping[str, Any], actor: str = "", actor_source: str = "") -> str:
-        return _agent_digest({
+    def _request_digest(
+        *,
+        project_id: str,
+        operation: str,
+        scope_id: str,
+        request: Mapping[str, Any],
+        actor: str = "",
+        actor_source: str = "",
+        conversation_id: str = "",
+    ) -> str:
+        material: dict[str, Any] = {
             "schema_version": CONTROLLER_REQUEST_VERSION,
             "project_id": project_id,
             "operation": operation,
@@ -4626,4 +4707,7 @@ class ScientificAgentHarnessController:
             "request": dict(request),
             "actor": actor,
             "actor_source": actor_source,
-        })
+        }
+        if conversation_id:
+            material["conversation_id"] = conversation_id
+        return _agent_digest(material)

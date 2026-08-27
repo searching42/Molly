@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from ai4s_agent.schemas import (
     AtomicTaskSpec,
@@ -1216,10 +1216,27 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
 
 
 class AtomicTaskRegistry:
-    def __init__(self, tasks: Iterable[AtomicTaskSpec] | None = None) -> None:
+    def __init__(
+        self,
+        tasks: Iterable[AtomicTaskSpec] | None = None,
+        *,
+        post_task_ids_by_task: Mapping[str, Iterable[str]] | None = None,
+    ) -> None:
         source = list(tasks or DEFAULT_ATOMIC_TASKS)
         self._validate_tasks(source)
         self._tasks = {task.task_id: task for task in source}
+        self._post_task_ids_by_task = {
+            str(task_id): tuple(str(post_task_id) for post_task_id in post_task_ids)
+            for task_id, post_task_ids in (post_task_ids_by_task or {}).items()
+        }
+        for task_id, post_task_ids in self._post_task_ids_by_task.items():
+            if task_id not in self._tasks:
+                raise ValueError(f"post-task binding names unknown task: {task_id}")
+            for post_task_id in post_task_ids:
+                if post_task_id not in self._tasks:
+                    raise ValueError(
+                        f"post-task binding names unknown task: {post_task_id}"
+                    )
         self._artifact_producers: dict[str, list[str]] = {}
         for task in source:
             for artifact in task.output_artifacts:
@@ -1254,6 +1271,16 @@ class AtomicTaskRegistry:
 
     def producers_for(self, artifact_id: str) -> list[str]:
         return list(self._artifact_producers.get(artifact_id, []))
+
+    def post_tasks_for(self, requested_tasks: Iterable[str]) -> list[str]:
+        """Return server-declared continuations for an exact requested task set."""
+
+        result: list[str] = []
+        for task_id in requested_tasks:
+            for post_task_id in self._post_task_ids_by_task.get(str(task_id), ()):
+                if post_task_id not in result:
+                    result.append(post_task_id)
+        return result
 
 
 def private_structured_dataset_task_registry_v2() -> AtomicTaskRegistry:
@@ -1472,8 +1499,64 @@ def br2_contextual_mapping_task_registry_v1() -> AtomicTaskRegistry:
         verification_policy="artifact_registry_and_stage_verifier",
         planner_visible=True,
     )
+    evidence_admission_consumer = AtomicTaskSpec(
+        task_id="consume_oled_candidate_evidence_admission",
+        required_artifacts=["candidate_raw_dataset", "candidate_raw_dataset_review"],
+        optional_input_artifacts=["scientific_evidence_admission"],
+        input_artifact_alternatives=[],
+        output_artifacts=["confirmed_oled_evidence"],
+        risk_level=RiskLevel.LOW,
+        gates=[],
+        default_adapter="consume_oled_candidate_evidence_admission_adapter",
+        scientific_tool_id="consume_oled_candidate_evidence_admission",
+        label="Consume the verified OLED evidence admission",
+        description=(
+            "Verify the exact conversation-bound ScientificEvidenceAdmissionV1 "
+            "before making the confirmed BR2 evidence available downstream."
+        ),
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=None,
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "candidate_raw_dataset": ["registered_intermediate", "verified_output"],
+            "candidate_raw_dataset_review": [
+                "registered_intermediate",
+                "verified_output",
+            ],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        # The executor adds the BR2 admission check at this task's effect
+        # boundary.  Keep the shared permission-policy vocabulary stable so
+        # adding this consumer does not invalidate historical authority
+        # digests.
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=False,
+    )
     return AtomicTaskRegistry(
-        [*retained_tasks, extract_evidence, contextual_mapping, candidate_dataset]
+        [
+            *retained_tasks,
+            extract_evidence,
+            contextual_mapping,
+            candidate_dataset,
+            evidence_admission_consumer,
+        ],
+        post_task_ids_by_task={
+            "prepare_oled_candidate_raw_dataset": [
+                "consume_oled_candidate_evidence_admission"
+            ]
+        },
     )
 
 
@@ -2031,6 +2114,7 @@ def expand_run_plan(
     available_artifacts: list[str] | None = None,
     registry: AtomicTaskRegistry | None = None,
     skip_satisfied_dependencies: bool = False,
+    include_post_tasks: bool = False,
 ) -> RunPlan:
     task_registry = registry or AtomicTaskRegistry()
     pre_existing_artifacts = set(available_artifacts or [])
@@ -2208,6 +2292,10 @@ def expand_run_plan(
 
     for requested in requested_tasks:
         resolve_task(requested)
+
+    if include_post_tasks:
+        for post_task_id in task_registry.post_tasks_for(dedup_requested):
+            resolve_task(post_task_id)
 
     tasks: list[PlannedTask] = []
     for task_id in ordered_task_ids:
