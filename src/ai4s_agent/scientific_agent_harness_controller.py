@@ -28,6 +28,7 @@ from ai4s_agent.observability_correlation import (
 from ai4s_agent.oled_scientific_agent_source_evidence import read_dispatch_receipts
 from ai4s_agent.resource_profiles import build_transfer_manifest_from_payloads
 from ai4s_agent.scientific_agent_evidence import BR2_EVIDENCE_CONSUMER_TASK_ID
+from ai4s_agent.scientific_agent_autonomy_lease import AutonomyLeaseError
 from ai4s_agent.schemas import (
     AgentHarnessAuthorityClass,
     AgentHarnessControllerAction,
@@ -272,6 +273,16 @@ class ScientificAgentHarnessControllerRecoveryRequired(
     """A prior effect cannot be safely repeated automatically."""
 
 
+class ScientificAgentHarnessControllerLeaseBlocked(
+    ScientificAgentHarnessControllerError
+):
+    """The server-owned autonomy lease denied an automatic Controller effect."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = str(reason_code)
+        super().__init__(self.reason_code)
+
+
 @dataclass(frozen=True)
 class ControllerRequestSession:
     project_id: str
@@ -502,6 +513,7 @@ class ScientificAgentHarnessController:
         remote_executions: Any,
         tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
+        autonomy_lease_service: Any | None = None,
     ) -> None:
         self.storage = storage
         self.proposal_store = proposal_store
@@ -512,7 +524,47 @@ class ScientificAgentHarnessController:
         self.remote_executions = remote_executions
         self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
+        self.autonomy_lease_service = autonomy_lease_service
         self.requests = AgentHarnessControllerStore(control_store=control_store)
+
+    def verify_autonomy_lease(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        action: AgentHarnessControllerAction | None = None,
+    ) -> Any | None:
+        """Verify the current lease immediately before automatic work.
+
+        This is a pre-provider/runtime guard only.  The mutating path repeats
+        the check and atomically reserves budget under the lease lock, so a
+        caller cannot turn this read into authority by racing another request.
+        """
+
+        service = self.autonomy_lease_service
+        if service is None:
+            return None
+        selected = action
+        if selected is None:
+            selected = self._inspect(execution).next_action
+        usage_kind = service.usage_kind_for_controller_action(selected)
+        if usage_kind is None:
+            return None
+        try:
+            return service.verify_current_lease(
+                project_id=execution.project_id,
+                run_id=execution.run_id,
+                grant_id=str(getattr(execution, "autonomy_grant_id", "") or ""),
+                grant_digest=str(getattr(execution, "autonomy_grant_digest", "") or ""),
+                authority_epoch=str(
+                    getattr(execution, "autonomy_authority_epoch", "") or ""
+                ),
+                usage_kind=usage_kind,
+                conversation_id=str(getattr(execution, "conversation_id", "") or ""),
+            )
+        except AutonomyLeaseError as exc:
+            raise ScientificAgentHarnessControllerLeaseBlocked(
+                exc.reason_code
+            ) from exc
 
     @staticmethod
     def _is_current_controller_policy(
@@ -2191,6 +2243,70 @@ class ScientificAgentHarnessController:
         status = AgentHarnessControllerStatus.CANCELLED if state == "CANCELLED" else AgentHarnessControllerStatus.FAILED
         return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
 
+    def _decision_has_durable_effect(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        decision: AgentHarnessControllerDecision,
+    ) -> bool:
+        """Detect an already-observed effect before a lease retry.
+
+        This is intentionally conservative.  A positive result means the
+        existing Controller reconciliation path can run without dispatching a
+        new adapter/transport call.  An uncertain result is false, so an
+        expired lease blocks rather than guessing that a prior effect exists.
+        """
+
+        action = decision.action_kind
+        try:
+            slot = (
+                execution.task_slots[decision.task_index]
+                if decision.task_index is not None
+                else None
+            )
+            if action is AgentHarnessControllerAction.PREPARE_LOCAL_GATE:
+                if slot is None:
+                    return False
+                stage = self.storage.read_stage_state(
+                    execution.project_id,
+                    execution.run_id,
+                )
+                return bool(
+                    self._stage_snapshot(stage, slot.task_id)
+                    and stage is not None
+                    and stage.status == RunStatus.WAITING_USER
+                )
+            if action is AgentHarnessControllerAction.EXECUTE_LOCAL_TASK:
+                return bool(
+                    self._local_publications_for_decision(execution, decision)
+                    or self._local_dispatch_receipts_for_decision(execution, decision)
+                )
+            if action is AgentHarnessControllerAction.ADOPT_COMPLETED_TASK:
+                return bool(self._local_publications_for_decision(execution, decision))
+            if slot is None or slot.execution_route != "remote_execution_service":
+                return False
+            remote = self._remote_inspection_or_none(execution, slot)
+            if not remote:
+                return False
+            effective = str(remote.get("effective_status") or "")
+            if action is AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST:
+                return True
+            if action is AgentHarnessControllerAction.DISPATCH_REMOTE_TASK:
+                return effective not in {"WAITING_APPROVAL", "APPROVED"}
+            if action is AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS:
+                return effective == "SUCCEEDED" and isinstance(
+                    remote.get("publication"), dict
+                )
+            # A refresh has no trustworthy interval marker in the existing
+            # remote lifecycle.  Only terminal state is safe to reconcile;
+            # an in-flight state remains blocked rather than being refreshed
+            # after lease expiry.
+            if action is AgentHarnessControllerAction.REFRESH_REMOTE_TASK:
+                return effective in {"SUCCEEDED", "FAILED", "CANCELLED", "RECOVERY_REQUIRED"}
+        except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
+            return False
+        return False
+
     def _advance_in_session(self, *, execution: Any, session: ControllerRequestSession) -> ControllerAdvanceResult:
         self._require_current_controller_policy(execution)
         receipt_marker = self.requests.read_marker(session.request_dir / "receipt.json")
@@ -2336,17 +2452,81 @@ class ScientificAgentHarnessController:
                         "action": decision.action_kind.value,
                     },
                 )
+                lease_service = self.autonomy_lease_service
+                lease_operation = None
+
+                def reconcile_failed_lease_operation() -> None:
+                    if lease_service is None or lease_operation is None:
+                        return
+                    # A failed call is not evidence that the effect did not
+                    # happen.  Only the same durable Controller markers used
+                    # by restart replay may turn the reservation into a
+                    # committed receipt; otherwise UNKNOWN_EFFECT remains a
+                    # permanent fail-closed boundary.
+                    try:
+                        if self._decision_has_durable_effect(
+                            execution=execution,
+                            decision=decision,
+                        ):
+                            lease_service.reconcile_controller_effect(
+                                execution=execution,
+                                decision=decision,
+                            )
+                        else:
+                            lease_service.mark_unknown_effect(
+                                reservation=lease_operation.reservation,
+                            )
+                    except AutonomyLeaseError:
+                        pass
+
                 try:
                     current_inspection = self._inspect(execution)
+                    reconcile_only = not self._decision_is_fresh(
+                        decision,
+                        current_inspection,
+                    )
+                    if lease_service is not None and decision.executable:
+                        if self._decision_has_durable_effect(
+                            execution=execution,
+                            decision=decision,
+                        ):
+                            # A known Controller effect may be reconciled
+                            # after a process restart even when the lease's
+                            # wall-clock window has expired.  This path never
+                            # creates a new reservation or dispatches an
+                            # adapter.
+                            lease_service.reconcile_controller_effect(
+                                execution=execution,
+                                decision=decision,
+                            )
+                            reconcile_only = True
+                        else:
+                            # This is the effect boundary: the lease service
+                            # repeats current-grant verification and performs
+                            # the aggregate check-and-reserve while holding the
+                            # lease-level process lock.
+                            lease_operation = lease_service.begin_controller_effect(
+                                execution=execution,
+                                decision=decision,
+                            )
                     receipt = self._execute_decision(
                         execution,
                         decision,
-                        reconcile_only=not self._decision_is_fresh(
-                            decision,
-                            current_inspection,
-                        ),
+                        reconcile_only=reconcile_only,
                     )
+                    if lease_service is not None:
+                        lease_service.finish_controller_effect(
+                            operation=lease_operation,
+                            reconcile_only=reconcile_only,
+                        )
+                except AutonomyLeaseError as exc:
+                    reconcile_failed_lease_operation()
+                    span.record_error("CONTROLLER_ACTION_FAILED")
+                    raise ScientificAgentHarnessControllerLeaseBlocked(
+                        exc.reason_code
+                    ) from exc
                 except Exception:
+                    reconcile_failed_lease_operation()
                     span.record_error("CONTROLLER_ACTION_FAILED")
                     raise
                 span.set_attribute("outcome", receipt.outcome.value)

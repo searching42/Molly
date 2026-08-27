@@ -10,6 +10,7 @@ foundation's trusted successor applicator or the existing Replanner.
 from __future__ import annotations
 
 import json
+import math
 import re
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -68,6 +69,11 @@ class ScientificAgentAutonomyGrantBinding:
     authority_epoch: str
     run_id: str = ""
     session_id: str = ""
+    # These are provenance facts, not new capability fields.  Lease issuance
+    # copies them only into its server-owned creator binding; they never come
+    # from a request, provider, or Conversation message.
+    actor: str = ""
+    actor_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,8 +113,14 @@ class ScientificAgentAutonomyGrantStore:
     recovery budget can create a grant.
     """
 
-    def __init__(self, *, storage: Any) -> None:
+    def __init__(
+        self,
+        *,
+        storage: Any,
+        clock: Callable[[], str] = now_iso,
+    ) -> None:
         self.storage = storage
+        self.clock = clock
 
     @staticmethod
     def _clean_id(value: Any, *, field: str, allow_empty: bool = False) -> str:
@@ -189,7 +201,7 @@ class ScientificAgentAutonomyGrantStore:
             "session_id": clean_session,
             "actor": clean_actor,
             "actor_source": clean_source,
-            "created_at": now_iso(),
+            "created_at": self.clock(),
             "active": True,
         }
         path = self._path(grant.project_id, create=True)
@@ -212,6 +224,8 @@ class ScientificAgentAutonomyGrantStore:
                         authority_epoch=epoch,
                         run_id=str(existing.get("run_id") or ""),
                         session_id=str(existing.get("session_id") or ""),
+                        actor=str(existing.get("actor") or clean_actor),
+                        actor_source=str(existing.get("actor_source") or clean_source),
                     )
             records.append(record)
             write_json(path, {"project_id": grant.project_id, "grants": records})
@@ -220,6 +234,8 @@ class ScientificAgentAutonomyGrantStore:
             authority_epoch=epoch,
             run_id=clean_run,
             session_id=clean_session,
+            actor=clean_actor,
+            actor_source=clean_source,
         )
 
     def resolve_current(
@@ -228,14 +244,27 @@ class ScientificAgentAutonomyGrantStore:
         project_id: str,
         run_id: str = "",
         session_id: str = "",
+        include_expired: bool = False,
     ) -> ScientificAgentAutonomyGrantBinding | None:
-        """Return the newest active, currently valid grant for this lineage."""
+        """Return the newest active grant for this lineage.
+
+        ``include_expired`` is a server-internal restart/reconciliation seam.
+        It lets the lease runtime reread an immutable grant after its validity
+        window has ended so it can report ``EXPIRED`` or reconcile a known
+        effect.  It does not make the grant eligible for a new effect.
+        """
 
         path = self._path(project_id, create=False)
         records = self._read(path)
         clean_run = self._clean_id(run_id, field="run_id", allow_empty=True)
         clean_session = self._clean_id(session_id, field="session_id", allow_empty=True)
-        now = datetime.now(timezone.utc)
+        try:
+            now = datetime.fromisoformat(str(self.clock()).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise FailureRecoveryConflict("autonomy grant clock is invalid") from exc
+        if now.tzinfo is None:
+            raise FailureRecoveryConflict("autonomy grant clock lacks timezone")
+        now = now.astimezone(timezone.utc)
         candidates: list[tuple[str, int, ScientificAgentAutonomyGrantBinding]] = []
         for index, record in enumerate(records):
             if record.get("active", True) is not True:
@@ -244,10 +273,14 @@ class ScientificAgentAutonomyGrantStore:
                 raise FailureRecoveryConflict("autonomy grant record version is invalid")
             actor = str(record.get("actor") or "").strip()
             actor_source = str(record.get("actor_source") or "").strip()
-            if (
-                not actor
-                or not actor_source
-                or not actor_source.startswith(("config:", "server:", "wsgi."))
+            # The actor fields were added to the server binding after the
+            # original grant artifact format.  Keep old records readable,
+            # but never accept a partially populated or untrusted new
+            # provenance pair; lease issuance falls back to its own
+            # server-owned creator only for the fully absent legacy pair.
+            if (bool(actor) != bool(actor_source)) or (
+                actor_source
+                and not actor_source.startswith(("config:", "server:", "wsgi."))
             ):
                 raise FailureRecoveryConflict("autonomy grant record provenance is invalid")
             raw_grant = record.get("grant")
@@ -275,7 +308,9 @@ class ScientificAgentAutonomyGrantStore:
                 continue
             if record_session and record_session != clean_session:
                 continue
-            if (valid_from is not None and now < valid_from) or now > valid_until:
+            if not include_expired and (
+                (valid_from is not None and now < valid_from) or now >= valid_until
+            ):
                 continue
             candidates.append(
                 (
@@ -286,6 +321,8 @@ class ScientificAgentAutonomyGrantStore:
                         authority_epoch=epoch,
                         run_id=record_run,
                         session_id=record_session,
+                        actor=actor,
+                        actor_source=actor_source,
                     ),
                 )
             )
@@ -312,6 +349,8 @@ class ScientificAgentAutonomyGrantIssuer:
         max_retries: int = 1,
         max_replans: int = 1,
         grant_ttl_seconds: int = 86_400,
+        max_active_execution_seconds: float = 900.0,
+        max_remote_runtime_seconds: float = 900.0,
         enabled: bool = True,
         clock: Callable[[], str] = now_iso,
     ) -> None:
@@ -322,6 +361,14 @@ class ScientificAgentAutonomyGrantIssuer:
         self.grant_ttl_seconds = self._count(
             grant_ttl_seconds,
             field="grant_ttl_seconds",
+        )
+        self.max_active_execution_seconds = self._budget(
+            max_active_execution_seconds,
+            field="max_active_execution_seconds",
+        )
+        self.max_remote_runtime_seconds = self._budget(
+            max_remote_runtime_seconds,
+            field="max_remote_runtime_seconds",
         )
         self.enabled = bool(enabled)
         self.clock = clock
@@ -336,6 +383,18 @@ class ScientificAgentAutonomyGrantIssuer:
             raise ValueError(f"{field} must be a non-negative integer") from exc
         if parsed < 0:
             raise ValueError(f"{field} must be a non-negative integer")
+        return parsed
+
+    @staticmethod
+    def _budget(value: Any, *, field: str) -> float:
+        if isinstance(value, bool):
+            raise ValueError(f"{field} must be a finite non-negative number")
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} must be a finite non-negative number") from exc
+        if not math.isfinite(parsed) or parsed < 0:
+            raise ValueError(f"{field} must be a finite non-negative number")
         return parsed
 
     @staticmethod
@@ -431,6 +490,10 @@ class ScientificAgentAutonomyGrantIssuer:
                     if str(getattr(binding, "profile_id", "") or "")
                 }
             ),
+            aggregate_budget={
+                "active_execution_seconds": self.max_active_execution_seconds,
+                "remote_runtime_seconds": self.max_remote_runtime_seconds,
+            },
             max_retries=self.max_retries,
             max_replans=self.max_replans,
             valid_from=created_at,
@@ -704,6 +767,8 @@ class ScientificAgentFailureRecoveryRuntime:
             authority_epoch=epoch,
             run_id=binding.run_id,
             session_id=binding.session_id,
+            actor=binding.actor,
+            actor_source=binding.actor_source,
         )
 
     def _grant_binding(
@@ -745,6 +810,8 @@ class ScientificAgentFailureRecoveryRuntime:
                 authority_epoch=epoch,
                 run_id=str(value.get("run_id") or ""),
                 session_id=str(value.get("session_id") or ""),
+                actor=str(value.get("actor") or ""),
+                actor_source=str(value.get("actor_source") or ""),
             )
         else:
             raise FailureRecoveryObservationInvalid("server autonomy grant resolver returned an invalid value")

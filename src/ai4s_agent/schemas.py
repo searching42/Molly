@@ -2134,6 +2134,9 @@ AGENT_EXECUTION_PLAN_PROPOSAL_V2 = "agent_execution_plan_proposal.v2"
 AGENT_PLAN_AUTHORIZATION_V1 = "agent_plan_authorization.v1"
 AGENT_PLAN_AUTHORIZATION_V2 = "agent_plan_authorization.v2"
 AUTONOMY_GRANT_V1 = "autonomy_grant.v1"
+AUTONOMY_LEASE_V1 = "autonomy_lease.v1"
+AUTONOMY_LEASE_USAGE_RECEIPT_V1 = "autonomy_lease_usage_receipt.v1"
+AUTONOMY_LEASE_BUDGET_EVIDENCE_V1 = "autonomy_lease_budget_evidence.v1"
 AUTHORITY_EVALUATION_V1 = "authority_evaluation.v1"
 EVIDENCE_GRANT_V1 = "evidence_grant.v1"
 EVIDENCE_GRANT_CHECKPOINT_V1 = "evidence_grant_request_checkpoint.v1"
@@ -4546,6 +4549,354 @@ class AutonomyGrant(BaseModel):
 
     def scope_material(self) -> dict[str, Any]:
         return self.semantic_material()
+
+
+AUTONOMY_LEASE_USAGE_KINDS = ("ACTIVE_EXECUTION", "REMOTE_RUNTIME")
+AUTONOMY_LEASE_VALIDITY_STATUSES = ("ACTIVE", "NOT_YET_VALID", "EXPIRED")
+AUTONOMY_LEASE_BUDGET_STATUSES = (
+    "AVAILABLE",
+    "ACTIVE_BUDGET_EXHAUSTED",
+    "REMOTE_BUDGET_EXHAUSTED",
+)
+
+
+def _lease_timestamp(value: str, *, field: str) -> str:
+    clean = _agent_safe_text(value, field=field, max_length=64, allow_empty=False)
+    try:
+        parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return clean
+
+
+def _lease_nonnegative_seconds(value: Any, *, field: str) -> float:
+    parsed = _parse_float_field(
+        value,
+        message=f"{field} must be a finite non-negative number",
+    )
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ValueError(f"{field} must be a finite non-negative number")
+    return parsed
+
+
+class AutonomyLeaseV1(BaseModel):
+    """Server-owned temporal and budget eligibility for one AutonomyGrant.
+
+    A lease never carries task, effect, parameter, resource, or I/O authority.
+    Those capabilities remain in the separately verified AutonomyGrant and
+    Permission -> Authorization -> StartIntent -> Controller chain.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AUTONOMY_LEASE_V1] = AUTONOMY_LEASE_V1
+    lease_id: str = ""
+    lease_digest: str = ""
+    project_id: str
+    grant_id: str
+    grant_digest: str
+    authority_epoch: str
+    issued_at: str
+    valid_from: str
+    valid_until: str
+    max_active_execution_seconds: float
+    max_remote_runtime_seconds: float
+    created_by: str
+    created_by_source: str
+    policy_version: str
+    policy_digest: str
+
+    @field_validator("lease_id", "project_id", "grant_id", "authority_epoch", "policy_version")
+    @classmethod
+    def validate_lease_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "lease_id",
+        )
+
+    @field_validator("lease_digest", "grant_digest", "policy_digest")
+    @classmethod
+    def validate_lease_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "lease_digest",
+        )
+
+    @field_validator("issued_at", "valid_from", "valid_until")
+    @classmethod
+    def validate_lease_times(cls, value: str, info: Any) -> str:
+        return _lease_timestamp(value, field=info.field_name)
+
+    @field_validator("max_active_execution_seconds", "max_remote_runtime_seconds", mode="before")
+    @classmethod
+    def validate_lease_budgets(cls, value: Any, info: Any) -> float:
+        return _lease_nonnegative_seconds(value, field=info.field_name)
+
+    @field_validator("created_by", "created_by_source")
+    @classmethod
+    def validate_lease_creator(cls, value: str, info: Any) -> str:
+        clean = _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=256,
+            allow_empty=False,
+        )
+        if info.field_name == "created_by_source" and not clean.startswith(
+            ("config:", "server:", "wsgi.")
+        ):
+            raise ValueError("created_by_source must identify a trusted server action source")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_lease(self) -> "AutonomyLeaseV1":
+        issued = datetime.fromisoformat(self.issued_at.replace("Z", "+00:00"))
+        valid_from = datetime.fromisoformat(self.valid_from.replace("Z", "+00:00"))
+        valid_until = datetime.fromisoformat(self.valid_until.replace("Z", "+00:00"))
+        if valid_from < issued:
+            raise ValueError("lease valid_from must not precede issued_at")
+        if valid_from >= valid_until:
+            raise ValueError("lease valid_from must precede valid_until")
+        expected = _agent_digest(self.semantic_material())
+        if self.lease_digest and self.lease_digest != expected:
+            raise ValueError("autonomy lease digest mismatch")
+        object.__setattr__(self, "lease_digest", expected)
+        expected_id = f"autonomy-lease-{expected.split(':', 1)[1][:32]}"
+        if self.lease_id and self.lease_id != expected_id:
+            raise ValueError("lease_id must derive from lease_digest")
+        object.__setattr__(self, "lease_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("lease_id", None)
+        payload.pop("lease_digest", None)
+        return payload
+
+
+class AutonomyLeaseUsageReceiptV1(BaseModel):
+    """Immutable append-only usage committed for one lease operation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AUTONOMY_LEASE_USAGE_RECEIPT_V1] = (
+        AUTONOMY_LEASE_USAGE_RECEIPT_V1
+    )
+    receipt_id: str = ""
+    receipt_digest: str = ""
+    project_id: str
+    lease_id: str
+    lease_digest: str
+    grant_id: str
+    grant_digest: str
+    authority_epoch: str
+    operation_id: str
+    controller_execution_id: str
+    task_id: str = ""
+    usage_kind: Literal["ACTIVE_EXECUTION", "REMOTE_RUNTIME"]
+    usage_seconds: float
+    started_at: str
+    ended_at: str
+    previous_usage_digest: str = ""
+    ordinal: int = Field(ge=1, le=1_000_000_000)
+    created_at: str
+
+    @field_validator(
+        "receipt_id",
+        "project_id",
+        "lease_id",
+        "grant_id",
+        "authority_epoch",
+        "operation_id",
+        "controller_execution_id",
+        "task_id",
+    )
+    @classmethod
+    def validate_receipt_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"receipt_id", "task_id"},
+        )
+
+    @field_validator(
+        "receipt_digest",
+        "lease_digest",
+        "grant_digest",
+        "previous_usage_digest",
+    )
+    @classmethod
+    def validate_receipt_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"receipt_digest", "previous_usage_digest"},
+        )
+
+    @field_validator("usage_seconds", mode="before")
+    @classmethod
+    def validate_usage_seconds(cls, value: Any) -> float:
+        return _lease_nonnegative_seconds(value, field="usage_seconds")
+
+    @field_validator("started_at", "ended_at", "created_at")
+    @classmethod
+    def validate_receipt_times(cls, value: str, info: Any) -> str:
+        return _lease_timestamp(value, field=info.field_name)
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "AutonomyLeaseUsageReceiptV1":
+        started = datetime.fromisoformat(self.started_at.replace("Z", "+00:00"))
+        ended = datetime.fromisoformat(self.ended_at.replace("Z", "+00:00"))
+        if ended < started:
+            raise ValueError("usage receipt ended_at must not precede started_at")
+        expected = _agent_digest(self.semantic_material())
+        if self.receipt_digest and self.receipt_digest != expected:
+            raise ValueError("autonomy lease usage receipt digest mismatch")
+        object.__setattr__(self, "receipt_digest", expected)
+        expected_id = f"autonomy-lease-receipt-{expected.split(':', 1)[1][:32]}"
+        if self.receipt_id and self.receipt_id != expected_id:
+            raise ValueError("receipt_id must derive from receipt_digest")
+        object.__setattr__(self, "receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("receipt_id", None)
+        payload.pop("receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AutonomyLeaseBudgetEvidenceV1(BaseModel):
+    """Server-derived lease status rebuilt from immutable usage evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[AUTONOMY_LEASE_BUDGET_EVIDENCE_V1] = (
+        AUTONOMY_LEASE_BUDGET_EVIDENCE_V1
+    )
+    evidence_id: str = ""
+    evidence_digest: str = ""
+    project_id: str
+    lease_id: str
+    lease_digest: str
+    grant_id: str
+    grant_digest: str
+    authority_epoch: str
+    max_active_execution_seconds: float
+    active_execution_seconds_used: float
+    active_execution_seconds_reserved: float = 0.0
+    active_execution_seconds_remaining: float
+    max_remote_runtime_seconds: float
+    remote_runtime_seconds_used: float
+    remote_runtime_seconds_reserved: float = 0.0
+    remote_runtime_seconds_remaining: float
+    validity_status: Literal["ACTIVE", "NOT_YET_VALID", "EXPIRED"]
+    budget_status: Literal[
+        "AVAILABLE",
+        "ACTIVE_BUDGET_EXHAUSTED",
+        "REMOTE_BUDGET_EXHAUSTED",
+    ]
+    latest_receipt_digest: str = ""
+    usage_receipt_count: int = Field(default=0, ge=0, le=1_000_000_000)
+    created_at: str
+
+    @field_validator(
+        "evidence_id",
+        "project_id",
+        "lease_id",
+        "grant_id",
+        "authority_epoch",
+    )
+    @classmethod
+    def validate_evidence_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "evidence_id",
+        )
+
+    @field_validator("evidence_digest", "lease_digest", "grant_digest", "latest_receipt_digest")
+    @classmethod
+    def validate_evidence_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"evidence_digest", "latest_receipt_digest"},
+        )
+
+    @field_validator(
+        "max_active_execution_seconds",
+        "active_execution_seconds_used",
+        "active_execution_seconds_reserved",
+        "active_execution_seconds_remaining",
+        "max_remote_runtime_seconds",
+        "remote_runtime_seconds_used",
+        "remote_runtime_seconds_reserved",
+        "remote_runtime_seconds_remaining",
+        mode="before",
+    )
+    @classmethod
+    def validate_evidence_seconds(cls, value: Any, info: Any) -> float:
+        return _lease_nonnegative_seconds(value, field=info.field_name)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_evidence_created_at(cls, value: str) -> str:
+        return _lease_timestamp(value, field="created_at")
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> "AutonomyLeaseBudgetEvidenceV1":
+        for used, reserved, remaining, limit, label in (
+            (
+                self.active_execution_seconds_used,
+                self.active_execution_seconds_reserved,
+                self.active_execution_seconds_remaining,
+                self.max_active_execution_seconds,
+                "active execution",
+            ),
+            (
+                self.remote_runtime_seconds_used,
+                self.remote_runtime_seconds_reserved,
+                self.remote_runtime_seconds_remaining,
+                self.max_remote_runtime_seconds,
+                "remote runtime",
+            ),
+        ):
+            if used > limit or reserved > limit or remaining > limit:
+                raise ValueError(f"{label} budget evidence exceeds its limit")
+            if abs((used + reserved + remaining) - limit) > 1e-9:
+                raise ValueError(f"{label} budget evidence does not reconcile")
+        active_exhausted = self.active_execution_seconds_remaining <= 1e-9
+        remote_exhausted = self.remote_runtime_seconds_remaining <= 1e-9
+        expected_status = (
+            "ACTIVE_BUDGET_EXHAUSTED"
+            if active_exhausted
+            else "REMOTE_BUDGET_EXHAUSTED"
+            if remote_exhausted
+            else "AVAILABLE"
+        )
+        if self.budget_status != expected_status:
+            raise ValueError("lease budget status does not match remaining budget")
+        expected = _agent_digest(self.semantic_material())
+        if self.evidence_digest and self.evidence_digest != expected:
+            raise ValueError("autonomy lease budget evidence digest mismatch")
+        object.__setattr__(self, "evidence_digest", expected)
+        expected_id = f"autonomy-lease-budget-{expected.split(':', 1)[1][:32]}"
+        if self.evidence_id and self.evidence_id != expected_id:
+            raise ValueError("evidence_id must derive from evidence_digest")
+        object.__setattr__(self, "evidence_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("evidence_id", None)
+        payload.pop("evidence_digest", None)
+        payload.pop("created_at", None)
+        return payload
 
 
 class EvidenceGrantScope(str, Enum):
@@ -11815,6 +12166,9 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
     "agent_plan_authorization": AgentPlanAuthorization,
     "autonomy_grant": AutonomyGrant,
+    "autonomy_lease": AutonomyLeaseV1,
+    "autonomy_lease_usage_receipt": AutonomyLeaseUsageReceiptV1,
+    "autonomy_lease_budget_evidence": AutonomyLeaseBudgetEvidenceV1,
     "evidence_grant": EvidenceGrantV1,
     "scientific_evidence_admission": ScientificEvidenceAdmissionV1,
     "scientific_evidence_consumption_receipt": ScientificEvidenceConsumptionReceiptV1,

@@ -81,6 +81,7 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
     ScientificAgentFailureRecoveryRuntime,
     ScientificAgentFailureRecoveryServiceFactory,
 )
+from ai4s_agent.scientific_agent_autonomy_lease import AutonomyLeaseService
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
@@ -279,8 +280,34 @@ def register_routes(
         grant_ttl_seconds=app.config.get(
             "AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS", 86_400
         ),
+        max_active_execution_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS", 900
+        ),
+        max_remote_runtime_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS", 900
+        ),
         enabled=_as_bool(app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")),
     )
+    autonomy_lease_service = AutonomyLeaseService(
+        storage=projects,
+        grant_source=recovery_grant_store,
+        lease_ttl_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_LEASE_TTL_SECONDS", 3_600
+        ),
+        max_active_execution_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS", 900
+        ),
+        max_remote_runtime_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS", 900
+        ),
+        operation_reservation_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS", 300
+        ),
+        remote_operation_reservation_seconds=app.config.get(
+            "AI4S_AGENT_AUTONOMY_REMOTE_RESERVATION_SECONDS", 300
+        ),
+    )
+    app.extensions["scientific_agent_autonomy_lease_service"] = autonomy_lease_service
     register_scientific_agent_permission_routes(
         app,
         projects=projects,
@@ -304,6 +331,12 @@ def register_routes(
         ),
         remote_executions=remote_executions,
         tracer=harness_tracer,
+        autonomy_lease_service=(
+            autonomy_lease_service
+            if _as_bool(app.config.get("AI4S_AGENT_AUTONOMY_LEASE_ENABLED"))
+            and _as_bool(app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED"))
+            else None
+        ),
     )
     register_scientific_agent_harness_controller_routes(
         app,

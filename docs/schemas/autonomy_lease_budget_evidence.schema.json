@@ -1,0 +1,133 @@
+{
+  "additionalProperties": false,
+  "description": "Server-derived lease status rebuilt from immutable usage evidence.",
+  "properties": {
+    "active_execution_seconds_remaining": {
+      "title": "Active Execution Seconds Remaining",
+      "type": "number"
+    },
+    "active_execution_seconds_reserved": {
+      "default": 0.0,
+      "title": "Active Execution Seconds Reserved",
+      "type": "number"
+    },
+    "active_execution_seconds_used": {
+      "title": "Active Execution Seconds Used",
+      "type": "number"
+    },
+    "authority_epoch": {
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "budget_status": {
+      "enum": [
+        "AVAILABLE",
+        "ACTIVE_BUDGET_EXHAUSTED",
+        "REMOTE_BUDGET_EXHAUSTED"
+      ],
+      "title": "Budget Status",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence_digest": {
+      "default": "",
+      "title": "Evidence Digest",
+      "type": "string"
+    },
+    "evidence_id": {
+      "default": "",
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "latest_receipt_digest": {
+      "default": "",
+      "title": "Latest Receipt Digest",
+      "type": "string"
+    },
+    "lease_digest": {
+      "title": "Lease Digest",
+      "type": "string"
+    },
+    "lease_id": {
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "max_active_execution_seconds": {
+      "title": "Max Active Execution Seconds",
+      "type": "number"
+    },
+    "max_remote_runtime_seconds": {
+      "title": "Max Remote Runtime Seconds",
+      "type": "number"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "remote_runtime_seconds_remaining": {
+      "title": "Remote Runtime Seconds Remaining",
+      "type": "number"
+    },
+    "remote_runtime_seconds_reserved": {
+      "default": 0.0,
+      "title": "Remote Runtime Seconds Reserved",
+      "type": "number"
+    },
+    "remote_runtime_seconds_used": {
+      "title": "Remote Runtime Seconds Used",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "autonomy_lease_budget_evidence.v1",
+      "default": "autonomy_lease_budget_evidence.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "usage_receipt_count": {
+      "default": 0,
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Usage Receipt Count",
+      "type": "integer"
+    },
+    "validity_status": {
+      "enum": [
+        "ACTIVE",
+        "NOT_YET_VALID",
+        "EXPIRED"
+      ],
+      "title": "Validity Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "lease_id",
+    "lease_digest",
+    "grant_id",
+    "grant_digest",
+    "authority_epoch",
+    "max_active_execution_seconds",
+    "active_execution_seconds_used",
+    "active_execution_seconds_remaining",
+    "max_remote_runtime_seconds",
+    "remote_runtime_seconds_used",
+    "remote_runtime_seconds_remaining",
+    "validity_status",
+    "budget_status",
+    "created_at"
+  ],
+  "title": "AutonomyLeaseBudgetEvidenceV1",
+  "type": "object"
+}

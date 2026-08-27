@@ -55,6 +55,30 @@ def create_app(
         "AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS", "86400"),
     )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_LEASE_ENABLED",
+        os.environ.get("AI4S_AGENT_AUTONOMY_LEASE_ENABLED", "true"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_LEASE_TTL_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_LEASE_TTL_SECONDS", "3600"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS", "900"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS", "900"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS", "300"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_REMOTE_RESERVATION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_REMOTE_RESERVATION_SECONDS", "300"),
+    )
     if scientific_task_registry is None:
         registry_id = os.environ.get("AI4S_SCIENTIFIC_TASK_REGISTRY", "").strip()
         if registry_id == "br1-private-real-tool-v3":

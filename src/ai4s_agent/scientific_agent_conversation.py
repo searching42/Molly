@@ -79,6 +79,7 @@ from ai4s_agent.scientific_agent_harness_controller import (
     ControllerAdvanceResult,
     ScientificAgentHarnessController,
     ScientificAgentHarnessControllerError,
+    ScientificAgentHarnessControllerLeaseBlocked,
     controller_action_boundary_class,
 )
 from ai4s_agent.scientific_agent_review_projection import (
@@ -163,6 +164,18 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
         "DETERMINISTIC_FASTPATH_STEP",
         "EXECUTION_AGENT_V2_STEP",
         "RECOVERY_SUCCESSOR_COMMITTED",
+    }
+)
+AUTONOMY_LEASE_STOP_REASONS = frozenset(
+    {
+        "AUTONOMY_LEASE_UNAVAILABLE",
+        "AUTONOMY_LEASE_NOT_YET_VALID",
+        "AUTONOMY_LEASE_EXPIRED",
+        "AUTONOMY_ACTIVE_BUDGET_EXHAUSTED",
+        "AUTONOMY_REMOTE_BUDGET_EXHAUSTED",
+        "AUTONOMY_LEASE_STALE",
+        "AUTONOMY_LEASE_CONFLICT",
+        "AUTONOMY_LEASE_RECONCILIATION_REQUIRED",
     }
 )
 TICK_PROGRESS_REASONS = AUTONOMY_L1_RESUMABLE_PAUSE_REASONS | frozenset(
@@ -2905,6 +2918,7 @@ class ScientificAgentConversationSessionService:
                 request=approval_request,
                 actor=actor.actor,
                 actor_source=authorization_actor_source,
+                issue_autonomy_grant=not automatic_authority_reuse,
             )
         except (
             ScientificAgentAuthorizationDenied,
@@ -2940,6 +2954,37 @@ class ScientificAgentConversationSessionService:
                 actor=actor.actor,
                 actor_source=authorization_actor_source,
                 conversation_id=conversation_id,
+            )
+        except ScientificAgentHarnessControllerLeaseBlocked as exc:
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="approval_required",
+                reason_code=exc.reason_code,
+                updates={
+                    "controller_status": "",
+                    "current_task_id": "",
+                    "autonomy_status": "human_boundary",
+                    "autonomy_stop_reason": exc.reason_code,
+                    "autonomy_l2_authority_auto_apply": False,
+                },
+                event_type="autonomy.lease.blocked",
+                message=(
+                    "Autonomy Lease 已失效或耗尽；未自动复用 authority，"
+                    "需要新的显式 authority。"
+                ),
+                event_data={"phase": "autonomy_l2_authority_reuse"},
+            )
+            return ScientificAgentConversationTurnResult(
+                decision=decision,
+                assistant_message=(
+                    "Autonomy Lease 已失效或耗尽；需要显式重新授权后才能继续。"
+                ),
+                assistant_source="scientific_agent_l2",
+                llm_used=False,
+                session=self.session_projection(state),
+                proposal=publication.proposal.model_dump(mode="json"),
+                plan_summary=self._plan_summary(publication),
             )
         except ScientificAgentHarnessControllerError as exc:
             state = self._transition(
@@ -3199,6 +3244,20 @@ class ScientificAgentConversationSessionService:
                 boundary,
                 ("AUTONOMY_L1_POLICY_PROHIBITED",),
             )
+        lease_guard = getattr(self.controller, "verify_autonomy_lease", None)
+        if callable(lease_guard):
+            try:
+                lease_guard(
+                    execution=execution,
+                    action=inspection.next_action,
+                )
+            except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                return (
+                    decision,
+                    None,
+                    boundary,
+                    (exc.reason_code,),
+                )
         snapshot = self._l1_budget_snapshot(controller_result=controller_result)
         return (
             decision,
@@ -3726,6 +3785,33 @@ class ScientificAgentConversationSessionService:
                 },
             )
             return updated, "prohibited"
+        if first in AUTONOMY_LEASE_STOP_REASONS:
+            updated = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="recovery_required",
+                reason_code=first,
+                updates={
+                    **base_updates,
+                    **self._l1_projection_updates(
+                        decision=decision,
+                        snapshot=snapshot,
+                        status="prohibited",
+                        stop_reason=first,
+                    ),
+                },
+                event_type="autonomy.lease.blocked",
+                message=(
+                    "Autonomy Lease 已失效或耗尽；未执行下一步，需要新的显式 authority。"
+                ),
+                event_data={
+                    "controller_status": inspection.status.value,
+                    "current_task_id": inspection.current_task_id,
+                    "next_action": inspection.next_action.value,
+                    "boundary": boundary.value,
+                },
+            )
+            return updated, "lease_blocked"
         updated = self._transition(
             project_id=project_id,
             conversation_id=conversation_id,
@@ -4023,6 +4109,35 @@ class ScientificAgentConversationSessionService:
                         controller_result=controller_result,
                         operation="remote-adopt",
                     )
+            except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="recovery_required",
+                    reason_code=exc.reason_code,
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "autonomy_level": "L1",
+                        "autonomy_status": "prohibited",
+                        "autonomy_stop_reason": exc.reason_code,
+                    },
+                    event_type="autonomy.lease.blocked",
+                    message=(
+                        "Autonomy Lease 在 effect boundary 失效或耗尽；"
+                        "未执行 remote effect，需要新的显式 authority。"
+                    ),
+                    event_data={"phase": "remote_lifecycle"},
+                )
+                return self._active_execution_result(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    publication=publication,
+                    controller_result=controller_result,
+                    llm_used=False,
+                )
             except ScientificAgentConversationStaleAuthority:
                 raise
             except (ScientificAgentHarnessControllerError, ValueError) as exc:
@@ -4599,6 +4714,42 @@ class ScientificAgentConversationSessionService:
                 AgentHarnessControllerStatus.FAILED,
                 AgentHarnessControllerStatus.RECOVERY_REQUIRED,
             }:
+                lease_guard = getattr(self.controller, "verify_autonomy_lease", None)
+                if callable(lease_guard):
+                    try:
+                        # Failure recovery may later create a successor
+                        # Controller, but its provider/recovery decision is
+                        # still automatic work.  Check the current lease
+                        # before entering that provider-capable path.
+                        lease_guard(
+                            execution=controller_result.execution,
+                            action=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                        )
+                    except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="recovery_required",
+                            reason_code=exc.reason_code,
+                            updates={
+                                "controller_status": inspection.status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "autonomy_level": "L1",
+                                "autonomy_status": "prohibited",
+                                "autonomy_stop_reason": exc.reason_code,
+                            },
+                            event_type="autonomy.lease.blocked",
+                            message=(
+                                "Autonomy Lease 已失效或耗尽；未调用 recovery provider，"
+                                "需要新的显式 authority。"
+                            ),
+                            event_data={
+                                "controller_status": inspection.status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "phase": "failure_recovery",
+                            },
+                        )
+                        return controller_result, state, "lease_blocked"
                 # One and only one foundation invocation belongs to this
                 # coordinator iteration.  The returned successor is reread
                 # and projected, then the method returns without looping back
@@ -4760,6 +4911,27 @@ class ScientificAgentConversationSessionService:
                                     state.get("evidence_admission_digest") or ""
                                 ),
                             )
+                        except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                            state = self._transition(
+                                project_id=project_id,
+                                conversation_id=conversation_id,
+                                status="recovery_required",
+                                reason_code=exc.reason_code,
+                                updates={
+                                    "controller_status": status.value,
+                                    "current_task_id": inspection.current_task_id,
+                                    "autonomy_level": "L1",
+                                    "autonomy_status": "prohibited",
+                                    "autonomy_stop_reason": exc.reason_code,
+                                },
+                                event_type="autonomy.lease.blocked",
+                                message=(
+                                    "Autonomy Lease 在 effect boundary 失效或耗尽；"
+                                    "未执行 BR2 consumer，需要新的显式 authority。"
+                                ),
+                                event_data={"phase": "br2_evidence_consumer"},
+                            )
+                            return controller_result, state, "lease_blocked"
                         except (ScientificAgentHarnessControllerError, ValueError) as exc:
                             state = self._transition(
                                 project_id=project_id,
@@ -5168,6 +5340,37 @@ class ScientificAgentConversationSessionService:
                 )
                 return controller_result, state, "prohibited"
 
+            if stop_reasons and stop_reasons[0] in AUTONOMY_LEASE_STOP_REASONS:
+                reason = stop_reasons[0]
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="recovery_required",
+                    reason_code=reason,
+                    updates={
+                        "controller_status": status.value,
+                        "current_task_id": inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason=reason,
+                        ),
+                    },
+                    event_type="autonomy.lease.blocked",
+                    message=(
+                        "Autonomy Lease 已失效或耗尽；未执行下一步，"
+                        "需要新的显式 authority。"
+                    ),
+                    event_data={
+                        "controller_status": status.value,
+                        "current_task_id": inspection.current_task_id,
+                        "next_action": inspection.next_action.value,
+                        "phase": "autonomy_lease",
+                    },
+                )
+                return controller_result, state, "lease_blocked"
+
             fastpath_decision = None
             if not stop_reasons:
                 fastpath_decision = classify_deterministic_successor(
@@ -5245,6 +5448,30 @@ class ScientificAgentConversationSessionService:
                             operation="deterministic-fastpath",
                             request_identity=fastpath_decision.decision_digest,
                         )
+                    except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="recovery_required",
+                            reason_code=exc.reason_code,
+                            updates={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                **self._l1_projection_updates(
+                                    decision=policy_decision,
+                                    snapshot=budget,
+                                    status="prohibited",
+                                    stop_reason=exc.reason_code,
+                                ),
+                            },
+                            event_type="autonomy.lease.blocked",
+                            message=(
+                                "Autonomy Lease 在 effect boundary 失效或耗尽；"
+                                "未执行 Controller effect，需要新的显式 authority。"
+                            ),
+                            event_data={"phase": "deterministic_fastpath"},
+                        )
+                        return controller_result, state, "lease_blocked"
                     except (ScientificAgentHarnessControllerError, ValueError) as exc:
                         state = self._transition(
                             project_id=project_id,
@@ -5506,6 +5733,30 @@ class ScientificAgentConversationSessionService:
                         event_type="run.failed",
                     )
                     return controller_result, state, "conflict"
+                except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="recovery_required",
+                        reason_code=exc.reason_code,
+                        updates={
+                            "controller_status": controller_result.inspection.status.value,
+                            "current_task_id": controller_result.inspection.current_task_id,
+                            **self._l1_projection_updates(
+                                decision=policy_decision,
+                                snapshot=budget,
+                                status="prohibited",
+                                stop_reason=exc.reason_code,
+                            ),
+                        },
+                        event_type="autonomy.lease.blocked",
+                        message=(
+                            "Autonomy Lease 在 effect boundary 失效或耗尽；"
+                            "未执行 Controller effect，需要新的显式 authority。"
+                        ),
+                        event_data={"phase": "execution_agent_v2"},
+                    )
+                    return controller_result, state, "lease_blocked"
 
                 post_attempt_budget = self._l1_budget_snapshot(
                     controller_result=controller_result
@@ -5686,6 +5937,30 @@ class ScientificAgentConversationSessionService:
                     event_type="run.failed",
                 )
                 return controller_result, state, "stale"
+            except ScientificAgentHarnessControllerLeaseBlocked as exc:
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="recovery_required",
+                    reason_code=exc.reason_code,
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason=exc.reason_code,
+                        ),
+                    },
+                    event_type="autonomy.lease.blocked",
+                    message=(
+                        "Autonomy Lease 在 effect boundary 失效或耗尽；"
+                        "未执行 Controller effect，需要新的显式 authority。"
+                    ),
+                    event_data={"phase": "execution_agent"},
+                )
+                return controller_result, state, "lease_blocked"
             except (ScientificAgentHarnessControllerError, ValueError) as exc:
                 state = self._transition(
                     project_id=project_id,
@@ -5809,6 +6084,11 @@ class ScientificAgentConversationSessionService:
 
     @staticmethod
     def _active_execution_message(state: dict[str, Any]) -> str:
+        if state.get("reason_code") in AUTONOMY_LEASE_STOP_REASONS:
+            return (
+                "当前 Autonomy Lease 已失效或耗尽；Molly 不会自动继续，"
+                "需要新的显式 authority。"
+            )
         if str(state.get("reason_code") or "").startswith("RECOVERY_"):
             question = str(state.get("recovery_question") or "").strip()
             if question and state.get("status") == "recovery_required":
