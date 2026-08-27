@@ -276,7 +276,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Dependency: after `M3.5-AUT-FEEDBACK`.
   - Definition of Done: `AutonomyGrant` capability scope is unchanged and `AutonomyLeaseV1` only limits temporal and finite active/remote budget eligibility; active accounting excludes human waiting, user review, process downtime, and provider-unavailable idle; half-open lease expiry and budget exhaustion fail closed before provider/effect dispatch; aggregate reservations are server-derived and process-safe; immutable receipts/checkpoints rebuild state deterministically after crash/restart; no LLM renewal, clock mutation, budget mutation, or new effect authority is possible; implementation and automated-test evidence only, with no representative/live acceptance claim.
   - Implementation contract: [`Scientific Agent Autonomy Lease v1`](scientific-agent-autonomy-lease-v1.md); generated contracts are [`autonomy_lease.schema.json`](schemas/autonomy_lease.schema.json), [`autonomy_lease_usage_receipt.schema.json`](schemas/autonomy_lease_usage_receipt.schema.json), and [`autonomy_lease_budget_evidence.schema.json`](schemas/autonomy_lease_budget_evidence.schema.json).
-  - Closed by: the AUT-LEASE Draft PR for this branch. PR remains open and Draft during validation.
+  - Closed by: Draft PR #62 (`M3.5-AUT-LEASE`). PR remains open and Draft during validation.
 
 - [ ] **M3.5-UI — Minimal unified UI authority-preservation closure**
   - State: `DEFERRED`
