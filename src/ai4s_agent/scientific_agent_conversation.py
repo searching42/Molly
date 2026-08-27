@@ -114,6 +114,16 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
     FailureRecoveryRuntimeResult,
     ScientificAgentFailureRecoveryRuntime,
 )
+from ai4s_agent.scientific_agent_evidence import (
+    BR2_EVIDENCE_SCOPE,
+    BR2_EVIDENCE_SOURCE_ID,
+    EvidenceGrantAuthorizationRequired,
+    EvidenceGrantConflict,
+    EvidenceGrantNotEligible,
+    EvidenceGrantService,
+    EvidenceGrantStale,
+    EvidenceGrantUnavailable,
+)
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
     AgentAutonomyActionClass,
@@ -433,6 +443,7 @@ class ScientificAgentConversationSessionService:
         result_projection_service: ScientificAgentResultProjectionService | None = None,
         replanner: ScientificAgentReplannerService | None = None,
         failure_recovery_runtime: ScientificAgentFailureRecoveryRuntime | None = None,
+        evidence_service: EvidenceGrantService | None = None,
         failure_recovery_enabled: bool = False,
         clock: Callable[[], str] = now_iso,
     ) -> None:
@@ -449,6 +460,7 @@ class ScientificAgentConversationSessionService:
         self.result_projection_service = result_projection_service
         self.replanner = replanner
         self.failure_recovery_runtime = failure_recovery_runtime
+        self.evidence_service = evidence_service
         self.failure_recovery_enabled = bool(failure_recovery_enabled and failure_recovery_runtime is not None)
         self.clock = clock
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
@@ -528,6 +540,20 @@ class ScientificAgentConversationSessionService:
             "resource_authority_status": "",
             "resource_authority_reason_codes": [],
             "review_projection": {},
+            # EvidenceGrant fields are a privacy-safe conversation read model;
+            # the immutable grant/admission artifacts remain authoritative.
+            "evidence_confirmation_required": False,
+            "evidence_source_id": "",
+            "evidence_source_digest": "",
+            "evidence_confirmation_scope": "",
+            "evidence_grant_id": "",
+            "evidence_grant_digest": "",
+            "evidence_grant_scope": "",
+            "evidence_grant_consumed": False,
+            "evidence_grant_replayed": False,
+            "evidence_admission_id": "",
+            "evidence_admission_digest": "",
+            "evidence_semantic_boundary": "",
             "result_projections": [],
             "scientific_result_status": "",
             "scientific_result_reason_code": "",
@@ -755,6 +781,18 @@ class ScientificAgentConversationSessionService:
                 "resource_authority_status",
                 "resource_authority_reason_codes",
                 "review_projection",
+                "evidence_confirmation_required",
+                "evidence_source_id",
+                "evidence_source_digest",
+                "evidence_confirmation_scope",
+                "evidence_grant_id",
+                "evidence_grant_digest",
+                "evidence_grant_scope",
+                "evidence_grant_consumed",
+                "evidence_grant_replayed",
+                "evidence_admission_id",
+                "evidence_admission_digest",
+                "evidence_semantic_boundary",
                 "result_projections",
                 "scientific_result_status",
                 "scientific_result_reason_code",
@@ -864,6 +902,18 @@ class ScientificAgentConversationSessionService:
                 "resource_authority_status",
                 "resource_authority_reason_codes",
                 "review_projection",
+                "evidence_confirmation_required",
+                "evidence_source_id",
+                "evidence_source_digest",
+                "evidence_confirmation_scope",
+                "evidence_grant_id",
+                "evidence_grant_digest",
+                "evidence_grant_scope",
+                "evidence_grant_consumed",
+                "evidence_grant_replayed",
+                "evidence_admission_id",
+                "evidence_admission_digest",
+                "evidence_semantic_boundary",
                 "result_projections",
                 "scientific_result_status",
                 "scientific_result_reason_code",
@@ -941,6 +991,66 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationSessionError(
                     "conversation review projection is invalid"
                 ) from exc
+        evidence_ids = (
+            "evidence_source_id",
+            "evidence_grant_id",
+            "evidence_admission_id",
+        )
+        for field in evidence_ids:
+            value = str(result.get(field) or "")
+            if value and SESSION_ID_PATTERN.fullmatch(value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation evidence identity projection is invalid"
+                )
+        for field in (
+            "evidence_source_digest",
+            "evidence_grant_digest",
+            "evidence_admission_digest",
+        ):
+            value = str(result.get(field) or "")
+            if value and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation evidence digest projection is invalid"
+                )
+        for field in ("evidence_confirmation_scope", "evidence_grant_scope"):
+            value = str(result.get(field) or "")
+            if value not in {"", BR2_EVIDENCE_SCOPE.value}:
+                raise ScientificAgentConversationSessionError(
+                    "conversation evidence scope projection is invalid"
+                )
+        if str(result.get("evidence_semantic_boundary") or "") not in {
+            "",
+            "SCIENTIFIC_CONFIRMATION",
+        }:
+            raise ScientificAgentConversationSessionError(
+                "conversation evidence semantic boundary projection is invalid"
+            )
+        for field in (
+            "evidence_confirmation_required",
+            "evidence_grant_consumed",
+            "evidence_grant_replayed",
+        ):
+            if not isinstance(result.get(field), bool):
+                raise ScientificAgentConversationSessionError(
+                    "conversation evidence boolean projection is invalid"
+                )
+        if result.get("evidence_grant_consumed") and (
+            not result.get("evidence_grant_id")
+            or not result.get("evidence_admission_id")
+            or result.get("evidence_confirmation_required")
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation evidence admission projection is inconsistent"
+            )
+        if result.get("evidence_confirmation_required") and (
+            not result.get("evidence_source_id")
+            or not result.get("evidence_source_digest")
+            or result.get("evidence_confirmation_scope") != BR2_EVIDENCE_SCOPE.value
+            or result.get("evidence_semantic_boundary") != "SCIENTIFIC_CONFIRMATION"
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation evidence confirmation projection is incomplete"
+            )
         raw_results = result.get("result_projections")
         if not isinstance(raw_results, list) or len(raw_results) > 16:
             raise ScientificAgentConversationSessionError(
@@ -1302,6 +1412,20 @@ class ScientificAgentConversationSessionService:
                     "recovery_effect_count",
                     "recovery_session_id",
                     "recovery_authority_epoch",
+                    "evidence_confirmation_required",
+                    "evidence_source_id",
+                    "evidence_source_digest",
+                    "evidence_confirmation_scope",
+                    "evidence_grant_schema_version",
+                    "evidence_grant_id",
+                    "evidence_grant_digest",
+                    "evidence_grant_scope",
+                    "evidence_grant_consumed",
+                    "evidence_grant_replayed",
+                    "evidence_admission_schema_version",
+                    "evidence_admission_id",
+                    "evidence_admission_digest",
+                    "evidence_semantic_boundary",
                 }:
                     if key == "scientific_results":
                         safe_data[key] = list(state.get("result_projections") or [])
@@ -1363,6 +1487,199 @@ class ScientificAgentConversationSessionService:
                 payload["proposal"] = publication.proposal.model_dump(mode="json")
                 payload["plan_summary"] = self._plan_summary(publication)
         return payload
+
+    def confirm_br2_evidence(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        expected_source_digest: str,
+        confirmed: bool,
+        client_request_id: str,
+        actor: ActorContext | None,
+    ) -> dict[str, Any]:
+        """Perform the explicit structured BR2 confirmation action.
+
+        This method is intentionally separate from ``handle_turn``.  It
+        verifies the existing successful Controller boundary, delegates source
+        rereading and immutable publication to ``EvidenceGrantService``, and
+        then records only a privacy-safe conversation projection.
+        """
+
+        clean_project = _clean_id(project_id, field="project_id")
+        clean_conversation = _clean_id(conversation_id, field="conversation_id")
+        clean_run = _clean_id(run_id, field="run_id")
+        root = self._root(clean_project, clean_conversation, create=True)
+        with self._lock(root):
+            self.conversations.get_conversation(clean_project, clean_conversation)
+            state = self.read_session(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            already_confirmed = (
+                state.get("status") == "succeeded"
+                and state.get("reason_code") == "BR2_EVIDENCE_CONFIRMED"
+                and state.get("evidence_grant_consumed") is True
+            )
+            if not already_confirmed and (
+                state.get("status") != "waiting_gate"
+                or state.get("reason_code") != "BR2_CANDIDATE_CONFIRMATION_REQUIRED"
+            ):
+                raise EvidenceGrantNotEligible(
+                    "the BR2 scientific confirmation boundary is not pending"
+                )
+            if self.evidence_service is None:
+                raise EvidenceGrantUnavailable(
+                    "server-owned evidence confirmation is not configured"
+                )
+            projected_digest = str(state.get("evidence_source_digest") or "")
+            if projected_digest and projected_digest != str(expected_source_digest or "").strip():
+                raise EvidenceGrantStale(
+                    "the conversation source projection is stale"
+                )
+            if already_confirmed:
+                try:
+                    checkpoint = self.evidence_service.read_confirmation_checkpoint(
+                        project_id=clean_project,
+                        client_request_id=client_request_id,
+                    )
+                except FileNotFoundError as exc:
+                    raise EvidenceGrantNotEligible(
+                        "the replay request is not the original structured confirmation"
+                    ) from exc
+                if checkpoint.grant_id != str(state.get("evidence_grant_id") or ""):
+                    raise EvidenceGrantConflict(
+                        "the replay request is bound to a different EvidenceGrant"
+                    )
+            controller_execution_id = str(state.get("controller_execution_id") or "")
+            expected_controller_digest = str(
+                state.get("controller_execution_digest") or ""
+            )
+            if not controller_execution_id or not expected_controller_digest:
+                raise ScientificAgentConversationStaleAuthority(
+                    "BR2 confirmation is missing its Controller binding"
+                )
+            try:
+                controller_result = self.controller.get(
+                    project_id=clean_project,
+                    controller_execution_id=controller_execution_id,
+                )
+            except (FileNotFoundError, ScientificAgentHarnessControllerError, ValueError) as exc:
+                raise ScientificAgentConversationStaleAuthority(
+                    "the BR2 Controller binding is unavailable"
+                ) from exc
+            if (
+                controller_result.execution.run_id != clean_run
+                or controller_result.execution.controller_execution_id
+                != controller_execution_id
+                or controller_result.execution.execution_digest
+                != expected_controller_digest
+                or controller_result.inspection.status
+                != AgentHarnessControllerStatus.SUCCEEDED
+                or controller_result.inspection.current_task_id
+                != "prepare_oled_candidate_raw_dataset"
+            ):
+                raise ScientificAgentConversationStaleAuthority(
+                    "the BR2 successful review boundary is stale"
+                )
+            publication = self._read_active_publication(state, clean_project)
+            if not self._is_br2_mapping_proposal(publication):
+                raise EvidenceGrantNotEligible(
+                    "the current proposal is not the supported BR2 evidence path"
+                )
+            confirmation = self.evidence_service.confirm_br2_candidate_evidence(
+                project_id=clean_project,
+                run_id=clean_run,
+                conversation_id=clean_conversation,
+                expected_source_digest=expected_source_digest,
+                confirmed=confirmed,
+                client_request_id=client_request_id,
+                actor=actor,
+            )
+            if not already_confirmed:
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="succeeded",
+                    reason_code="BR2_EVIDENCE_CONFIRMED",
+                    updates={
+                        "run_id": clean_run,
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "evidence_confirmation_required": False,
+                        "evidence_source_id": confirmation.source.source_id,
+                        "evidence_source_digest": confirmation.source.source_digest,
+                        "evidence_confirmation_scope": BR2_EVIDENCE_SCOPE.value,
+                        "evidence_grant_schema_version": confirmation.grant.schema_version,
+                        "evidence_grant_id": confirmation.grant.grant_id,
+                        "evidence_grant_digest": confirmation.grant.grant_digest,
+                        "evidence_grant_scope": confirmation.grant.scope.value,
+                        "evidence_grant_consumed": True,
+                        "evidence_grant_replayed": confirmation.grant_replayed,
+                        "evidence_admission_schema_version": confirmation.admission.schema_version,
+                        "evidence_admission_id": confirmation.admission.admission_id,
+                        "evidence_admission_digest": confirmation.admission.admission_digest,
+                        # The exact boundary remains visible after crossing it;
+                        # it is not globally reclassified as NONE.
+                        "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
+                    },
+                    event_type="br2.evidence.confirmed",
+                    message=(
+                        "已通过显式结构化科学确认；EvidenceGrant 已绑定当前 BR2 source，"
+                        "仅该 exact evidence admission 可进入后续路径。"
+                    ),
+                    event_data={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "phase": "br2_evidence_admission",
+                        "evidence_source_id": confirmation.source.source_id,
+                        "evidence_source_digest": confirmation.source.source_digest,
+                        "evidence_confirmation_scope": BR2_EVIDENCE_SCOPE.value,
+                        "evidence_grant_id": confirmation.grant.grant_id,
+                        "evidence_grant_digest": confirmation.grant.grant_digest,
+                        "evidence_grant_scope": confirmation.grant.scope.value,
+                        "evidence_grant_consumed": True,
+                        "evidence_grant_replayed": confirmation.grant_replayed,
+                        "evidence_admission_id": confirmation.admission.admission_id,
+                        "evidence_admission_digest": confirmation.admission.admission_digest,
+                        "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
+                    },
+                )
+            elif (
+                confirmation.grant.grant_id != str(state.get("evidence_grant_id") or "")
+                or confirmation.admission.admission_id
+                != str(state.get("evidence_admission_id") or "")
+            ):
+                raise EvidenceGrantConflict(
+                    "the replayed EvidenceGrant or admission differs from session state"
+                )
+            decision = {
+                "project_id": clean_project,
+                "run_id": clean_run,
+                "status": "evidence_confirmed",
+                "decision": "evidence_confirmed",
+                "summary": state["message"],
+                "modeling_plan_payload": {},
+                "questions": [],
+                "pending_cited_target_evidence": [],
+                "next_actions": ["continue_with_exact_evidence_admission"],
+                "blocked_reasons": [],
+                "requires_user_response": False,
+                "semantic_boundary": "SCIENTIFIC_CONFIRMATION",
+                "executable": False,
+            }
+            return {
+                "decision": decision,
+                "assistant_message": state["message"],
+                "assistant_source": "scientific_agent_evidence",
+                "llm_used": False,
+                "session": self.session_projection(state),
+                "proposal": publication.proposal.model_dump(mode="json"),
+                "plan_summary": self._plan_summary(publication),
+                "controller": _controller_public(controller_result),
+                **confirmation.as_dict(),
+            }
 
     def bind_input_bundle(
         self, *, project_id: str, run_id: str, input_bundle_id: str
@@ -2492,6 +2809,39 @@ class ScientificAgentConversationSessionService:
             run_id=controller_result.execution.run_id,
             current_task_id="prepare_oled_candidate_raw_dataset",
         )
+
+    def _br2_evidence_source_updates(
+        self,
+        *,
+        project_id: str,
+        controller_result: ControllerAdvanceResult,
+    ) -> dict[str, Any]:
+        """Project only the server-resolved identity of the current BR2 source."""
+
+        if self.evidence_service is None:
+            return {}
+        run_id = controller_result.execution.run_id
+        # Historical/unit fixtures may project a review without materializing
+        # the two production artifacts.  Keep those fixtures at the existing
+        # human boundary; an explicit confirmation action will still fail
+        # closed until the authoritative source is present.
+        registry = self.projects.read_artifact_registry(project_id, run_id)
+        if not registry.get(BR2_EVIDENCE_SOURCE_ID) or not registry.get(
+            "candidate_raw_dataset_review"
+        ):
+            return {}
+        source = self.evidence_service.current_br2_source(
+            project_id=project_id,
+            run_id=run_id,
+        )
+        return {
+            "evidence_confirmation_required": True,
+            "evidence_source_id": source.source_id,
+            "evidence_source_digest": source.source_digest,
+            "evidence_confirmation_scope": BR2_EVIDENCE_SCOPE.value,
+            "evidence_grant_scope": BR2_EVIDENCE_SCOPE.value,
+            "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
+        }
 
     def _approve_current_authority(
         self,
@@ -4519,6 +4869,41 @@ class ScientificAgentConversationSessionService:
                             },
                         )
                         return controller_result, state, "br2_review_projection"
+                    try:
+                        evidence_source_updates = self._br2_evidence_source_updates(
+                            project_id=project_id,
+                            controller_result=controller_result,
+                        )
+                    except (
+                        EvidenceGrantConflict,
+                        EvidenceGrantNotEligible,
+                        EvidenceGrantUnavailable,
+                        FileNotFoundError,
+                        OSError,
+                        ValueError,
+                    ):
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="unknown",
+                            reason_code="BR2_EVIDENCE_SOURCE_UNAVAILABLE",
+                            updates={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                **terminal_l1_updates,
+                            },
+                            event_type="br2.evidence_source.unavailable",
+                            message=(
+                                "候选数据已完成，但当前 BR2 evidence source 不可安全读取；"
+                                "未发布 EvidenceGrant 或下游 admission。"
+                            ),
+                            event_data={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "phase": "br2_confirmation_boundary",
+                            },
+                        )
+                        return controller_result, state, "br2_evidence_source"
                     state = self._transition(
                         project_id=project_id,
                         conversation_id=conversation_id,
@@ -4536,6 +4921,19 @@ class ScientificAgentConversationSessionService:
                             "result_projections": [],
                             "scientific_result_status": "",
                             "scientific_result_reason_code": "",
+                            "evidence_confirmation_required": False,
+                            "evidence_source_id": "",
+                            "evidence_source_digest": "",
+                            "evidence_confirmation_scope": "",
+                            "evidence_grant_id": "",
+                            "evidence_grant_digest": "",
+                            "evidence_grant_scope": "",
+                            "evidence_grant_consumed": False,
+                            "evidence_grant_replayed": False,
+                            "evidence_admission_id": "",
+                            "evidence_admission_digest": "",
+                            "evidence_semantic_boundary": "",
+                            **evidence_source_updates,
                             **self._l1_projection_updates(
                                 decision=terminal_decision,
                                 snapshot=None,

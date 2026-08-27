@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "EvidenceGrantScope": {
+      "description": "Closed-world evidence scopes supported by the current Agent paths.",
+      "enum": [
+        "extracted_dataset_confirmation",
+        "extracted_dataset_confirmation",
+        "extracted_dataset_confirmation"
+      ],
+      "title": "EvidenceGrantScope",
+      "type": "string"
+    },
+    "SemanticBoundary": {
+      "description": "Human scientific boundaries independent of resource authority.",
+      "enum": [
+        "NONE",
+        "SCIENTIFIC_CONFIRMATION",
+        "GOAL_CHANGE",
+        "DATASET_CHANGE",
+        "EXTERNAL_SHARING_CHANGE",
+        "PUBLICATION",
+        "PROMOTION",
+        "IRREVERSIBLE_EFFECT"
+      ],
+      "title": "SemanticBoundary",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable exact-source admission consumed after an EvidenceGrant.",
+  "properties": {
+    "schema_version": {
+      "const": "scientific_evidence_admission.v1",
+      "default": "scientific_evidence_admission.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "admission_id": {
+      "default": "",
+      "title": "Admission Id",
+      "type": "string"
+    },
+    "admission_digest": {
+      "default": "",
+      "title": "Admission Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "conversation_id": {
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_digest": {
+      "title": "Source Digest",
+      "type": "string"
+    },
+    "candidate_package_digest": {
+      "title": "Candidate Package Digest",
+      "type": "string"
+    },
+    "review_digest": {
+      "title": "Review Digest",
+      "type": "string"
+    },
+    "paper_id": {
+      "title": "Paper Id",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EvidenceGrantScope"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "semantic_boundary": {
+      "$ref": "#/$defs/SemanticBoundary",
+      "default": "SCIENTIFIC_CONFIRMATION"
+    },
+    "confirmed": {
+      "const": true,
+      "default": true,
+      "title": "Confirmed",
+      "type": "boolean"
+    },
+    "exact_source": {
+      "const": true,
+      "default": true,
+      "title": "Exact Source",
+      "type": "boolean"
+    },
+    "admitted_at": {
+      "title": "Admitted At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "conversation_id",
+    "source_id",
+    "source_digest",
+    "candidate_package_digest",
+    "review_digest",
+    "paper_id",
+    "grant_id",
+    "grant_digest",
+    "scope",
+    "actor",
+    "actor_source",
+    "admitted_at"
+  ],
+  "title": "ScientificEvidenceAdmissionV1",
+  "type": "object"
+}

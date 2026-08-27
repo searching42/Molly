@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "EvidenceGrantScope": {
+      "description": "Closed-world evidence scopes supported by the current Agent paths.",
+      "enum": [
+        "extracted_dataset_confirmation",
+        "extracted_dataset_confirmation",
+        "extracted_dataset_confirmation"
+      ],
+      "title": "EvidenceGrantScope",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable server-issued authority for one exact evidence source.\n\nThis is deliberately not an execution or retry permission.  The one v1\nscope is exact-source only; omitting item IDs is not a wildcard because\n``coverage_mode`` is a closed, explicit ``exact_source`` value.",
+  "properties": {
+    "schema_version": {
+      "const": "evidence_grant.v1",
+      "default": "evidence_grant.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "grant_id": {
+      "default": "",
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "grant_digest": {
+      "default": "",
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_digest": {
+      "title": "Source Digest",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EvidenceGrantScope"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "issuer": {
+      "const": "server",
+      "default": "server",
+      "title": "Issuer",
+      "type": "string"
+    },
+    "issued_at": {
+      "title": "Issued At",
+      "type": "string"
+    },
+    "run_id": {
+      "default": "",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "conversation_id": {
+      "default": "",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "evidence_type": {
+      "default": "",
+      "title": "Evidence Type",
+      "type": "string"
+    },
+    "coverage_mode": {
+      "const": "exact_source",
+      "default": "exact_source",
+      "title": "Coverage Mode",
+      "type": "string"
+    },
+    "evidence_item_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Item Ids",
+      "type": "array"
+    },
+    "evidence_item_digests": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Item Digests",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id",
+    "source_id",
+    "source_digest",
+    "scope",
+    "actor",
+    "actor_source",
+    "issued_at"
+  ],
+  "title": "EvidenceGrantV1",
+  "type": "object"
+}

@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-FAILURE-RECOVERY — Conversation-driven failed-state runtime continuation
+> Current focus: M3.5-AUT-LEASE — Active-time accounting and autonomy lease
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -262,11 +262,13 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: the production Conversation/coordinator `FAILED` continuation invokes the foundation service with a server-published observation and current, digest-verified authority; automatic retry, logical-tool recovery, and replan successors all traverse the trusted Permission / Authorization / StartIntent / Controller chain; representative restart, duplicate, aggregate-concurrency, and exact-replay runtime evidence is captured. This item must not introduce a second Controller or execution authority.
   - Closed by: Draft PR #60 (`M3.5-AUT-FAILURE-RECOVERY` runtime continuation). This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
 
-- [ ] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-FEEDBACK — Durable structured feedback and EvidenceGrant**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-FAILURE-RECOVERY`.
-  - Definition of Done: to be defined by a later contract and acceptance PR; this item is not implemented by the regression guard.
+  - Definition of Done: `EvidenceGrantV1` is a frozen, digest-bound, closed-world exact-source contract with mandatory project/source/provenance bindings; only a server-owned structured BR2 confirmation action can issue it. The action rereads the current candidate package and review artifact, fails closed on stale or unsafe source identity, publishes crash-safe no-replace grant/checkpoint artifacts, and consumes the exact grant into an immutable `ScientificEvidenceAdmissionV1` while preserving `SCIENTIFIC_CONFIRMATION`. Ordinary conversation and LLM/Execution Agent output remain non-authoritative; replay, conflicting replay, crash-window, multiprocess, symlink, source-isolation, provider-count, and AutonomyGrant-separation regressions are covered. This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
+  - Implementation contract: [`Scientific Agent EvidenceGrant v1`](scientific-agent-evidence-grant-v1.md); generated contracts are [`evidence_grant.schema.json`](schemas/evidence_grant.schema.json) and [`scientific_evidence_admission.schema.json`](schemas/scientific_evidence_admission.schema.json).
+  - Closed by: Draft PR for `M3.5-AUT-FEEDBACK` (this branch). PR remains open and Draft during validation.
 
 - [ ] **M3.5-AUT-LEASE — Active-time accounting and autonomy lease**
   - State: `QUEUED`

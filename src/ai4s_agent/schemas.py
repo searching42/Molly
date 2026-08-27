@@ -2135,6 +2135,9 @@ AGENT_PLAN_AUTHORIZATION_V1 = "agent_plan_authorization.v1"
 AGENT_PLAN_AUTHORIZATION_V2 = "agent_plan_authorization.v2"
 AUTONOMY_GRANT_V1 = "autonomy_grant.v1"
 AUTHORITY_EVALUATION_V1 = "authority_evaluation.v1"
+EVIDENCE_GRANT_V1 = "evidence_grant.v1"
+EVIDENCE_GRANT_CHECKPOINT_V1 = "evidence_grant_request_checkpoint.v1"
+SCIENTIFIC_EVIDENCE_ADMISSION_V1 = "scientific_evidence_admission.v1"
 
 
 class AgentExecutionPlanProposal(BaseModel):
@@ -4540,6 +4543,357 @@ class AutonomyGrant(BaseModel):
 
     def scope_material(self) -> dict[str, Any]:
         return self.semantic_material()
+
+
+class EvidenceGrantScope(str, Enum):
+    """Closed-world evidence scopes supported by the current Agent paths."""
+
+    EXTRACTED_DATASET_CONFIRMATION = "extracted_dataset_confirmation"
+    # These names are aliases for callers that use the BR2-specific wording;
+    # the serialized scope remains one exact, repository-wide value.
+    BR2_CANDIDATE_RAW_DATASET_CONFIRMATION = "extracted_dataset_confirmation"
+    CANDIDATE_RAW_DATASET_CONFIRMATION = "extracted_dataset_confirmation"
+
+
+_EVIDENCE_GRANT_TRUSTED_ACTOR_SOURCES = (
+    "config:",
+    "server:",
+    "wsgi.",
+    "flask.g:",
+)
+
+
+class EvidenceGrantV1(BaseModel):
+    """Immutable server-issued authority for one exact evidence source.
+
+    This is deliberately not an execution or retry permission.  The one v1
+    scope is exact-source only; omitting item IDs is not a wildcard because
+    ``coverage_mode`` is a closed, explicit ``exact_source`` value.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[EVIDENCE_GRANT_V1] = EVIDENCE_GRANT_V1
+    grant_id: str = ""
+    grant_digest: str = ""
+    project_id: str
+    source_id: str
+    source_digest: str
+    scope: EvidenceGrantScope
+    actor: str
+    actor_source: str
+    issuer: Literal["server"] = "server"
+    issued_at: str
+    run_id: str = ""
+    conversation_id: str = ""
+    evidence_type: str = ""
+    coverage_mode: Literal["exact_source"] = "exact_source"
+    evidence_item_ids: list[str] = Field(default_factory=list)
+    evidence_item_digests: list[str] = Field(default_factory=list)
+
+    @field_validator("grant_id")
+    @classmethod
+    def validate_evidence_grant_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="grant_id", allow_empty=True)
+
+    @field_validator("grant_digest", "source_digest")
+    @classmethod
+    def validate_evidence_grant_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "grant_digest",
+        )
+
+    @field_validator("project_id", "source_id")
+    @classmethod
+    def validate_evidence_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("run_id", "conversation_id", "evidence_type")
+    @classmethod
+    def validate_optional_evidence_identifiers(cls, value: str, info: Any) -> str:
+        if info.field_name == "evidence_type":
+            clean = _agent_safe_text(
+                value,
+                field=info.field_name,
+                max_length=128,
+                allow_empty=True,
+            )
+            if clean and re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,95}", clean) is None:
+                raise ValueError("evidence_type must be a canonical identifier")
+            return clean
+        return _agent_identifier(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("actor")
+    @classmethod
+    def validate_evidence_actor(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="actor",
+            max_length=256,
+            allow_empty=False,
+        )
+
+    @field_validator("actor_source")
+    @classmethod
+    def validate_evidence_actor_source(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        if not clean.startswith(_EVIDENCE_GRANT_TRUSTED_ACTOR_SOURCES):
+            raise ValueError("actor_source must identify a trusted server action source")
+        return clean
+
+    @field_validator("issued_at")
+    @classmethod
+    def validate_evidence_issued_at(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="issued_at",
+            max_length=64,
+            allow_empty=False,
+        )
+        try:
+            parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("issued_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("issued_at must include a timezone")
+        return clean
+
+    @field_validator("evidence_item_ids")
+    @classmethod
+    def validate_evidence_item_ids(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="evidence_item_ids",
+            max_items=4096,
+        )
+        for item in cleaned:
+            _agent_identifier(item, field="evidence_item_ids item")
+        return cleaned
+
+    @field_validator("evidence_item_digests")
+    @classmethod
+    def validate_evidence_item_digests(cls, value: list[str]) -> list[str]:
+        if len(value) > 4096:
+            raise ValueError("evidence_item_digests contains too many entries")
+        cleaned = [_agent_digest_value(item, field="evidence_item_digests item") for item in value]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("evidence_item_digests must not contain duplicates")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_evidence_grant(self) -> "EvidenceGrantV1":
+        if len(self.evidence_item_ids) != len(self.evidence_item_digests):
+            raise ValueError(
+                "evidence_item_ids and evidence_item_digests must be paired exactly"
+            )
+        expected = _agent_digest(self.semantic_material())
+        if self.grant_digest and self.grant_digest != expected:
+            raise ValueError("evidence grant digest mismatch")
+        object.__setattr__(self, "grant_digest", expected)
+        expected_id = f"evidence-grant-{expected.split(':', 1)[1][:32]}"
+        if self.grant_id and self.grant_id != expected_id:
+            raise ValueError("grant_id must derive from grant_digest")
+        object.__setattr__(self, "grant_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("grant_id", None)
+        payload.pop("grant_digest", None)
+        payload.pop("issued_at", None)
+        return payload
+
+
+class EvidenceGrantRequestCheckpointV1(BaseModel):
+    """Server-owned replay checkpoint for one structured confirmation request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[EVIDENCE_GRANT_CHECKPOINT_V1] = EVIDENCE_GRANT_CHECKPOINT_V1
+    request_digest: str
+    client_request_id: str
+    project_id: str
+    source_id: str
+    expected_source_digest: str
+    current_source_digest: str
+    scope: EvidenceGrantScope
+    action: Literal["confirm_extracted_dataset"] = "confirm_extracted_dataset"
+    confirmed: Literal[True] = True
+    actor: str
+    actor_source: str
+    grant_id: str
+    grant_digest: str
+    recorded_at: str
+
+    @field_validator("request_digest", "expected_source_digest", "current_source_digest", "grant_digest")
+    @classmethod
+    def validate_checkpoint_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("client_request_id", "project_id", "source_id", "grant_id")
+    @classmethod
+    def validate_checkpoint_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("actor")
+    @classmethod
+    def validate_checkpoint_actor(cls, value: str) -> str:
+        return _agent_safe_text(value, field="actor", max_length=256, allow_empty=False)
+
+    @field_validator("actor_source")
+    @classmethod
+    def validate_checkpoint_actor_source(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        if not clean.startswith(_EVIDENCE_GRANT_TRUSTED_ACTOR_SOURCES):
+            raise ValueError("actor_source must identify a trusted server action source")
+        return clean
+
+    @field_validator("recorded_at")
+    @classmethod
+    def validate_checkpoint_recorded_at(cls, value: str) -> str:
+        clean = _agent_safe_text(value, field="recorded_at", max_length=64, allow_empty=False)
+        try:
+            parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("recorded_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("recorded_at must include a timezone")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_checkpoint_source_binding(self) -> "EvidenceGrantRequestCheckpointV1":
+        if self.expected_source_digest != self.current_source_digest:
+            raise ValueError(
+                "expected_source_digest must match current_source_digest"
+            )
+        return self
+
+
+class ScientificEvidenceAdmissionV1(BaseModel):
+    """Immutable exact-source admission consumed after an EvidenceGrant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[SCIENTIFIC_EVIDENCE_ADMISSION_V1] = SCIENTIFIC_EVIDENCE_ADMISSION_V1
+    admission_id: str = ""
+    admission_digest: str = ""
+    project_id: str
+    run_id: str
+    conversation_id: str
+    source_id: str
+    source_digest: str
+    candidate_package_digest: str
+    review_digest: str
+    paper_id: str
+    grant_id: str
+    grant_digest: str
+    scope: EvidenceGrantScope
+    actor: str
+    actor_source: str
+    semantic_boundary: SemanticBoundary = SemanticBoundary.SCIENTIFIC_CONFIRMATION
+    confirmed: Literal[True] = True
+    exact_source: Literal[True] = True
+    admitted_at: str
+
+    @field_validator("admission_id")
+    @classmethod
+    def validate_admission_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="admission_id", allow_empty=True)
+
+    @field_validator(
+        "admission_digest",
+        "source_digest",
+        "candidate_package_digest",
+        "review_digest",
+        "grant_digest",
+    )
+    @classmethod
+    def validate_admission_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "admission_digest",
+        )
+
+    @field_validator("project_id", "run_id", "conversation_id", "source_id", "grant_id")
+    @classmethod
+    def validate_admission_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("paper_id")
+    @classmethod
+    def validate_admission_paper_id(cls, value: str) -> str:
+        return _agent_safe_text(value, field="paper_id", max_length=256, allow_empty=False)
+
+    @field_validator("actor")
+    @classmethod
+    def validate_admission_actor(cls, value: str) -> str:
+        return _agent_safe_text(value, field="actor", max_length=256, allow_empty=False)
+
+    @field_validator("actor_source")
+    @classmethod
+    def validate_admission_actor_source(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        if not clean.startswith(_EVIDENCE_GRANT_TRUSTED_ACTOR_SOURCES):
+            raise ValueError("actor_source must identify a trusted server action source")
+        return clean
+
+    @field_validator("admitted_at")
+    @classmethod
+    def validate_admitted_at(cls, value: str) -> str:
+        clean = _agent_safe_text(value, field="admitted_at", max_length=64, allow_empty=False)
+        try:
+            parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("admitted_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("admitted_at must include a timezone")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_admission(self) -> "ScientificEvidenceAdmissionV1":
+        if self.semantic_boundary is not SemanticBoundary.SCIENTIFIC_CONFIRMATION:
+            raise ValueError("evidence admission must retain SCIENTIFIC_CONFIRMATION")
+        expected = _agent_digest(self.semantic_material())
+        if self.admission_digest and self.admission_digest != expected:
+            raise ValueError("scientific evidence admission digest mismatch")
+        object.__setattr__(self, "admission_digest", expected)
+        expected_id = f"evidence-admission-{expected.split(':', 1)[1][:32]}"
+        if self.admission_id and self.admission_id != expected_id:
+            raise ValueError("admission_id must derive from admission_digest")
+        object.__setattr__(self, "admission_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("admission_id", None)
+        payload.pop("admission_digest", None)
+        payload.pop("admitted_at", None)
+        return payload
+
+
+# Short aliases keep the public contract discoverable without duplicating
+# versioned model names in callers.
+EvidenceGrant = EvidenceGrantV1
+EvidenceGrantRequestCheckpoint = EvidenceGrantRequestCheckpointV1
+ScientificEvidenceAdmission = ScientificEvidenceAdmissionV1
 
 
 class AuthorityEvaluation(BaseModel):
@@ -11313,6 +11667,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
     "agent_plan_authorization": AgentPlanAuthorization,
     "autonomy_grant": AutonomyGrant,
+    "evidence_grant": EvidenceGrantV1,
+    "scientific_evidence_admission": ScientificEvidenceAdmissionV1,
     "authority_evaluation": AuthorityEvaluation,
     "agent_task_failure_evidence": AgentTaskFailureEvidence,
     "agent_failure_observation": AgentFailureObservation,

@@ -23,6 +23,13 @@ from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
     ScientificAgentConversationStaleAuthority,
 )
+from ai4s_agent.scientific_agent_evidence import (
+    EvidenceGrantAuthorizationRequired,
+    EvidenceGrantConflict,
+    EvidenceGrantNotEligible,
+    EvidenceGrantStale,
+    EvidenceGrantUnavailable,
+)
 from ai4s_agent.scientific_agent_autonomy_l2 import AutonomyL2MaterialityError
 from ai4s_agent.scientific_agent_replanner import (
     ScientificAgentReplannerConflict,
@@ -306,6 +313,101 @@ def register_scientific_agent_conversation_routes(
                         "ok": False,
                         "error_code": "scientific_agent_session_failed",
                         "error": "The scientific Agent session could not continue safely.",
+                    }
+                ),
+                409,
+            )
+
+    @app.post(base + "/evidence/<source_id>/confirm")
+    def confirm_scientific_agent_evidence(project_id: str, conversation_id: str, source_id: str):
+        """Confirm one server-resolved BR2 source without invoking an LLM."""
+
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {"expected_source_digest", "confirmed", "client_request_id"}
+            if set(payload).difference(allowed):
+                raise ValueError("evidence confirmation contains an unsupported field")
+            if not isinstance(payload.get("expected_source_digest"), str):
+                raise ValueError("expected_source_digest must be a string")
+            if not isinstance(payload.get("client_request_id"), str):
+                raise ValueError("client_request_id must be a string")
+            if str(source_id or "").strip() != "candidate_raw_dataset":
+                raise EvidenceGrantNotEligible(
+                    "the requested evidence source is not supported"
+                )
+            session = service.read_session(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            run_id = str(session.get("run_id") or "").strip()
+            if not run_id:
+                raise EvidenceGrantNotEligible(
+                    "the current conversation has no BR2 run binding"
+                )
+            actor = resolve_authenticated_actor(request, required=True)
+            result = service.confirm_br2_evidence(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                expected_source_digest=str(payload.get("expected_source_digest") or ""),
+                confirmed=payload.get("confirmed"),
+                client_request_id=str(payload.get("client_request_id") or ""),
+                actor=actor,
+            )
+            return jsonify({"ok": True, **result})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except EvidenceGrantAuthorizationRequired:
+            return _fixed_error(
+                "evidence_confirmation_actor_required",
+                "Evidence confirmation requires a server-resolved actor.",
+                403,
+            )
+        except EvidenceGrantStale:
+            return _fixed_error(
+                "evidence_source_stale",
+                "The current BR2 evidence source changed; no EvidenceGrant was issued.",
+                409,
+            )
+        except (EvidenceGrantConflict, ScientificAgentConversationStaleAuthority):
+            return _fixed_error(
+                "evidence_grant_conflict",
+                "The BR2 evidence authority is stale or conflicts with an immutable record.",
+                409,
+            )
+        except EvidenceGrantNotEligible:
+            return _fixed_error(
+                "evidence_confirmation_not_pending",
+                "The requested BR2 scientific confirmation boundary is not pending.",
+                409,
+            )
+        except EvidenceGrantUnavailable:
+            return _fixed_error(
+                "evidence_source_unavailable",
+                "The current BR2 evidence source is unavailable or unsafe.",
+                409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "The scientific Agent session is unavailable.",
+                409,
+            )
+        except ValueError:
+            return _fixed_error(
+                "invalid_evidence_confirmation_request",
+                "Invalid structured evidence confirmation request.",
+                400,
+            )
+        except Exception:
+            app.logger.warning("scientific_agent_evidence_confirmation_failed")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "evidence_confirmation_failed",
+                        "error": "The evidence confirmation could not continue safely.",
                     }
                 ),
                 409,
