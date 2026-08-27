@@ -1,0 +1,112 @@
+{
+  "additionalProperties": false,
+  "description": "Immutable append-only usage committed for one lease operation.",
+  "properties": {
+    "authority_epoch": {
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "ended_at": {
+      "title": "Ended At",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "lease_digest": {
+      "title": "Lease Digest",
+      "type": "string"
+    },
+    "lease_id": {
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "operation_id": {
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "ordinal": {
+      "maximum": 1000000000,
+      "minimum": 1,
+      "title": "Ordinal",
+      "type": "integer"
+    },
+    "previous_usage_digest": {
+      "default": "",
+      "title": "Previous Usage Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "receipt_digest": {
+      "default": "",
+      "title": "Receipt Digest",
+      "type": "string"
+    },
+    "receipt_id": {
+      "default": "",
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "autonomy_lease_usage_receipt.v1",
+      "default": "autonomy_lease_usage_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "usage_kind": {
+      "enum": [
+        "ACTIVE_EXECUTION",
+        "REMOTE_RUNTIME"
+      ],
+      "title": "Usage Kind",
+      "type": "string"
+    },
+    "usage_seconds": {
+      "title": "Usage Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "project_id",
+    "lease_id",
+    "lease_digest",
+    "grant_id",
+    "grant_digest",
+    "authority_epoch",
+    "operation_id",
+    "controller_execution_id",
+    "usage_kind",
+    "usage_seconds",
+    "started_at",
+    "ended_at",
+    "ordinal",
+    "created_at"
+  ],
+  "title": "AutonomyLeaseUsageReceiptV1",
+  "type": "object"
+}

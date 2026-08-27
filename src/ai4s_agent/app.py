@@ -39,10 +39,10 @@ def create_app(
         "AI4S_AGENT_FAILURE_RECOVERY_ENABLED",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "false"),
     )
-    # Recovery authority is issued by the server's approve-and-start
-    # lifecycle, never by a request or a failure callback.  These bounded
-    # defaults are only active when the explicit recovery feature flag is on
-    # and may be tightened by deployment configuration.
+    # Recovery retry/replan limits remain independent from the shared
+    # server-issued AutonomyGrant and autonomy lease.  A zero recovery budget
+    # disables recovery continuation; it must not disable lease enforcement
+    # for ordinary bounded automatic effects.
     app.config.setdefault(
         "AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", "1"),
@@ -54,6 +54,30 @@ def create_app(
     app.config.setdefault(
         "AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_GRANT_TTL_SECONDS", "86400"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_LEASE_ENABLED",
+        os.environ.get("AI4S_AGENT_AUTONOMY_LEASE_ENABLED", "true"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_LEASE_TTL_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_LEASE_TTL_SECONDS", "3600"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS", "900"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS", "900"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS", "300"),
+    )
+    app.config.setdefault(
+        "AI4S_AGENT_AUTONOMY_REMOTE_RESERVATION_SECONDS",
+        os.environ.get("AI4S_AGENT_AUTONOMY_REMOTE_RESERVATION_SECONDS", "300"),
     )
     if scientific_task_registry is None:
         registry_id = os.environ.get("AI4S_SCIENTIFIC_TASK_REGISTRY", "").strip()

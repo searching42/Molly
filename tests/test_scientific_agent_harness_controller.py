@@ -11,6 +11,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Mapping, Sequence
 
 import pytest
@@ -49,7 +50,16 @@ from ai4s_agent.scientific_agent_harness_controller import (
     CONTROLLER_POLICY_DIGEST,
     ScientificAgentHarnessController,
     ScientificAgentHarnessControllerConflict,
+    ScientificAgentHarnessControllerLeaseBlocked,
     ScientificAgentHarnessControllerVerificationError,
+)
+from ai4s_agent.scientific_agent_autonomy_lease import (
+    AutonomyLeaseReconciliationRequired,
+    AutonomyLeaseService,
+)
+from ai4s_agent.scientific_agent_failure_recovery_runtime import (
+    ScientificAgentAutonomyGrantIssuer,
+    ScientificAgentAutonomyGrantStore,
 )
 from ai4s_agent.routes.scientific_agent_harness_controller import (
     register_scientific_agent_harness_controller_routes,
@@ -1057,6 +1067,175 @@ def test_controller_executes_exactly_one_local_task_and_replays_receipt(tmp_path
         controller_execution_id=first.execution.controller_execution_id,
     )
     assert [item.receipt_id for item in receipts] == [first.receipt.receipt_id]
+
+
+def test_production_controller_persists_unknown_effect_after_started_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=intent.authorization_id,
+        verify_current=True,
+    )
+    grant_store = ScientificAgentAutonomyGrantStore(
+        storage=storage,
+        clock=lambda: _NOW,
+    )
+    issuer = ScientificAgentAutonomyGrantIssuer(
+        grant_store=grant_store,
+        registry=controller.proposal_store.registry,
+        clock=lambda: _NOW,
+    )
+    binding = issuer.issue_from_approved_chain(
+        SimpleNamespace(authorization=authorization, start_intent=intent)
+    )
+    assert binding is not None
+    lease_service = AutonomyLeaseService(
+        storage=storage,
+        grant_source=grant_store,
+        operation_reservation_seconds=5,
+        remote_operation_reservation_seconds=5,
+        clock=lambda: _NOW,
+    )
+    controller.autonomy_lease_service = lease_service
+    request = AgentHarnessControllerStartRequest(
+        expected_start_intent_digest=intent.start_intent_digest,
+        client_request_id="controller-unknown-effect-1",
+    )
+    original_execute = controller._execute_decision
+
+    def fail_after_lease_start(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("injected ambiguous Controller effect")
+
+    monkeypatch.setattr(controller, "_execute_decision", fail_after_lease_start)
+    with pytest.raises(RuntimeError, match="ambiguous Controller effect"):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+    execution = control_store.list_harness_controller_executions(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+    )[0]
+    decision = control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    )[0]
+    lease = lease_service.ensure_current_lease(project_id="project-1", run_id="run-1")
+    reconciliation_path = (
+        storage.project_dir("project-1")
+        / "agent-autonomy-leases"
+        / "reconciliations"
+        / lease.lease_id
+        / f"controller-effect-{decision.decision_id}.json"
+    )
+    assert json.loads(reconciliation_path.read_text(encoding="utf-8"))["effect_state"] == (
+        "UNKNOWN_EFFECT"
+    )
+    assert control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    ) == []
+
+    # A replay sees the durable reconciliation before the adapter boundary;
+    # the exact effect cannot be attempted a second time.
+    monkeypatch.setattr(controller, "_execute_decision", original_execute)
+    with pytest.raises(ScientificAgentHarnessControllerLeaseBlocked) as blocked:
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert blocked.value.reason_code == "AUTONOMY_LEASE_RECONCILIATION_REQUIRED"
+    with pytest.raises(AutonomyLeaseReconciliationRequired):
+        lease_service.reconcile_controller_effect(execution=execution, decision=decision)
+    assert control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    ) == []
+
+
+def test_production_remote_controller_fails_closed_without_runtime_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, controller, intent, transport, remote = _remote_controller_authority_chain(
+        tmp_path,
+        monkeypatch,
+    )
+    authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=intent.authorization_id,
+        verify_current=True,
+    )
+    grant_store = ScientificAgentAutonomyGrantStore(
+        storage=storage,
+        clock=lambda: _NOW,
+    )
+    issuer = ScientificAgentAutonomyGrantIssuer(
+        grant_store=grant_store,
+        registry=controller.proposal_store.registry,
+        clock=lambda: _NOW,
+    )
+    binding = issuer.issue_from_approved_chain(
+        SimpleNamespace(authorization=authorization, start_intent=intent)
+    )
+    assert binding is not None
+    controller.autonomy_lease_service = AutonomyLeaseService(
+        storage=storage,
+        grant_source=grant_store,
+        operation_reservation_seconds=5,
+        remote_operation_reservation_seconds=5,
+        clock=lambda: _NOW,
+    )
+
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="remote-lease-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    slot = created.execution.task_slots[0]
+    remote_request = remote.inspect_slot_binding(
+        project_id="project-1",
+        run_id="run-1",
+        slot_id=slot.slot_id,
+    )
+    approved = controller.approve_remote(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+        request=AgentHarnessRemoteApprovalRequest(
+            expected_remote_request_sha256=remote_request.request_sha256,
+            client_request_id="remote-lease-approval-1",
+            note="Approve the exact task slot request.",
+        ),
+        actor="alice",
+    )
+    assert approved.inspection.next_action == AgentHarnessControllerAction.DISPATCH_REMOTE_TASK
+    with pytest.raises(ScientificAgentHarnessControllerLeaseBlocked) as blocked:
+        controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id="remote-lease-dispatch-1",
+            ),
+        )
+    assert blocked.value.reason_code == "AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE"
+    assert transport.dispatches == 0
 
 
 def test_controller_binds_br1_sources_before_effect_and_replays_exactly(

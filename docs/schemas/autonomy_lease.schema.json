@@ -1,0 +1,91 @@
+{
+  "additionalProperties": false,
+  "description": "Server-owned temporal and budget eligibility for one AutonomyGrant.\n\nA lease never carries task, effect, parameter, resource, or I/O authority.\nThose capabilities remain in the separately verified AutonomyGrant and\nPermission -> Authorization -> StartIntent -> Controller chain.",
+  "properties": {
+    "authority_epoch": {
+      "title": "Authority Epoch",
+      "type": "string"
+    },
+    "created_by": {
+      "title": "Created By",
+      "type": "string"
+    },
+    "created_by_source": {
+      "title": "Created By Source",
+      "type": "string"
+    },
+    "grant_digest": {
+      "title": "Grant Digest",
+      "type": "string"
+    },
+    "grant_id": {
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "issued_at": {
+      "title": "Issued At",
+      "type": "string"
+    },
+    "lease_digest": {
+      "default": "",
+      "title": "Lease Digest",
+      "type": "string"
+    },
+    "lease_id": {
+      "default": "",
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "max_active_execution_seconds": {
+      "title": "Max Active Execution Seconds",
+      "type": "number"
+    },
+    "max_remote_runtime_seconds": {
+      "title": "Max Remote Runtime Seconds",
+      "type": "number"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "autonomy_lease.v1",
+      "default": "autonomy_lease.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "valid_from": {
+      "title": "Valid From",
+      "type": "string"
+    },
+    "valid_until": {
+      "title": "Valid Until",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "grant_id",
+    "grant_digest",
+    "authority_epoch",
+    "issued_at",
+    "valid_from",
+    "valid_until",
+    "max_active_execution_seconds",
+    "max_remote_runtime_seconds",
+    "created_by",
+    "created_by_source",
+    "policy_version",
+    "policy_digest"
+  ],
+  "title": "AutonomyLeaseV1",
+  "type": "object"
+}

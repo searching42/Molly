@@ -169,7 +169,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
         ("M3.5-AUT-FAILURE-RECOVERY-FOUNDATION", "DONE"),
         ("M3.5-AUT-FAILURE-RECOVERY", "DONE"),
         ("M3.5-AUT-FEEDBACK", "DONE"),
-        ("M3.5-AUT-LEASE", "READY"),
+        ("M3.5-AUT-LEASE", "DONE"),
         ("M3.5-UI", "DEFERRED"),
         ("M3.5-V1-ACCEPT", "DEFERRED"),
     ):
