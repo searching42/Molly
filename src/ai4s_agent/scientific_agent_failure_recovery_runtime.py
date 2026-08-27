@@ -451,7 +451,7 @@ class ScientificAgentAutonomyGrantIssuer:
         same immutable grant bytes rather than minting a new authority.
         """
 
-        if not self.enabled or (self.max_retries == 0 and self.max_replans == 0):
+        if not self.enabled:
             return None
         authorization = getattr(result, "authorization", None)
         start_intent = getattr(result, "start_intent", None)

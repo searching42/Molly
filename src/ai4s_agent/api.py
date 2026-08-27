@@ -268,11 +268,18 @@ def register_routes(
         registry=scientific_task_registry,
         tracer=harness_tracer,
     )
-    # Failure-recovery authority is issued by the server's normal
-    # approve-and-start lifecycle.  Build the issuer before constructing the
-    # authorization service so the hook is explicit in production wiring.
+    # AutonomyGrant is the server-issued capability binding shared by normal
+    # bounded autonomy and failure recovery.  It is independent of the
+    # recovery continuation flag; the lease flag must be able to enforce
+    # normal automatic Controller effects even when recovery is disabled.
+    autonomy_lease_enabled = _as_bool(
+        app.config.get("AI4S_AGENT_AUTONOMY_LEASE_ENABLED")
+    )
+    failure_recovery_enabled = _as_bool(
+        app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")
+    )
     recovery_grant_store = ScientificAgentAutonomyGrantStore(storage=projects)
-    recovery_grant_issuer = ScientificAgentAutonomyGrantIssuer(
+    autonomy_grant_issuer = ScientificAgentAutonomyGrantIssuer(
         grant_store=recovery_grant_store,
         registry=scientific_task_registry,
         max_retries=app.config.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", 1),
@@ -286,7 +293,7 @@ def register_routes(
         max_remote_runtime_seconds=app.config.get(
             "AI4S_AGENT_AUTONOMY_MAX_REMOTE_RUNTIME_SECONDS", 900
         ),
-        enabled=_as_bool(app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")),
+        enabled=autonomy_lease_enabled or failure_recovery_enabled,
     )
     autonomy_lease_service = AutonomyLeaseService(
         storage=projects,
@@ -308,6 +315,10 @@ def register_routes(
         ),
     )
     app.extensions["scientific_agent_autonomy_lease_service"] = autonomy_lease_service
+    app.extensions["scientific_agent_autonomy_grant_issuer"] = autonomy_grant_issuer
+    # Preserve the historical extension name for recovery callers while
+    # pointing it at the now shared server-owned issuer.
+    app.extensions["scientific_agent_failure_recovery_grant_issuer"] = autonomy_grant_issuer
     register_scientific_agent_permission_routes(
         app,
         projects=projects,
@@ -316,7 +327,7 @@ def register_routes(
         resource_authority_policy_store=resource_authority_policies,
         registry=scientific_task_registry,
         tracer=harness_tracer,
-        autonomy_grant_issuer=recovery_grant_issuer.issue_from_approved_chain,
+        autonomy_grant_issuer=autonomy_grant_issuer.issue_from_approved_chain,
     )
     harness_controller = ScientificAgentHarnessController(
         storage=projects,
@@ -333,8 +344,7 @@ def register_routes(
         tracer=harness_tracer,
         autonomy_lease_service=(
             autonomy_lease_service
-            if _as_bool(app.config.get("AI4S_AGENT_AUTONOMY_LEASE_ENABLED"))
-            and _as_bool(app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED"))
+            if autonomy_lease_enabled
             else None
         ),
     )
@@ -461,7 +471,6 @@ def register_routes(
         ),
     )
     app.extensions["scientific_agent_failure_recovery_grant_store"] = recovery_grant_store
-    app.extensions["scientific_agent_failure_recovery_grant_issuer"] = recovery_grant_issuer
     app.extensions["scientific_agent_failure_recovery_successor"] = recovery_successor
     app.extensions["scientific_agent_failure_recovery_service_factory"] = recovery_factory
     app.extensions["scientific_agent_failure_recovery_runtime"] = recovery_runtime
@@ -484,9 +493,7 @@ def register_routes(
         replanner=replanner,
         failure_recovery_runtime=recovery_runtime,
         evidence_service=evidence_grant_service,
-        failure_recovery_enabled=_as_bool(
-            app.config.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED")
-        ),
+        failure_recovery_enabled=failure_recovery_enabled,
     )
     register_scientific_agent_conversation_routes(
         app,

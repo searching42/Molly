@@ -50,6 +50,7 @@ AUTONOMY_LEASE_POLICY_MATERIAL: dict[str, Any] = {
         "process_downtime_excluded": True,
         "provider_calls_charged": False,
         "remote_runtime_requires_server_interval": True,
+        "missing_remote_runtime_action": "fail_closed_before_controller_effect",
     },
     "authority": {
         "capability_owner": "autonomy_grant",
@@ -83,6 +84,7 @@ AUTONOMY_LEASE_REASON_CODES: tuple[str, ...] = (
     "AUTONOMY_LEASE_EXPIRED",
     "AUTONOMY_ACTIVE_BUDGET_EXHAUSTED",
     "AUTONOMY_REMOTE_BUDGET_EXHAUSTED",
+    "AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE",
     "AUTONOMY_LEASE_STALE",
     "AUTONOMY_LEASE_CONFLICT",
     "AUTONOMY_LEASE_RECONCILIATION_REQUIRED",
@@ -102,6 +104,13 @@ _AUTO_EFFECT_ACTIONS = frozenset(
         "execute_local_task",
         "adopt_completed_task",
         "prepare_remote_request",
+        "dispatch_remote_task",
+        "refresh_remote_task",
+        "adopt_remote_outputs",
+    }
+)
+_REMOTE_RUNTIME_GATED_ACTIONS = frozenset(
+    {
         "dispatch_remote_task",
         "refresh_remote_task",
         "adopt_remote_outputs",
@@ -191,6 +200,10 @@ class AutonomyLeaseActiveBudgetExhausted(AutonomyLeaseError):
 
 class AutonomyLeaseRemoteBudgetExhausted(AutonomyLeaseError):
     reason_code = "AUTONOMY_REMOTE_BUDGET_EXHAUSTED"
+
+
+class AutonomyLeaseRemoteBudgetEnforcementUnavailable(AutonomyLeaseError):
+    reason_code = "AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE"
 
 
 class AutonomyLeaseStale(AutonomyLeaseError):
@@ -1741,6 +1754,16 @@ class AutonomyLeaseService:
                     return
                 if state == "NOT_STARTED":
                     raise AutonomyLeaseConflict("released operation cannot become unknown")
+                if state == "STARTED":
+                    # STARTED is a one-way pre-effect checkpoint in the
+                    # separate ``starts`` collection.  The ambiguous outcome
+                    # must be published to the reconciliation collection so
+                    # production Controller exceptions become durable
+                    # UNKNOWN_EFFECT without replacing the start evidence.
+                    self._publish_reconciliation_for_reservation(
+                        reservation=reservation,
+                        effect_state="UNKNOWN_EFFECT",
+                    )
                 return
             self._publish_reconciliation_for_reservation(
                 reservation=reservation,
@@ -1791,6 +1814,24 @@ class AutonomyLeaseService:
         # Controller work.  True worker/GPU runtime is a separate trusted
         # REMOTE_RUNTIME seam and is never inferred from polling latency.
         return "ACTIVE_EXECUTION"
+
+    def require_remote_runtime_enforcement(self, action: Any) -> None:
+        """Refuse autonomous remote lifecycle effects without real evidence.
+
+        The current remote lifecycle exposes status observations but no
+        server-owned start/end runtime interval that can enforce the
+        immutable ``max_remote_runtime_seconds`` cap.  Remote dispatch,
+        monitoring, and output adoption therefore remain fail-closed until a
+        trusted lifecycle integration is wired.  This is intentionally a
+        server-only seam; no request, provider, or tool argument can enable
+        it.
+        """
+
+        token = str(getattr(action, "value", action) or "").strip().lower()
+        if token in _REMOTE_RUNTIME_GATED_ACTIONS:
+            raise AutonomyLeaseRemoteBudgetEnforcementUnavailable(
+                "trusted remote runtime evidence is unavailable"
+            )
 
     @staticmethod
     def controller_operation_id(decision: Any) -> str:
@@ -1865,9 +1906,9 @@ class AutonomyLeaseService:
         fail-closed at the normal reservation boundary.
         """
 
-        kind = self.usage_kind_for_controller_action(
-            getattr(decision, "action_kind", "")
-        )
+        action = getattr(decision, "action_kind", "")
+        self.require_remote_runtime_enforcement(action)
+        kind = self.usage_kind_for_controller_action(action)
         if kind is None or getattr(decision, "executable", False) is not True:
             return None
         operation_id = self.controller_operation_id(decision)
@@ -1936,7 +1977,9 @@ class AutonomyLeaseService:
         execution: Any,
         decision: Any,
     ) -> AutonomyLeaseOperation | None:
-        kind = self.usage_kind_for_controller_action(getattr(decision, "action_kind", ""))
+        action = getattr(decision, "action_kind", "")
+        self.require_remote_runtime_enforcement(action)
+        kind = self.usage_kind_for_controller_action(action)
         if kind is None or getattr(decision, "executable", False) is not True:
             return None
         task_id = ""
@@ -2131,6 +2174,7 @@ __all__ = [
     "AutonomyLeaseOperation",
     "AutonomyLeaseReconciliationRequired",
     "AutonomyLeaseRemoteBudgetExhausted",
+    "AutonomyLeaseRemoteBudgetEnforcementUnavailable",
     "AutonomyLeaseReservation",
     "AutonomyLeaseService",
     "AutonomyLeaseStale",

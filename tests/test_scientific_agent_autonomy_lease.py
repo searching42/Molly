@@ -8,10 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai4s_agent._utils import now_iso
+from ai4s_agent.app import create_app
 from ai4s_agent.schemas import (
     AgentHarnessControllerAction,
     AutonomyGrant,
     AutonomyLeaseV1,
+    _agent_digest,
 )
 from ai4s_agent.scientific_agent_autonomy_lease import (
     AUTONOMY_LEASE_POLICY_DIGEST,
@@ -22,6 +25,7 @@ from ai4s_agent.scientific_agent_autonomy_lease import (
     AutonomyLeaseExpired,
     AutonomyLeaseReconciliationRequired,
     AutonomyLeaseRemoteBudgetExhausted,
+    AutonomyLeaseRemoteBudgetEnforcementUnavailable,
     AutonomyLeaseService,
     AutonomyLeaseStale,
 )
@@ -370,6 +374,159 @@ def test_expired_lease_denies_effect_at_controller_boundary(tmp_path: Path) -> N
         project_id="project-1",
         lease_id=lease.lease_id,
     ) == []
+
+
+def test_expired_lease_blocks_deterministic_fastpath_before_adoption(
+    tmp_path: Path,
+) -> None:
+    _storage, _grant_store, service, _grant_value, clock, _monotonic = _fixture(
+        tmp_path
+    )
+    lease = service.ensure_current_lease(project_id="project-1", run_id="run-1")
+    clock.value = lease.valid_until
+    execution, decision = _controller_pair(
+        action=AgentHarnessControllerAction.ADOPT_COMPLETED_TASK.value,
+        decision_id="deterministic-fastpath-adoption",
+    )
+    with pytest.raises(AutonomyLeaseExpired):
+        service.begin_controller_effect(execution=execution, decision=decision)
+    assert service.store.list_reservations(
+        project_id="project-1",
+        lease_id=lease.lease_id,
+    ) == []
+
+
+def test_started_controller_effect_exception_persists_unknown_effect(
+    tmp_path: Path,
+) -> None:
+    storage, _grant_store, service, _grant_value, _clock, _monotonic = _fixture(
+        tmp_path
+    )
+    execution, decision = _controller_pair()
+    operation = service.begin_controller_effect(execution=execution, decision=decision)
+    assert operation is not None
+
+    # The production Controller exception path calls this after begin_effect
+    # has already published its immutable STARTED checkpoint.
+    service.mark_unknown_effect(reservation=operation.reservation)
+    reconciliation_path = (
+        storage.project_dir("project-1")
+        / "agent-autonomy-leases"
+        / "reconciliations"
+        / operation.reservation.lease_id
+        / f"{operation.reservation.operation_id}.json"
+    )
+    assert json.loads(reconciliation_path.read_text(encoding="utf-8"))["effect_state"] == "UNKNOWN_EFFECT"
+    with pytest.raises(AutonomyLeaseReconciliationRequired) as blocked:
+        service.reconcile_controller_effect(
+            execution=execution,
+            decision=decision,
+        )
+    assert blocked.value.reason_code == "AUTONOMY_LEASE_RECONCILIATION_REQUIRED"
+    assert service.store.list_receipts(
+        project_id="project-1",
+        lease_id=operation.reservation.lease_id,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        AgentHarnessControllerAction.DISPATCH_REMOTE_TASK,
+        AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+        AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
+    ],
+)
+def test_remote_controller_effect_fails_closed_without_runtime_evidence(
+    tmp_path: Path,
+    action: AgentHarnessControllerAction,
+) -> None:
+    _storage, _grant_store, service, _grant_value, _clock, _monotonic = _fixture(
+        tmp_path
+    )
+    execution, decision = _controller_pair(action=action.value)
+    with pytest.raises(AutonomyLeaseRemoteBudgetEnforcementUnavailable) as blocked:
+        service.begin_controller_effect(execution=execution, decision=decision)
+    assert blocked.value.reason_code == (
+        "AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE"
+    )
+    assert service.store.list_leases(project_id="project-1") == []
+
+
+def test_lease_and_recovery_flags_are_independent_for_grant_and_controller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI4S_AGENT_AUTONOMY_LEASE_ENABLED", "true")
+    monkeypatch.setenv("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "false")
+    monkeypatch.setenv("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", "0")
+    monkeypatch.setenv("AI4S_AGENT_FAILURE_RECOVERY_MAX_REPLANS", "0")
+    monkeypatch.setenv("AI4S_AGENT_AUTONOMY_MAX_ACTIVE_EXECUTION_SECONDS", "1")
+    monkeypatch.setenv("AI4S_AGENT_AUTONOMY_OPERATION_RESERVATION_SECONDS", "1")
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "user-config",
+    )
+    issuer = app.extensions["scientific_agent_autonomy_grant_issuer"]
+    assert issuer.enabled is True
+    assert issuer.max_retries == 0
+    assert issuer.max_replans == 0
+    assert app.extensions["scientific_agent_failure_recovery_grant_issuer"] is issuer
+    conversation_service = app.extensions[
+        "scientific_agent_conversation_session_service"
+    ]
+    assert conversation_service.controller.autonomy_lease_service is app.extensions[
+        "scientific_agent_autonomy_lease_service"
+    ]
+
+    created_at = now_iso()
+    authorization_digest = _agent_digest({"test": "lease-without-recovery"})
+    authorization = SimpleNamespace(
+        project_id="project-1",
+        run_id="run-1",
+        authorization_id="authorization-1",
+        authorization_digest=authorization_digest,
+        actor="alice",
+        task_ids=["task-1"],
+        profile_bindings=[],
+        compiled_task_options={},
+        created_at=created_at,
+    )
+    start_intent = SimpleNamespace(
+        project_id="project-1",
+        run_id="run-1",
+        authorization_id="authorization-1",
+        authorization_digest=authorization_digest,
+    )
+    binding = issuer.issue_from_approved_chain(
+        SimpleNamespace(authorization=authorization, start_intent=start_intent)
+    )
+    assert binding is not None
+    lease = app.extensions["scientific_agent_autonomy_lease_service"].ensure_current_lease(
+        project_id="project-1",
+        run_id="run-1",
+    )
+    assert lease.grant_id == binding.grant.grant_id
+    controller = conversation_service.controller
+    execution, first_decision = _controller_pair(
+        decision_id="lease-without-recovery-effect-1",
+        controller_execution_id="lease-without-recovery-controller-1",
+    )
+    first = controller.autonomy_lease_service.begin_controller_effect(
+        execution=execution,
+        decision=first_decision,
+    )
+    assert first is not None
+    _second_execution, second_decision = _controller_pair(
+        decision_id="lease-without-recovery-effect-2",
+        controller_execution_id="lease-without-recovery-controller-2",
+    )
+    with pytest.raises(AutonomyLeaseActiveBudgetExhausted):
+        controller.autonomy_lease_service.begin_controller_effect(
+            execution=execution,
+            decision=second_decision,
+        )
 
 
 def test_human_waiting_is_not_active_usage(tmp_path: Path) -> None:

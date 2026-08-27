@@ -93,6 +93,7 @@ AUTONOMY_LEASE_NOT_YET_VALID
 AUTONOMY_LEASE_EXPIRED
 AUTONOMY_ACTIVE_BUDGET_EXHAUSTED
 AUTONOMY_REMOTE_BUDGET_EXHAUSTED
+AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE
 AUTONOMY_LEASE_STALE
 AUTONOMY_LEASE_CONFLICT
 AUTONOMY_LEASE_RECONCILIATION_REQUIRED
@@ -105,6 +106,11 @@ argument can create, extend, or alter a lease.
 
 This is implementation/test evidence only (`I/T/—`).  There is no scheduler,
 daemon, heartbeat, automatic renewal, representative/live acceptance, new GPU
-canary, or BR2 real acceptance.  Remote runtime accounting is available only
-when a trusted remote lifecycle supplies a server-derived runtime interval;
-the local Controller polling/transport latency is not mislabeled as GPU runtime.
+canary, or BR2 real acceptance.  The current remote lifecycle exposes status
+observations but no trusted server-owned runtime start/end interval.  Therefore
+autonomous remote dispatch, refresh, and output adoption fail closed with
+`AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE`; no remote task is allowed to
+run without an enforceable `max_remote_runtime_seconds`.  A future trusted
+remote lifecycle may use `record_remote_runtime()` as an explicit server seam;
+the local Controller polling/transport latency is not mislabeled as GPU
+runtime.

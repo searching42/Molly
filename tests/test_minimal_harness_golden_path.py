@@ -85,6 +85,9 @@ def _create_conversation(
         service.controller,
         service.replanner,
         app.extensions["scientific_agent_plan_observation_builder"],
+        app.extensions["scientific_agent_autonomy_lease_service"],
+        app.extensions["scientific_agent_autonomy_grant_issuer"],
+        app.extensions["scientific_agent_autonomy_grant_issuer"].grant_store,
     ):
         if hasattr(component, "clock"):
             component.clock = lambda: _CLOCK

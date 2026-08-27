@@ -20,6 +20,9 @@ from ai4s_agent.schemas import (
 from ai4s_agent.scientific_agent_authorization import (
     ScientificAgentAuthorizationDenied,
 )
+from ai4s_agent.scientific_agent_harness_controller import (
+    ScientificAgentHarnessControllerLeaseBlocked,
+)
 from ai4s_agent.scientific_agent_autonomy_l2 import (
     AUTONOMY_L2_MATERIALITY_POLICY_DIGEST,
     AUTONOMY_L2_MATERIALITY_POLICY_VERSION,
@@ -364,6 +367,63 @@ def test_l2_failure_route_reuses_subset_authority_without_user_reapproval(
     assert body["session"]["autonomy_l2_baseline_authorization_id"] == state["authorization_id"]
     assert body["proposal"]["proposal_id"] != state["proposal_id"]
     assert body["decision"]["executable"] is False
+
+
+def test_l2_subset_none_is_not_auto_applied_when_lease_is_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _app, client, service, state, current = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    receipt = service.controller.control_store.list_harness_controller_action_receipts(
+        project_id="conversation-project",
+        controller_execution_id=state["controller_execution_id"],
+    )[-1]
+    failed = replace(
+        current,
+        receipt=receipt,
+        inspection=_typed_controller_inspection_variant(
+            current.inspection,
+            status=AgentHarnessControllerStatus.FAILED,
+            action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        ),
+    )
+    monkeypatch.setattr(
+        service.controller,
+        "read_execution_agent_snapshot",
+        lambda **_kwargs: failed,
+    )
+
+    def exhausted_lease(**_kwargs):
+        raise ScientificAgentHarnessControllerLeaseBlocked(
+            "AUTONOMY_ACTIVE_BUDGET_EXHAUSTED"
+        )
+
+    # This is the production Controller boundary used by the L2 automatic
+    # authority-reuse route; no successor effect is allowed past it.
+    monkeypatch.setattr(service.controller, "create", exhausted_lease)
+    response = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/agent-session/replan",
+        json={
+            "run_id": "conversation-run",
+            "external_llm_approved": True,
+            "llm_provider": {
+                "provider": "stub",
+                "model": "stub",
+                "stub_response": {
+                    "rationale_summary": "Use a bounded smaller candidate set.",
+                    "option_patch": {"generate_candidates": {"count": 4}},
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    assert body["session"]["autonomy_l2_authority_relation"] == "SUBSET"
+    assert body["session"]["autonomy_l2_semantic_boundary"] == "NONE"
+    assert body["session"]["autonomy_l2_authority_auto_apply"] is False
+    assert body["session"]["reason_code"] == "AUTONOMY_ACTIVE_BUDGET_EXHAUSTED"
 
 
 def test_l2_material_successor_receives_fresh_authority_after_structured_approval(

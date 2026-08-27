@@ -37,6 +37,7 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
 from ai4s_agent.scientific_agent_harness_controller import (
     ControllerAdvanceResult,
     ScientificAgentHarnessController,
+    ScientificAgentHarnessControllerLeaseBlocked,
 )
 from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
@@ -1039,6 +1040,73 @@ def test_runtime_expired_grant_fails_closed_before_foundation(tmp_path: Path) ->
     assert result.provider_calls_total == 0
     assert result.effect_count_total == 0
     assert factory.calls == 0
+
+
+def test_expired_lease_stops_failed_recovery_before_provider_or_retry(
+    tmp_path: Path,
+) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
+    storage.create_project("project-1", name="Project", created_at="2026-01-01T00:00:00Z")
+    baseline = _controller_result()
+    controller = _Controller(baseline)
+
+    def deny_lease(**_kwargs):
+        raise ScientificAgentHarnessControllerLeaseBlocked(
+            "AUTONOMY_LEASE_EXPIRED"
+        )
+
+    controller.verify_autonomy_lease = deny_lease  # type: ignore[attr-defined]
+    factory = ScientificAgentFailureRecoveryServiceFactory(
+        storage=storage,
+        controller=controller,
+        replanner=None,
+        successor_applicator=_TrustedSuccessor(),
+    )
+    runtime = ScientificAgentFailureRecoveryRuntime(
+        storage=storage,
+        controller=controller,
+        grant_source=_GrantSource(_grant()),
+        service_factory=factory,
+        store=factory.store,
+    )
+    conversations = ConversationStore(projects=storage)
+    conversations.create_conversation(
+        "project-1",
+        conversation_id="conversation-1",
+        title="Lease recovery",
+    )
+    service = ScientificAgentConversationSessionService(
+        projects=storage,
+        conversations=conversations,
+        plan_service=None,
+        proposal_store=None,
+        authorization_service=None,
+        controller=controller,
+        execution_agent=None,
+        failure_recovery_runtime=runtime,
+        failure_recovery_enabled=True,
+    )
+
+    class CountingProvider:
+        calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            raise AssertionError("expired lease must block recovery provider")
+
+    provider = CountingProvider()
+    _result, state, stop_reason = service._auto_progress(
+        project_id="project-1",
+        conversation_id="conversation-1",
+        state=service._default_state("project-1", "conversation-1"),
+        controller_result=baseline,
+        provider=provider,
+        provider_binding_digest="",
+    )
+    assert stop_reason == "lease_blocked"
+    assert state["reason_code"] == "AUTONOMY_LEASE_EXPIRED"
+    assert state["status"] == "recovery_required"
+    assert provider.calls == 0
 
 
 def test_runtime_retry_replays_one_receipt_without_second_effect(tmp_path: Path) -> None:

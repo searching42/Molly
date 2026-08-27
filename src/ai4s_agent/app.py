@@ -39,10 +39,10 @@ def create_app(
         "AI4S_AGENT_FAILURE_RECOVERY_ENABLED",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_ENABLED", "false"),
     )
-    # Recovery authority is issued by the server's approve-and-start
-    # lifecycle, never by a request or a failure callback.  These bounded
-    # defaults are only active when the explicit recovery feature flag is on
-    # and may be tightened by deployment configuration.
+    # Recovery retry/replan limits remain independent from the shared
+    # server-issued AutonomyGrant and autonomy lease.  A zero recovery budget
+    # disables recovery continuation; it must not disable lease enforcement
+    # for ordinary bounded automatic effects.
     app.config.setdefault(
         "AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES",
         os.environ.get("AI4S_AGENT_FAILURE_RECOVERY_MAX_RETRIES", "1"),

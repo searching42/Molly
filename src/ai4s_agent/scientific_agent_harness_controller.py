@@ -550,6 +550,13 @@ class ScientificAgentHarnessController:
         if usage_kind is None:
             return None
         try:
+            require_remote_runtime = getattr(
+                service,
+                "require_remote_runtime_enforcement",
+                None,
+            )
+            if callable(require_remote_runtime):
+                require_remote_runtime(selected)
             return service.verify_current_lease(
                 project_id=execution.project_id,
                 run_id=execution.run_id,
