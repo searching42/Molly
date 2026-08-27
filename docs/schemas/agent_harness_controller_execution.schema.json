@@ -151,6 +151,11 @@
       "title": "Run Id",
       "type": "string"
     },
+    "conversation_id": {
+      "default": "",
+      "title": "Conversation Id",
+      "type": "string"
+    },
     "start_intent_id": {
       "title": "Start Intent Id",
       "type": "string"

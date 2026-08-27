@@ -774,6 +774,7 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
     assert planned_body["session"]["input_bundle_id"] == "bundle-current"
     assert planned_body["session"]["resource_authority_status"] == "configured"
     assert [item["task_id"] for item in planned_body["plan_summary"]["tasks"]] == _BR1_TASK_IDS
+    service = app.extensions["scientific_agent_conversation_session_service"]
     remote_resources = {
         item["task_id"]: item["requested_resources"]
         for item in planned_body["plan_summary"]["dispatch_intents"]
@@ -794,19 +795,101 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
         )
     }
     proposal_id = planned_body["proposal"]["proposal_id"]
+    controller_route_base = (
+        "/api/projects/br1-project/agent-harness-controller-executions"
+    )
 
     def user_turn(content: str, client_message_id: str) -> dict[str, Any]:
-        appended = client.post(
+        current = service.read_session(
+            project_id="br1-project",
+            conversation_id="br1-conversation",
+        )
+        if not current["controller_execution_id"]:
+            response = client.post(
+                endpoint + "/approve",
+                json={
+                    "expected_proposal_digest": planned_body["proposal"][
+                        "proposal_digest"
+                    ],
+                    "authorization_mode": "stepwise",
+                    "requested_preauthorized_gate_ids": [],
+                    "confirmed": True,
+                    "client_request_id": client_message_id,
+                    "note": "Explicit structured test approval.",
+                },
+            )
+            assert response.status_code == 200, response.get_json()
+            response = client.post(
+                endpoint + "/tick",
+                json={"run_id": "br1-run", "llm_provider": _stub_execution_provider()},
+            )
+            assert response.status_code == 200, response.get_json()
+            return response.get_json()
+
+        boundary = service.controller.current_authority_boundary(
+            project_id="br1-project",
+            controller_execution_id=current["controller_execution_id"],
+        )
+        # The same phrases that used to be authority classifiers are now an
+        # ordinary chat turn.  It must not create a Controller receipt, alter
+        # the boundary, or dispatch a worker; the typed route below is the
+        # only operation that may approve this boundary.
+        before_receipts = service.controller.control_store.list_harness_controller_action_receipts(
+            project_id="br1-project",
+            controller_execution_id=current["controller_execution_id"],
+        )
+        before_dispatches = list(transport.dispatched_tasks)
+        message = client.post(
             "/api/projects/br1-project/conversations/br1-conversation/messages",
             json={
                 "role": "user",
                 "content": content,
-                "client_message_id": client_message_id,
+                "client_message_id": client_message_id + "-ordinary-chat",
             },
         )
-        assert appended.status_code == 201, appended.get_json()
-        response = client.post(
+        assert message.status_code == 201, message.get_json()
+        ordinary = client.post(
             endpoint + "/turn",
+            json={"run_id": "br1-run", "llm_provider": _stub_execution_provider()},
+        )
+        assert ordinary.status_code == 200, ordinary.get_json()
+        ordinary_body = ordinary.get_json()
+        assert ordinary_body["session"]["status"] == current["status"]
+        assert ordinary_body["session"]["current_task_id"] == current["current_task_id"]
+        assert ordinary_body["session"]["controller_execution_id"] == current[
+            "controller_execution_id"
+        ]
+        assert service.controller.control_store.list_harness_controller_action_receipts(
+            project_id="br1-project",
+            controller_execution_id=current["controller_execution_id"],
+        ) == before_receipts
+        assert transport.dispatched_tasks == before_dispatches
+
+        if boundary["authority_kind"] in {"gate", "dataset_confirmation_gate"}:
+            response = client.post(
+                f"{controller_route_base}/{current['controller_execution_id']}"
+                f"/gates/{boundary['gate_id']}/approve",
+                json={
+                    "expected_snapshot_id": boundary["snapshot_id"],
+                    "expected_snapshot_hash": boundary["snapshot_digest"],
+                    "client_request_id": client_message_id,
+                    "note": "Explicit structured test Gate approval.",
+                },
+            )
+        else:
+            assert boundary["authority_kind"] == "remote_approval", boundary
+            response = client.post(
+                f"{controller_route_base}/{current['controller_execution_id']}"
+                "/remote-approvals",
+                json={
+                    "expected_remote_request_sha256": boundary["request_sha256"],
+                    "client_request_id": client_message_id,
+                    "note": "Explicit structured test remote approval.",
+                },
+            )
+        assert response.status_code == 200, response.get_json()
+        response = client.post(
+            endpoint + "/tick",
             json={"run_id": "br1-run", "llm_provider": _stub_execution_provider()},
         )
         assert response.status_code == 200, response.get_json()
@@ -827,12 +910,12 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
     assert reloaded.status_code == 200
     assert reloaded.get_json()["review_projection"] == started["review_projection"]
 
-    dataset_approved = user_turn("确认当前数据集", "br1-dataset-approval")
+    dataset_approved = user_turn("确认", "br1-dataset-approval")
     assert dataset_approved["session"]["status"] == "waiting_gate", dataset_approved
     assert dataset_approved["session"]["current_task_id"] == "train_private_unimol_v1"
-    gate_approved = user_turn("批准当前 Gate", "br1-training-gate")
+    gate_approved = user_turn("approve", "br1-training-gate")
     assert gate_approved["session"]["status"] == "waiting_remote_approval", gate_approved
-    remote_approved = user_turn("批准当前远程执行", "br1-training-remote")
+    remote_approved = user_turn("yes", "br1-training-remote")
     assert remote_approved["session"]["reason_code"] == "REMOTE_EXECUTION_RUNNING", remote_approved
     assert transport.dispatched_tasks == ["train_private_unimol_v1"]
 
@@ -849,14 +932,14 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
 
     after_training = complete_remote()
     assert after_training["session"]["status"] == "waiting_gate", after_training
-    generated_gate = user_turn("批准当前 Gate", "br1-generation-gate")
+    generated_gate = user_turn("continue", "br1-generation-gate")
     assert generated_gate["session"]["status"] == "waiting_remote_approval", generated_gate
-    generated_remote = user_turn("确认远程执行", "br1-generation-remote")
+    generated_remote = user_turn("approve", "br1-generation-remote")
     assert generated_remote["session"]["reason_code"] == "REMOTE_EXECUTION_RUNNING", generated_remote
     assert transport.dispatched_tasks[-1] == "generate_private_reinvent4_v1"
     after_generation = complete_remote()
     assert after_generation["session"]["status"] == "waiting_remote_approval", after_generation
-    prediction_remote = user_turn("批准当前远程执行", "br1-prediction-remote")
+    prediction_remote = user_turn("批准", "br1-prediction-remote")
     assert prediction_remote["session"]["reason_code"] == "REMOTE_EXECUTION_RUNNING", prediction_remote
     assert transport.dispatched_tasks[-1] == "predict_private_unimol_v1"
     completed = complete_remote()

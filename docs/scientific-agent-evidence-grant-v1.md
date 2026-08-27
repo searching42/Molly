@@ -9,9 +9,28 @@ table.
 
 Conversation text is a review surface only. Messages such as `yes`,
 `approved`, `use it`, `looks good`, `确认`, and `继续` do not create an
-`EvidenceGrant`, change a scientific boundary, or create authorization. The
-LLM and Execution Agent may explain that review is required, but neither may
-mint a grant, select provenance, choose a source digest, or write grant files.
+`EvidenceGrant`, approve a plan, approve a Gate or remote request, change a
+scientific boundary, or create authorization. The LLM and Execution Agent may
+explain that review is required, but neither may mint a grant, select
+provenance, choose a source digest, or write authority records.
+
+Plan, Gate, and remote approval are separate typed Controller operations. In
+particular, an ordinary `ConversationAgent` turn never calls a Controller
+approval method; the server-resolved actor and the exact typed snapshot/request
+are supplied only by the corresponding structured route.
+
+The pending plan action is:
+
+```text
+POST /api/projects/{project_id}/conversations/{conversation_id}/agent-session/approve
+```
+
+Gate and remote approval use the existing Controller routes:
+
+```text
+POST /api/projects/{project_id}/agent-harness-controller-executions/{controller_execution_id}/gates/{gate_id}/approve
+POST /api/projects/{project_id}/agent-harness-controller-executions/{controller_execution_id}/remote-approvals
+```
 
 The explicit server action is:
 
@@ -71,9 +90,12 @@ never deleted or replaced.
 
 The explicit BR2 route performs this sequence:
 
-1. The conversation service verifies that the existing Controller is still
-   `SUCCEEDED` at `prepare_oled_candidate_raw_dataset` and that the active
-   proposal/controller digests still match.
+1. The conversation service verifies that the existing Controller is still at
+   the exact BR2 confirmation boundary and that the active
+   proposal/controller digests still match. The compiled BR2 plan includes a
+   server-bound, non-planner-visible
+   `consume_oled_candidate_evidence_admission` continuation after the review
+   package.
 2. The evidence service rereads the registered candidate and review artifacts
    as stable regular files and revalidates their review-only boundary.
 3. The server compares the client’s expected digest with the newly computed
@@ -83,13 +105,29 @@ The explicit BR2 route performs this sequence:
    `ScientificEvidenceAdmissionV1`, which repeats the project/run/conversation,
    source/package/review digests, grant binding, actor provenance, and
    `SCIENTIFIC_CONFIRMATION` boundary. The admission is registered as an
-   immutable run artifact for later downstream consumers.
+   immutable run artifact under both its auditable ID and the stable logical
+   binding consumed by the downstream task.
+6. The structured confirmation resumes the existing Controller. Before the
+   consumer task can enter `RUNNING`, `RunPlanExecutor` calls
+   `verify_br2_admission()` against the current project/run/conversation,
+   grant, registry, and source bytes. Only then may the consumer publish the
+   immutable `confirmed_oled_evidence` receipt. A stale, foreign, retargeted,
+   or malformed admission fails closed before the task stage or adapter effect.
 
-Admission verification rereads the current source and the grant. It rejects a
-different source ID, a new package/review digest, a different conversation or
-project, an unknown scope, a mismatched grant digest, or a corrupted/symlinked
-artifact. Downstream code must verify the grant and source binding rather than
-trusting `grant_id` alone.
+Admission verification rereads the current source and the grant. It rechecks
+every authority-relevant semantic binding carried by the producer: project,
+run, conversation, source ID and digest, package/review/paper identity, scope,
+actor and actor source, issuer, evidence type, exact-source coverage, and the
+closed-world item roster. It rejects a different source ID, a new
+package/review digest, a different conversation or project, an unknown scope,
+a mismatched grant digest, or a corrupted/symlinked artifact. Downstream code
+must verify the grant and source binding rather than trusting `grant_id` alone.
+
+The first production consumer is the local
+`consume_oled_candidate_evidence_admission` task. Its typed
+`ScientificEvidenceConsumptionReceiptV1` binds the consumer output to the
+verified admission, grant, exact source, actor provenance, and retained
+`SCIENTIFIC_CONFIRMATION` boundary.
 
 ## Semantic boundary and compatibility
 

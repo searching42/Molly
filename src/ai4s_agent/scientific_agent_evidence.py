@@ -42,6 +42,7 @@ BR2_EVIDENCE_TYPE = "oled_br2_candidate_raw_dataset"
 BR2_EVIDENCE_SCOPE = EvidenceGrantScope.EXTRACTED_DATASET_CONFIRMATION
 BR2_EVIDENCE_SOURCE_SCHEMA = "scientific_agent_br2_evidence_source.v1"
 BR2_EVIDENCE_CONFIRMATION_ACTION = "confirm_extracted_dataset"
+BR2_EVIDENCE_CONSUMER_TASK_ID = "consume_oled_candidate_evidence_admission"
 _ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 128 * 1024 * 1024
@@ -710,28 +711,39 @@ class EvidenceGrantService:
 
     def _register_admission(self, admission: ScientificEvidenceAdmissionV1) -> None:
         relative = self.grant_store.admission_relative_path(admission=admission)
-        key = f"evidence_admission_{admission.admission_id}"
-        existing = self.storage.read_artifact_registry(
-            admission.project_id,
-            admission.run_id,
-        ).get(key)
-        if existing is not None:
-            if existing != relative:
-                raise EvidenceGrantConflict("evidence admission registry binding conflicts")
-            return
-        try:
-            self.storage.register_new_artifact_registry_paths(
-                admission.project_id,
-                admission.run_id,
-                {key: relative},
-            )
-        except ValueError as exc:
-            recovered = self.storage.read_artifact_registry(
+        keys = (
+            f"evidence_admission_{admission.admission_id}",
+            # A stable logical binding is the only input name the downstream
+            # consumer may resolve.  The per-admission key remains as an
+            # auditable compatibility/index binding.
+            "scientific_evidence_admission",
+        )
+        for key in keys:
+            existing = self.storage.read_artifact_registry(
                 admission.project_id,
                 admission.run_id,
             ).get(key)
-            if recovered != relative:
-                raise EvidenceGrantConflict("evidence admission registry publication conflicts") from exc
+            if existing is not None:
+                if existing != relative:
+                    raise EvidenceGrantConflict(
+                        "evidence admission registry binding conflicts"
+                    )
+                continue
+            try:
+                self.storage.register_new_artifact_registry_paths(
+                    admission.project_id,
+                    admission.run_id,
+                    {key: relative},
+                )
+            except ValueError as exc:
+                recovered = self.storage.read_artifact_registry(
+                    admission.project_id,
+                    admission.run_id,
+                ).get(key)
+                if recovered != relative:
+                    raise EvidenceGrantConflict(
+                        "evidence admission registry publication conflicts"
+                    ) from exc
 
     def _admit_grant(
         self,
@@ -925,21 +937,51 @@ class EvidenceGrantService:
             run_id=run_id,
             admission_id=admission_id,
         )
+        clean_run = _clean_id(run_id, field="run_id")
         clean_conversation = _clean_id(conversation_id, field="conversation_id")
-        if admission.conversation_id != clean_conversation:
+        if admission.run_id != clean_run or admission.conversation_id != clean_conversation:
             raise EvidenceGrantConflict("evidence admission conversation binding is invalid")
+        clean_project = _clean_id(project_id, field="project_id")
+        if admission.project_id != clean_project:
+            raise EvidenceGrantConflict("evidence admission project binding is invalid")
         grant = self.grant_store.read_grant(
-            project_id=project_id,
+            project_id=clean_project,
             grant_id=admission.grant_id,
         )
         if (
-            grant.grant_digest != admission.grant_digest
+            admission.grant_id != grant.grant_id
+            or grant.grant_digest != admission.grant_digest
             or grant.source_digest != admission.source_digest
+            or grant.source_id != admission.source_id
             or grant.scope != admission.scope
             or grant.project_id != admission.project_id
+            or grant.run_id != admission.run_id
+            or grant.conversation_id != admission.conversation_id
+            or grant.actor != admission.actor
+            or grant.actor_source != admission.actor_source
         ):
             raise EvidenceGrantConflict("evidence admission grant binding is invalid")
-        current = self.current_br2_source(project_id=project_id, run_id=run_id)
+        # Re-assert the complete closed-world BR2 grant contract at the
+        # downstream seam.  A valid admission is not permission to trust
+        # whichever optional grant semantics happened to be persisted by an
+        # earlier producer version.
+        if (
+            grant.issuer != "server"
+            or grant.evidence_type != BR2_EVIDENCE_TYPE
+            or grant.coverage_mode != "exact_source"
+            or grant.evidence_item_ids
+            or grant.evidence_item_digests
+            or grant.source_id != BR2_EVIDENCE_SOURCE_ID
+            or grant.scope != BR2_EVIDENCE_SCOPE
+        ):
+            raise EvidenceGrantConflict("evidence admission grant semantics are invalid")
+        current = self.current_br2_source(
+            project_id=clean_project,
+            run_id=clean_run,
+            conversation_id=clean_conversation,
+        )
+        if current.source_id != admission.source_id or current.source_id != grant.source_id:
+            raise EvidenceGrantConflict("evidence admission source identity is invalid")
         if current.source_digest != admission.source_digest:
             raise EvidenceGrantStale("evidence admission is stale for current evidence")
         if (
@@ -959,6 +1001,7 @@ ScientificAgentEvidenceGrantService = EvidenceGrantService
 
 __all__ = [
     "BR2_EVIDENCE_CONFIRMATION_ACTION",
+    "BR2_EVIDENCE_CONSUMER_TASK_ID",
     "BR2_EVIDENCE_SCOPE",
     "BR2_EVIDENCE_SOURCE_ID",
     "BR2_EVIDENCE_TYPE",

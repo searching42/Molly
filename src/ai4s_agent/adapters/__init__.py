@@ -64,6 +64,7 @@ from ai4s_agent.adapters.oled_bounded_discovery_controller import (
     execute_oled_bounded_discovery_controller_adapter,
 )
 from ai4s_agent.adapters.br2_contextual_mapping import (
+    consume_oled_candidate_evidence_admission_adapter,
     extract_oled_evidence_adapter,
     map_oled_contextual_semantics_adapter,
     prepare_oled_candidate_raw_dataset_adapter,
@@ -161,6 +162,7 @@ __all__ = [
     "extract_oled_evidence_adapter",
     "map_oled_contextual_semantics_adapter",
     "prepare_oled_candidate_raw_dataset_adapter",
+    "consume_oled_candidate_evidence_admission_adapter",
     "prepare_structured_dataset_canary_adapter",
     "prepare_private_structured_dataset_canary_v2_adapter",
     "confirm_structured_dataset_canary_adapter",

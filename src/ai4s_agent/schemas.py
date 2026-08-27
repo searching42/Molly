@@ -2138,6 +2138,9 @@ AUTHORITY_EVALUATION_V1 = "authority_evaluation.v1"
 EVIDENCE_GRANT_V1 = "evidence_grant.v1"
 EVIDENCE_GRANT_CHECKPOINT_V1 = "evidence_grant_request_checkpoint.v1"
 SCIENTIFIC_EVIDENCE_ADMISSION_V1 = "scientific_evidence_admission.v1"
+SCIENTIFIC_EVIDENCE_CONSUMPTION_RECEIPT_V1 = (
+    "scientific_evidence_consumption_receipt.v1"
+)
 
 
 class AgentExecutionPlanProposal(BaseModel):
@@ -4889,11 +4892,143 @@ class ScientificEvidenceAdmissionV1(BaseModel):
         return payload
 
 
+class ScientificEvidenceConsumptionReceiptV1(BaseModel):
+    """Immutable receipt emitted by the first real BR2 admission consumer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[SCIENTIFIC_EVIDENCE_CONSUMPTION_RECEIPT_V1] = (
+        SCIENTIFIC_EVIDENCE_CONSUMPTION_RECEIPT_V1
+    )
+    receipt_id: str = ""
+    receipt_digest: str = ""
+    project_id: str
+    run_id: str
+    conversation_id: str
+    consumer_task_id: Literal["consume_oled_candidate_evidence_admission"] = (
+        "consume_oled_candidate_evidence_admission"
+    )
+    source_id: str
+    source_digest: str
+    candidate_package_digest: str
+    review_digest: str
+    paper_id: str
+    admission_id: str
+    admission_digest: str
+    grant_id: str
+    grant_digest: str
+    scope: EvidenceGrantScope
+    actor: str
+    actor_source: str
+    semantic_boundary: SemanticBoundary = SemanticBoundary.SCIENTIFIC_CONFIRMATION
+    confirmed: Literal[True] = True
+    exact_source: Literal[True] = True
+    consumed_at: str
+
+    @field_validator("receipt_id")
+    @classmethod
+    def validate_receipt_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="receipt_id", allow_empty=True)
+
+    @field_validator(
+        "receipt_digest",
+        "source_digest",
+        "candidate_package_digest",
+        "review_digest",
+        "admission_digest",
+        "grant_digest",
+    )
+    @classmethod
+    def validate_receipt_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "receipt_digest",
+        )
+
+    @field_validator(
+        "project_id",
+        "run_id",
+        "conversation_id",
+        "source_id",
+        "admission_id",
+        "grant_id",
+        "consumer_task_id",
+    )
+    @classmethod
+    def validate_receipt_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("paper_id", "actor")
+    @classmethod
+    def validate_receipt_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=256,
+            allow_empty=False,
+        )
+
+    @field_validator("actor_source")
+    @classmethod
+    def validate_receipt_actor_source(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="actor_source",
+            max_length=256,
+            allow_empty=False,
+        )
+        if not clean.startswith(_EVIDENCE_GRANT_TRUSTED_ACTOR_SOURCES):
+            raise ValueError("actor_source must identify a trusted server action source")
+        return clean
+
+    @field_validator("consumed_at")
+    @classmethod
+    def validate_consumed_at(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="consumed_at",
+            max_length=64,
+            allow_empty=False,
+        )
+        try:
+            parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("consumed_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("consumed_at must include a timezone")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "ScientificEvidenceConsumptionReceiptV1":
+        if self.semantic_boundary is not SemanticBoundary.SCIENTIFIC_CONFIRMATION:
+            raise ValueError(
+                "scientific evidence consumption must retain SCIENTIFIC_CONFIRMATION"
+            )
+        expected = _agent_digest(self.semantic_material())
+        if self.receipt_digest and self.receipt_digest != expected:
+            raise ValueError("scientific evidence consumption receipt digest mismatch")
+        object.__setattr__(self, "receipt_digest", expected)
+        expected_id = f"evidence-consumption-{expected.split(':', 1)[1][:32]}"
+        if self.receipt_id and self.receipt_id != expected_id:
+            raise ValueError("receipt_id must derive from receipt_digest")
+        object.__setattr__(self, "receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("receipt_id", None)
+        payload.pop("receipt_digest", None)
+        payload.pop("consumed_at", None)
+        return payload
+
+
 # Short aliases keep the public contract discoverable without duplicating
 # versioned model names in callers.
 EvidenceGrant = EvidenceGrantV1
 EvidenceGrantRequestCheckpoint = EvidenceGrantRequestCheckpointV1
 ScientificEvidenceAdmission = ScientificEvidenceAdmissionV1
+ScientificEvidenceConsumptionReceipt = ScientificEvidenceConsumptionReceiptV1
 
 
 class AuthorityEvaluation(BaseModel):
@@ -6070,6 +6205,10 @@ class AgentHarnessControllerExecution(BaseModel):
     controller_execution_id: str = ""
     project_id: str
     run_id: str
+    # BR2 production continuations bind the Controller execution to the
+    # originating Conversation.  Empty preserves the historical unbound
+    # controller route used by non-conversational callers.
+    conversation_id: str = ""
     start_intent_id: str
     start_intent_digest: str
     authorization_id: str
@@ -6140,12 +6279,15 @@ class AgentHarnessControllerExecution(BaseModel):
         payload = handler(self)
         if self.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1:
             payload.pop("task_authority_roster_digest", None)
+        if not self.conversation_id:
+            payload.pop("conversation_id", None)
         return payload
 
     @field_validator(
         "controller_execution_id",
         "project_id",
         "run_id",
+        "conversation_id",
         "start_intent_id",
         "authorization_id",
         "permission_decision_id",
@@ -6162,7 +6304,8 @@ class AgentHarnessControllerExecution(BaseModel):
         return _agent_identifier(
             value,
             field=info.field_name,
-            allow_empty=info.field_name in {"controller_execution_id", "remote_authority_set_id"},
+            allow_empty=info.field_name
+            in {"controller_execution_id", "remote_authority_set_id", "conversation_id"},
         )
 
     @field_validator(
@@ -6287,6 +6430,11 @@ class AgentHarnessControllerExecution(BaseModel):
         payload.pop("controller_execution_id", None)
         payload.pop("execution_digest", None)
         payload.pop("created_at", None)
+        if not self.conversation_id:
+            # Historical executions predate the Conversation binding.  Do
+            # not change their semantic digest merely because the reader now
+            # materializes the optional field with its empty default.
+            payload.pop("conversation_id", None)
         if (
             self.controller_policy_version
             == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
@@ -11669,6 +11817,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "autonomy_grant": AutonomyGrant,
     "evidence_grant": EvidenceGrantV1,
     "scientific_evidence_admission": ScientificEvidenceAdmissionV1,
+    "scientific_evidence_consumption_receipt": ScientificEvidenceConsumptionReceiptV1,
     "authority_evaluation": AuthorityEvaluation,
     "agent_task_failure_evidence": AgentTaskFailureEvidence,
     "agent_failure_observation": AgentFailureObservation,

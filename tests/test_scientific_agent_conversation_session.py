@@ -96,6 +96,34 @@ def _execution_agent_stub_provider(tool_id: str) -> dict[str, object]:
     }
 
 
+def _approve_pending_plan(
+    client,
+    endpoint: str,
+    body: dict[str, Any],
+    *,
+    client_request_id: str,
+):
+    proposal = body["proposal"]
+    response = client.post(
+        endpoint + "/approve",
+        json={
+            "expected_proposal_digest": proposal["proposal_digest"],
+            "authorization_mode": "stepwise",
+            "requested_preauthorized_gate_ids": [],
+            "confirmed": True,
+            "client_request_id": client_request_id,
+            "note": "Explicit structured test approval.",
+        },
+    )
+    assert response.status_code == 200, response.get_json()
+    tick = client.post(
+        endpoint + "/tick",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert tick.status_code == 200, tick.get_json()
+    return tick
+
+
 def _start_waiting_gate_session_with_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -122,9 +150,11 @@ def _start_waiting_gate_session_with_client(
         },
     )
     assert appended.status_code == 201
-    approved = client.post(
-        endpoint + "/turn",
-        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    approved = _approve_pending_plan(
+        client,
+        endpoint,
+        first.get_json(),
+        client_request_id="structured-plan-approval-auto-progress-boundary",
     )
     assert approved.status_code == 200, approved.get_json()
     body = approved.get_json()
@@ -358,7 +388,7 @@ def test_ambiguous_conversational_revision_does_not_authorize_pending_plan(
     assert revised_body["proposal"]["proposal_id"] != first_body["proposal"]["proposal_id"]
 
 
-def test_exact_conversational_approval_uses_authorization_start_intent_controller_and_execution_agent(
+def test_ordinary_conversational_approval_does_not_start_pending_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -394,12 +424,24 @@ def test_exact_conversational_approval_uses_authorization_start_intent_controlle
         },
     )
     assert appended.status_code == 201
-    approved = client.post(
+    ordinary = client.post(
         endpoint + "/turn",
         json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
     )
 
-    assert approved.status_code == 200, approved.get_json()
+    assert ordinary.status_code == 200, ordinary.get_json()
+    ordinary_body = ordinary.get_json()
+    assert ordinary_body["session"]["authorization_id"] == ""
+    assert ordinary_body["session"]["start_intent_id"] == ""
+    assert ordinary_body["session"]["controller_execution_id"] == ""
+    assert ordinary_body["session"]["status"] == "approval_required"
+
+    approved = _approve_pending_plan(
+        client,
+        endpoint,
+        ordinary_body,
+        client_request_id="structured-plan-approval",
+    )
     body = approved.get_json()
     assert body["session"]["authorization_id"]
     assert body["session"]["start_intent_id"]
@@ -409,7 +451,7 @@ def test_exact_conversational_approval_uses_authorization_start_intent_controlle
     assert body["session"]["autonomy_status"] == "human_boundary"
 
 
-def test_plan_approval_does_not_auto_approve_a_later_gate(
+def test_structured_plan_approval_does_not_auto_approve_a_later_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -430,21 +472,12 @@ def test_plan_approval_does_not_auto_approve_a_later_gate(
         return original_create_proposal(*args, **kwargs)
 
     monkeypatch.setattr(service.execution_agent, "create_proposal", spy_create_proposal)
-    appended = client.post(
-        "/api/projects/conversation-project/conversations/conversation-one/messages",
-        json={
-            "role": "user",
-            "content": "确认执行",
-            "client_message_id": "user-message-gate-approval",
-        },
+    approved = _approve_pending_plan(
+        client,
+        endpoint,
+        first.get_json(),
+        client_request_id="structured-plan-gate-approval",
     )
-    assert appended.status_code == 201
-
-    approved = client.post(
-        endpoint + "/turn",
-        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
-    )
-    assert approved.status_code == 200, approved.get_json()
     body = approved.get_json()
     assert body["session"]["authorization_id"]
     assert body["session"]["start_intent_id"]
@@ -1146,20 +1179,12 @@ def test_active_controller_binding_survives_a_later_ordinary_chat_turn(
         "controller_action_boundary_class",
         lambda *_args, **_kwargs: boundary,
     )
-    appended = client.post(
-        "/api/projects/conversation-project/conversations/conversation-one/messages",
-        json={
-            "role": "user",
-            "content": "确认执行",
-            "client_message_id": f"user-message-{expected_status}",
-        },
+    approved = _approve_pending_plan(
+        client,
+        endpoint,
+        first.get_json(),
+        client_request_id=f"structured-plan-{expected_status}",
     )
-    assert appended.status_code == 201
-    approved = client.post(
-        endpoint + "/turn",
-        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
-    )
-    assert approved.status_code == 200, approved.get_json()
     approved_body = approved.get_json()
     assert approved_body["session"]["status"] == expected_status
 
@@ -1199,7 +1224,7 @@ def test_active_controller_binding_survives_a_later_ordinary_chat_turn(
     assert plan_calls == []
 
 
-def test_exact_approval_starts_without_external_llm_consent_for_existing_plan(
+def test_structured_plan_approval_starts_without_external_llm_consent_for_existing_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1232,18 +1257,13 @@ def test_exact_approval_starts_without_external_llm_consent_for_existing_plan(
         return original_create_proposal(*args, **kwargs)
 
     monkeypatch.setattr(service.execution_agent, "create_proposal", spy_create_proposal)
-    appended = client.post(
-        "/api/projects/conversation-project/conversations/conversation-one/messages",
-        json={
-            "role": "user",
-            "content": "确认执行",
-            "client_message_id": "user-message-external-consent-off",
-        },
+    approved = _approve_pending_plan(
+        client,
+        endpoint,
+        first.get_json(),
+        client_request_id="structured-plan-external-consent-off",
     )
-    assert appended.status_code == 201
-    approved = client.post(endpoint + "/turn", json={"run_id": "conversation-run"})
 
-    assert approved.status_code == 200, approved.get_json()
     body = approved.get_json()
     assert body["session"]["authorization_id"]
     assert body["session"]["start_intent_id"]

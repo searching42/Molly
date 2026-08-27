@@ -297,7 +297,11 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         control_store=app.extensions["scientific_agent_plan_control_store"],
         resource_authority_service=app.extensions["remote_resource_authority_service"],
-        executor=RunPlanExecutor(storage=projects, registry=scientific_task_registry),
+        executor=RunPlanExecutor(
+            storage=projects,
+            registry=scientific_task_registry,
+            evidence_service=evidence_grant_service,
+        ),
         remote_executions=remote_executions,
         tracer=harness_tracer,
     )

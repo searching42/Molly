@@ -115,6 +115,7 @@ from ai4s_agent.scientific_agent_failure_recovery_runtime import (
     ScientificAgentFailureRecoveryRuntime,
 )
 from ai4s_agent.scientific_agent_evidence import (
+    BR2_EVIDENCE_CONSUMER_TASK_ID,
     BR2_EVIDENCE_SCOPE,
     BR2_EVIDENCE_SOURCE_ID,
     EvidenceGrantAuthorizationRequired,
@@ -140,8 +141,6 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerInspection,
     AgentHarnessControllerStatus,
     AgentHarnessControllerStartRequest,
-    AgentHarnessGateApprovalRequest,
-    AgentHarnessRemoteApprovalRequest,
     AgentPlanAuthorizationRequest,
     AgentRemoteResourceAuthorityRequest,
     AgentToolCallApplicationOutcome,
@@ -164,6 +163,11 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
         "DETERMINISTIC_FASTPATH_STEP",
         "EXECUTION_AGENT_V2_STEP",
         "RECOVERY_SUCCESSOR_COMMITTED",
+    }
+)
+TICK_PROGRESS_REASONS = AUTONOMY_L1_RESUMABLE_PAUSE_REASONS | frozenset(
+    {
+        "RUN_STARTED",
     }
 )
 ACTIVE_SESSION_STATUSES = frozenset(
@@ -207,7 +211,7 @@ class ScientificAgentConversationSessionError(ValueError):
 class ScientificAgentConversationAuthorizationRequired(
     ScientificAgentConversationSessionError
 ):
-    """The user approved in chat but no server actor is available."""
+    """A structured authority action has no server-resolved actor."""
 
 
 class ScientificAgentConversationStaleAuthority(ScientificAgentConversationSessionError):
@@ -1569,19 +1573,44 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationStaleAuthority(
                     "the BR2 Controller binding is unavailable"
                 ) from exc
+            execution_tasks = getattr(
+                controller_result.execution,
+                "task_slots",
+                (),
+            )
+            has_admission_consumer = any(
+                getattr(slot, "task_id", "") == BR2_EVIDENCE_CONSUMER_TASK_ID
+                for slot in execution_tasks
+            )
+            legacy_boundary = (
+                controller_result.inspection.status
+                == AgentHarnessControllerStatus.SUCCEEDED
+                and not has_admission_consumer
+            )
+            production_boundary = (
+                controller_result.inspection.status
+                == AgentHarnessControllerStatus.ACTIVE
+                and controller_result.inspection.current_task_id
+                == BR2_EVIDENCE_CONSUMER_TASK_ID
+                and controller_result.inspection.next_action
+                == AgentHarnessControllerAction.EXECUTE_LOCAL_TASK
+            )
+            valid_controller_boundary = (
+                controller_result.inspection.status
+                == AgentHarnessControllerStatus.SUCCEEDED
+                if already_confirmed
+                else legacy_boundary or production_boundary
+            )
             if (
                 controller_result.execution.run_id != clean_run
                 or controller_result.execution.controller_execution_id
                 != controller_execution_id
                 or controller_result.execution.execution_digest
                 != expected_controller_digest
-                or controller_result.inspection.status
-                != AgentHarnessControllerStatus.SUCCEEDED
-                or controller_result.inspection.current_task_id
-                != "prepare_oled_candidate_raw_dataset"
+                or not valid_controller_boundary
             ):
                 raise ScientificAgentConversationStaleAuthority(
-                    "the BR2 successful review boundary is stale"
+                    "the BR2 evidence confirmation boundary is stale"
                 )
             publication = self._read_active_publication(state, clean_project)
             if not self._is_br2_mapping_proposal(publication):
@@ -1597,38 +1626,72 @@ class ScientificAgentConversationSessionService:
                 client_request_id=client_request_id,
                 actor=actor,
             )
+            evidence_updates = {
+                "run_id": clean_run,
+                "controller_status": controller_result.inspection.status.value,
+                "current_task_id": controller_result.inspection.current_task_id,
+                "evidence_confirmation_required": False,
+                "evidence_source_id": confirmation.source.source_id,
+                "evidence_source_digest": confirmation.source.source_digest,
+                "evidence_confirmation_scope": BR2_EVIDENCE_SCOPE.value,
+                "evidence_grant_schema_version": confirmation.grant.schema_version,
+                "evidence_grant_id": confirmation.grant.grant_id,
+                "evidence_grant_digest": confirmation.grant.grant_digest,
+                "evidence_grant_scope": confirmation.grant.scope.value,
+                "evidence_grant_consumed": True,
+                "evidence_grant_replayed": confirmation.grant_replayed,
+                "evidence_admission_schema_version": confirmation.admission.schema_version,
+                "evidence_admission_id": confirmation.admission.admission_id,
+                "evidence_admission_digest": confirmation.admission.admission_digest,
+                # The exact boundary remains visible after crossing it; it is
+                # not globally reclassified as NONE.
+                "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
+            }
+            confirmation_message = (
+                "已通过显式结构化科学确认；EvidenceGrant 已绑定当前 BR2 source，"
+                "并已由 admission verifier 放行到下游 exact-evidence consumer。"
+            )
+            if not already_confirmed and production_boundary:
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="running",
+                    reason_code="BR2_EVIDENCE_ADMISSION_READY",
+                    updates=evidence_updates,
+                    event_type="br2.evidence.admission_ready",
+                    message=confirmation_message,
+                )
+                controller_result, state, _stop_reason = self._auto_progress(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    state=state,
+                    controller_result=controller_result,
+                    provider=None,
+                    provider_binding_digest="",
+                )
+                if (
+                    controller_result is None
+                    or controller_result.inspection.status
+                    != AgentHarnessControllerStatus.SUCCEEDED
+                ):
+                    raise EvidenceGrantConflict(
+                        "BR2 evidence admission consumer did not reach terminal success"
+                    )
+                evidence_updates.update(
+                    {
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                    }
+                )
             if not already_confirmed:
                 state = self._transition(
                     project_id=clean_project,
                     conversation_id=clean_conversation,
                     status="succeeded",
                     reason_code="BR2_EVIDENCE_CONFIRMED",
-                    updates={
-                        "run_id": clean_run,
-                        "controller_status": controller_result.inspection.status.value,
-                        "current_task_id": controller_result.inspection.current_task_id,
-                        "evidence_confirmation_required": False,
-                        "evidence_source_id": confirmation.source.source_id,
-                        "evidence_source_digest": confirmation.source.source_digest,
-                        "evidence_confirmation_scope": BR2_EVIDENCE_SCOPE.value,
-                        "evidence_grant_schema_version": confirmation.grant.schema_version,
-                        "evidence_grant_id": confirmation.grant.grant_id,
-                        "evidence_grant_digest": confirmation.grant.grant_digest,
-                        "evidence_grant_scope": confirmation.grant.scope.value,
-                        "evidence_grant_consumed": True,
-                        "evidence_grant_replayed": confirmation.grant_replayed,
-                        "evidence_admission_schema_version": confirmation.admission.schema_version,
-                        "evidence_admission_id": confirmation.admission.admission_id,
-                        "evidence_admission_digest": confirmation.admission.admission_digest,
-                        # The exact boundary remains visible after crossing it;
-                        # it is not globally reclassified as NONE.
-                        "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
-                    },
+                    updates=evidence_updates,
                     event_type="br2.evidence.confirmed",
-                    message=(
-                        "已通过显式结构化科学确认；EvidenceGrant 已绑定当前 BR2 source，"
-                        "仅该 exact evidence admission 可进入后续路径。"
-                    ),
+                    message=confirmation_message,
                     event_data={
                         "controller_status": controller_result.inspection.status.value,
                         "current_task_id": controller_result.inspection.current_task_id,
@@ -1663,7 +1726,7 @@ class ScientificAgentConversationSessionService:
                 "modeling_plan_payload": {},
                 "questions": [],
                 "pending_cited_target_evidence": [],
-                "next_actions": ["continue_with_exact_evidence_admission"],
+                "next_actions": ["use_confirmed_oled_evidence"],
                 "blocked_reasons": [],
                 "requires_user_response": False,
                 "semantic_boundary": "SCIENTIFIC_CONFIRMATION",
@@ -2090,101 +2153,8 @@ class ScientificAgentConversationSessionService:
         if state.get("status") in ACTIVE_SESSION_STATUSES:
             if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
                 return "paused"
-            messages = self._messages(
-                project_id=clean_project,
-                conversation_id=clean_conversation,
-            )
-            last_user = next(
-                (
-                    item["content"]
-                    for item in reversed(messages)
-                    if item["role"] == "user"
-                ),
-                "",
-            )
-            authority_mode = self._authority_turn_mode(
-                project_id=clean_project,
-                state=state,
-                content=last_user,
-            )
-            if authority_mode:
-                return authority_mode
             return "active"
-        if state.get("proposal_id") and state.get("status") in {
-            "approval_required",
-            "plan_review",
-        }:
-            messages = self._messages(
-                project_id=clean_project,
-                conversation_id=clean_conversation,
-            )
-            last_user = next(
-                (
-                    item["content"]
-                    for item in reversed(messages)
-                    if item["role"] == "user"
-                ),
-                "",
-            )
-            if ConversationAgent.recognize_plan_approval(last_user):
-                return "approval"
         return "ordinary"
-
-    def _resolve_authority_boundary(
-        self, *, project_id: str, state: dict[str, Any]
-    ) -> dict[str, str]:
-        controller_execution_id = str(state.get("controller_execution_id") or "")
-        if not controller_execution_id:
-            return {}
-        resolver = getattr(self.controller, "current_authority_boundary", None)
-        if resolver is None:
-            return {}
-        try:
-            boundary = resolver(
-                project_id=project_id,
-                controller_execution_id=controller_execution_id,
-            )
-        except (ScientificAgentHarnessControllerError, FileNotFoundError, ValueError):
-            return {}
-        if not isinstance(boundary, dict):
-            return {}
-        expected_digest = str(state.get("controller_execution_digest") or "")
-        current_digest = str(boundary.get("controller_execution_digest") or "")
-        if expected_digest and current_digest and expected_digest != current_digest:
-            raise ScientificAgentConversationStaleAuthority(
-                "active Controller execution digest no longer matches the session"
-            )
-        return {str(key): str(value) for key, value in boundary.items()}
-
-    def _authority_turn_mode(
-        self, *, project_id: str, state: dict[str, Any], content: str
-    ) -> str:
-        if not any(
-            (
-                ConversationAgent.recognize_dataset_gate_approval(content),
-                ConversationAgent.recognize_gate_approval(content),
-                ConversationAgent.recognize_remote_approval(content),
-            )
-        ):
-            return ""
-        try:
-            boundary = self._resolve_authority_boundary(
-                project_id=project_id,
-                state=state,
-            )
-        except ScientificAgentConversationStaleAuthority:
-            return ""
-        authority_kind = boundary.get("authority_kind")
-        if authority_kind == "dataset_confirmation_gate" and (
-            ConversationAgent.recognize_dataset_gate_approval(content)
-            or ConversationAgent.recognize_gate_approval(content)
-        ):
-            return "dataset_gate_approval"
-        if authority_kind == "gate" and ConversationAgent.recognize_gate_approval(content):
-            return "gate_approval"
-        if authority_kind == "remote_approval" and ConversationAgent.recognize_remote_approval(content):
-            return "remote_approval"
-        return ""
 
     def handle_turn(
         self,
@@ -2301,40 +2271,6 @@ class ScientificAgentConversationSessionService:
                 provider_binding_digest=provider_binding_digest,
             )
         if state.get("status") in ACTIVE_SESSION_STATUSES:
-            messages = self._messages(
-                project_id=clean_project,
-                conversation_id=clean_conversation,
-            )
-            last_user = next(
-                (
-                    item["content"]
-                    for item in reversed(messages)
-                    if item["role"] == "user"
-                ),
-                "",
-            )
-            authority_mode = self._authority_turn_mode(
-                project_id=clean_project,
-                state=state,
-                content=last_user,
-            )
-            if authority_mode:
-                decision_payload = self._authority_decision(
-                    project_id=clean_project,
-                    run_id=clean_run,
-                    mode=authority_mode,
-                )
-                return self._approve_current_authority(
-                    project_id=clean_project,
-                    conversation_id=clean_conversation,
-                    run_id=clean_run,
-                    state=state,
-                    decision=decision_payload,
-                    provider=provider,
-                    provider_binding_digest=provider_binding_digest,
-                    actor=actor,
-                    authority_mode=authority_mode,
-                )
             return self._handle_existing_execution(
                 project_id=clean_project,
                 conversation_id=clean_conversation,
@@ -2408,21 +2344,6 @@ class ScientificAgentConversationSessionService:
                 assistant_source="scientific_agent_session",
                 llm_used=provider is not None,
                 session=self.session_projection(state),
-            )
-
-        if state.get("proposal_id") and state.get("status") in {
-            "approval_required",
-            "plan_review",
-        } and ConversationAgent.recognize_plan_approval(last_user):
-            return self._approve_and_progress(
-                project_id=clean_project,
-                conversation_id=clean_conversation,
-                run_id=clean_run,
-                state=state,
-                decision=decision_payload,
-                provider=provider,
-                provider_binding_digest=provider_binding_digest,
-                actor=actor,
             )
 
         if decision.status != "ready_for_modeling_plan":
@@ -2646,6 +2567,60 @@ class ScientificAgentConversationSessionService:
             llm_used=True,
         )
 
+    def approve_pending_plan(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        request: AgentPlanAuthorizationRequest,
+        actor: ActorContext | None,
+    ) -> ScientificAgentConversationTurnResult:
+        """Start a pending plan from one explicit structured authority action."""
+
+        clean_project = _clean_id(project_id, field="project_id")
+        clean_conversation = _clean_id(conversation_id, field="conversation_id")
+        root = self._root(clean_project, clean_conversation, create=True)
+        with self._lock(root):
+            state = self.read_session(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            if state.get("status") not in {"approval_required", "plan_review"}:
+                raise ScientificAgentConversationSessionError(
+                    "the conversation has no pending plan approval"
+                )
+            publication = self._read_pending_publication(state, clean_project)
+            if request.expected_proposal_digest != publication.proposal.proposal_digest:
+                raise ScientificAgentConversationStaleAuthority(
+                    "structured plan approval is stale"
+                )
+            decision = {
+                "project_id": clean_project,
+                "run_id": str(state.get("run_id") or ""),
+                "status": "ready_for_modeling_plan",
+                "decision": "structured_plan_approval",
+                "summary": "The pending scientific Agent plan was explicitly approved.",
+                "modeling_plan_payload": {},
+                "questions": [],
+                "pending_cited_target_evidence": [],
+                "next_actions": ["continue_with_controller"],
+                "blocked_reasons": [],
+                "requires_user_response": False,
+                "executable": False,
+            }
+            return self._approve_and_progress(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                run_id=str(state.get("run_id") or ""),
+                state=state,
+                decision=decision,
+                provider=None,
+                provider_binding_digest="",
+                actor=actor,
+                authorization_request=request,
+                auto_progress=False,
+            )
+
     def _read_pending_publication(
         self,
         state: dict[str, Any],
@@ -2704,30 +2679,6 @@ class ScientificAgentConversationSessionService:
                 "active plan digest no longer matches the session"
             )
         return publication
-
-    @staticmethod
-    def _authority_decision(
-        *, project_id: str, run_id: str, mode: str
-    ) -> dict[str, Any]:
-        decision_name = {
-            "dataset_gate_approval": "current_dataset_gate_approval",
-            "gate_approval": "current_gate_approval",
-            "remote_approval": "current_remote_approval",
-        }.get(mode, "current_authority_approval")
-        return {
-            "project_id": project_id,
-            "run_id": run_id,
-            "status": "authority_approval",
-            "decision": decision_name,
-            "summary": "The exact current server-owned authority boundary will be approved.",
-            "modeling_plan_payload": {},
-            "questions": [],
-            "pending_cited_target_evidence": [],
-            "next_actions": ["continue_the_bound_controller_loop"],
-            "blocked_reasons": [],
-            "requires_user_response": False,
-            "executable": False,
-        }
 
     def _authority_updates_for_controller(
         self, *, project_id: str, controller_result: ControllerAdvanceResult
@@ -2843,159 +2794,6 @@ class ScientificAgentConversationSessionService:
             "evidence_semantic_boundary": "SCIENTIFIC_CONFIRMATION",
         }
 
-    def _approve_current_authority(
-        self,
-        *,
-        project_id: str,
-        conversation_id: str,
-        run_id: str,
-        state: dict[str, Any],
-        decision: dict[str, Any],
-        provider: LLMProvider | None,
-        provider_binding_digest: str,
-        actor: ActorContext | None,
-        authority_mode: str,
-    ) -> ScientificAgentConversationTurnResult:
-        if actor is None or not actor.actor:
-            raise ScientificAgentConversationAuthorizationRequired(
-                "conversational authority approval requires a server-resolved actor"
-            )
-        boundary = self._resolve_authority_boundary(
-            project_id=project_id,
-            state=state,
-        )
-        authority_kind = boundary.get("authority_kind")
-        is_dataset = authority_kind == "dataset_confirmation_gate"
-        is_gate = authority_kind in {"dataset_confirmation_gate", "gate"}
-        if authority_mode in {"dataset_gate_approval", "gate_approval"} and not is_gate:
-            raise ScientificAgentConversationStaleAuthority(
-                "the current conversational Gate authority is no longer pending"
-            )
-        if authority_mode == "remote_approval" and authority_kind != "remote_approval":
-            raise ScientificAgentConversationStaleAuthority(
-                "the current conversational remote authority is no longer pending"
-            )
-        if not boundary.get("controller_execution_id"):
-            raise ScientificAgentConversationStaleAuthority(
-                "the current authority boundary is unavailable"
-            )
-        try:
-            if is_gate:
-                controller_result = self.controller.approve_gate(
-                    project_id=project_id,
-                    controller_execution_id=boundary["controller_execution_id"],
-                    gate_id=boundary["gate_id"],
-                    request=AgentHarnessGateApprovalRequest(
-                        expected_snapshot_id=boundary["snapshot_id"],
-                        expected_snapshot_hash=boundary["snapshot_digest"],
-                        client_request_id=_request_id(
-                            "conversation-gate-approval",
-                            project_id,
-                            conversation_id,
-                            boundary["gate_id"],
-                            boundary["snapshot_id"],
-                            boundary["snapshot_digest"],
-                            actor.actor,
-                        ),
-                        note=(
-                            "Explicit conversational approval of the current verified dataset snapshot."
-                            if is_dataset
-                            else "Explicit conversational approval of the current Gate."
-                        ),
-                    ),
-                    actor=actor.actor,
-                )
-            else:
-                controller_result = self.controller.approve_remote(
-                    project_id=project_id,
-                    controller_execution_id=boundary["controller_execution_id"],
-                    request=AgentHarnessRemoteApprovalRequest(
-                        expected_remote_request_sha256=boundary["request_sha256"],
-                        client_request_id=_request_id(
-                            "conversation-remote-approval",
-                            project_id,
-                            conversation_id,
-                            boundary["request_id"],
-                            boundary["request_sha256"],
-                            actor.actor,
-                        ),
-                        note="Explicit conversational approval of the current remote execution request.",
-                    ),
-                    actor=actor.actor,
-                )
-        except ScientificAgentHarnessControllerError as exc:
-            state = self._transition(
-                project_id=project_id,
-                conversation_id=conversation_id,
-                status="stale_authority",
-                reason_code="CONVERSATIONAL_AUTHORITY_STALE",
-                event_type="authority.approval_failed",
-            )
-            raise ScientificAgentConversationStaleAuthority(
-                "the current conversational authority could not be approved exactly"
-            ) from exc
-
-        state = self._transition(
-            project_id=project_id,
-            conversation_id=conversation_id,
-            status="running",
-            reason_code="CONVERSATIONAL_AUTHORITY_APPROVED",
-            updates={
-                "run_id": run_id,
-                "controller_status": controller_result.inspection.status.value,
-                "current_task_id": controller_result.inspection.current_task_id,
-                "authority_kind": "",
-                "gate_id": "",
-                "snapshot_id": "",
-                "snapshot_digest": "",
-                "remote_request_sha256": "",
-                **(
-                    {"review_projection": {}}
-                    if is_dataset
-                    else {}
-                ),
-            },
-            event_type="authority.approved",
-            event_data={
-                "controller_execution_id": controller_result.execution.controller_execution_id,
-                "controller_status": controller_result.inspection.status.value,
-                "current_task_id": controller_result.inspection.current_task_id,
-                "phase": "conversational_authority",
-            },
-        )
-        previous_proposal_id = str(state.get("proposal_id") or "")
-        controller_result, state, _stop_reason = self._auto_progress(
-            project_id=project_id,
-            conversation_id=conversation_id,
-            state=state,
-            controller_result=controller_result,
-            provider=provider,
-            provider_binding_digest=provider_binding_digest,
-        )
-        if state.get("status") in {"approval_required", "plan_review"} and state.get(
-            "proposal_id"
-        ) != previous_proposal_id:
-            pending = self._read_pending_publication(state, project_id)
-            return self._plan_result(
-                decision=decision,
-                state=state,
-                publication=pending,
-                assistant_message=self._plan_summary(pending)["assistant_message"],
-                assistant_source="scientific_agent_failure_recovery",
-                llm_used=provider is not None,
-            )
-        publication = self._read_active_publication(state, project_id)
-        return ScientificAgentConversationTurnResult(
-            decision=decision,
-            assistant_message=self._active_execution_message(state),
-            assistant_source="scientific_agent_session",
-            llm_used=provider is not None,
-            session=self.session_projection(state),
-            proposal=publication.proposal.model_dump(mode="json"),
-            plan_summary=self._plan_summary(publication),
-            controller=_controller_public(controller_result),
-        )
-
     def _approve_and_progress(
         self,
         *,
@@ -3010,6 +2808,8 @@ class ScientificAgentConversationSessionService:
         automatic_authority_reuse: bool = False,
         authority_evaluation_digest: str = "",
         baseline_authorization: Any | None = None,
+        authorization_request: AgentPlanAuthorizationRequest | None = None,
+        auto_progress: bool = True,
     ) -> ScientificAgentConversationTurnResult:
         if actor is None or not actor.actor:
             raise ScientificAgentConversationAuthorizationRequired(
@@ -3078,18 +2878,30 @@ class ScientificAgentConversationSessionService:
             if automatic_authority_reuse
             else "Explicit conversational approval of the current scientific Agent plan."
         )
+        if authorization_request is not None:
+            if (
+                automatic_authority_reuse
+                or authorization_request.expected_proposal_digest
+                != proposal.proposal_digest
+            ):
+                raise ScientificAgentConversationStaleAuthority(
+                    "structured plan approval is not bound to the pending proposal"
+                )
+            approval_request = authorization_request
+        else:
+            approval_request = AgentPlanAuthorizationRequest(
+                expected_proposal_digest=proposal.proposal_digest,
+                authorization_mode=authorization_mode,
+                requested_preauthorized_gate_ids=requested_preauthorized_gates,
+                confirmed=True,
+                client_request_id=approval_request_id,
+                note=authorization_note,
+            )
         try:
             approved: ApproveAndStartResult = self.authorization_service.approve_and_start(
                 project_id=project_id,
                 proposal_id=proposal.proposal_id,
-                request=AgentPlanAuthorizationRequest(
-                    expected_proposal_digest=proposal.proposal_digest,
-                    authorization_mode=authorization_mode,
-                    requested_preauthorized_gate_ids=requested_preauthorized_gates,
-                    confirmed=True,
-                    client_request_id=approval_request_id,
-                    note=authorization_note,
-                ),
+                request=approval_request,
                 actor=actor.actor,
                 actor_source=authorization_actor_source,
             )
@@ -3126,6 +2938,7 @@ class ScientificAgentConversationSessionService:
                 request=controller_request,
                 actor=actor.actor,
                 actor_source=authorization_actor_source,
+                conversation_id=conversation_id,
             )
         except ScientificAgentHarnessControllerError as exc:
             state = self._transition(
@@ -3166,14 +2979,15 @@ class ScientificAgentConversationSessionService:
                 "current_task_id": controller_result.inspection.current_task_id,
             },
         )
-        controller_result, state, _stop_reason = self._auto_progress(
-            project_id=project_id,
-            conversation_id=conversation_id,
-            state=state,
-            controller_result=controller_result,
-            provider=provider,
-            provider_binding_digest=provider_binding_digest,
-        )
+        if auto_progress:
+            controller_result, state, _stop_reason = self._auto_progress(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                state=state,
+                controller_result=controller_result,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
+            )
         if state.get("status") in {"approval_required", "plan_review"} and state.get(
             "proposal_id"
         ) != proposal.proposal_id:
@@ -3991,6 +3805,7 @@ class ScientificAgentConversationSessionService:
         run_id: str,
         provider: LLMProvider | None,
         provider_binding_digest: str,
+        force_progress: bool = False,
     ) -> ScientificAgentConversationTurnResult:
         """Perform one bounded continuation of a remote-running session.
 
@@ -4010,7 +3825,7 @@ class ScientificAgentConversationSessionService:
                 project_id=clean_project,
                 conversation_id=clean_conversation,
             )
-            if state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS:
+            if state.get("reason_code") in TICK_PROGRESS_REASONS:
                 return self._handle_existing_execution(
                     project_id=clean_project,
                     conversation_id=clean_conversation,
@@ -4018,6 +3833,7 @@ class ScientificAgentConversationSessionService:
                     state=state,
                     provider=provider,
                     provider_binding_digest=provider_binding_digest,
+                    force_progress=force_progress,
                 )
             if state.get("reason_code") != "REMOTE_EXECUTION_RUNNING":
                 return self._handle_existing_execution(
@@ -4025,12 +3841,16 @@ class ScientificAgentConversationSessionService:
                     conversation_id=clean_conversation,
                     run_id=clean_run,
                     state=state,
-                    # Historical tick semantics are deterministic observation
-                    # and Controller progression.  Recovery is entered only
-                    # after an authoritative FAILED snapshot and resolves its
-                    # own server-owned provider inside the runtime.
-                    provider=None,
-                    provider_binding_digest="",
+                    # Historical direct-service ticks remain deterministic
+                    # observation.  The structured Controller routes pass
+                    # ``force_progress`` to make an explicitly authorized
+                    # gate/remote decision continue through the existing
+                    # bounded Execution Agent path.
+                    provider=provider if force_progress else None,
+                    provider_binding_digest=(
+                        provider_binding_digest if force_progress else ""
+                    ),
+                    force_progress=force_progress,
                 )
 
             proposal_id = str(state.get("proposal_id") or "")
@@ -4788,6 +4608,174 @@ class ScientificAgentConversationSessionService:
                     state=state,
                     controller_result=controller_result,
                 )
+            if (
+                status == AgentHarnessControllerStatus.ACTIVE
+                and inspection.current_task_id == BR2_EVIDENCE_CONSUMER_TASK_ID
+            ):
+                try:
+                    active_publication = self._read_active_publication(
+                        state,
+                        project_id,
+                    )
+                except (
+                    ScientificAgentConversationStaleAuthority,
+                    FileNotFoundError,
+                ):
+                    active_publication = None
+                if active_publication is not None and self._is_br2_mapping_proposal(
+                    active_publication
+                ):
+                    registry = self.projects.read_artifact_registry(
+                        project_id,
+                        controller_result.execution.run_id,
+                    )
+                    if not registry.get("scientific_evidence_admission"):
+                        try:
+                            review_projection = self._project_br2_candidate_review(
+                                project_id=project_id,
+                                controller_result=controller_result,
+                            )
+                            evidence_source_updates = (
+                                self._br2_evidence_source_updates(
+                                    project_id=project_id,
+                                    controller_result=controller_result,
+                                )
+                            )
+                        except (
+                            ScientificAgentReviewProjectionError,
+                            ScientificAgentHarnessControllerError,
+                            EvidenceGrantConflict,
+                            EvidenceGrantNotEligible,
+                            EvidenceGrantUnavailable,
+                            FileNotFoundError,
+                            OSError,
+                            ValueError,
+                        ):
+                            state = self._transition(
+                                project_id=project_id,
+                                conversation_id=conversation_id,
+                                status="unknown",
+                                reason_code="BR2_EVIDENCE_SOURCE_UNAVAILABLE",
+                                updates={
+                                    "controller_status": status.value,
+                                    "current_task_id": inspection.current_task_id,
+                                },
+                                event_type="br2.evidence_source.unavailable",
+                                message=(
+                                    "候选数据已完成，但当前 BR2 evidence source 不可安全读取；"
+                                    "未发布 EvidenceGrant 或下游 admission。"
+                                ),
+                            )
+                            return controller_result, state, "br2_evidence_source"
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="waiting_gate",
+                            reason_code="BR2_CANDIDATE_CONFIRMATION_REQUIRED",
+                            updates={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "authority_kind": "",
+                                "gate_id": "",
+                                "snapshot_id": "",
+                                "snapshot_digest": "",
+                                "remote_request_sha256": "",
+                                "review_projection": review_projection,
+                                "result_projections": [],
+                                "scientific_result_status": "",
+                                "scientific_result_reason_code": "",
+                                "evidence_confirmation_required": True,
+                                **evidence_source_updates,
+                            },
+                            event_type="br2.confirmation.waiting",
+                            message=(
+                                "候选数据整理已完成，等待人类科学确认；确认后才会进入"
+                                "受 admission verifier 保护的下游路径。"
+                            ),
+                            event_data={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                                "phase": "br2_confirmation_boundary",
+                            },
+                        )
+                        return controller_result, state, "br2_confirmation"
+                    # Once the explicit structured confirmation has published
+                    # the stable admission binding, this continuation has no
+                    # scientific choice left for the Execution Agent: the
+                    # compiled plan names one fixed local consumer with no
+                    # options.  Keep the effect authority in Controller, but
+                    # advance that exact task directly so confirmation does
+                    # not depend on an LLM provider.  The executor invoked by
+                    # Controller performs the final admission verification
+                    # immediately before stage/adapter execution.
+                    if inspection.next_action == AgentHarnessControllerAction.EXECUTE_LOCAL_TASK:
+                        bound_conversation = str(
+                            getattr(controller_result.execution, "conversation_id", "")
+                            or ""
+                        )
+                        if bound_conversation != conversation_id:
+                            state = self._transition(
+                                project_id=project_id,
+                                conversation_id=conversation_id,
+                                status="stale_authority",
+                                reason_code="CONVERSATIONAL_AUTHORITY_STALE",
+                                updates={
+                                    "controller_status": status.value,
+                                    "current_task_id": inspection.current_task_id,
+                                },
+                                event_type="br2.evidence.consumer.stale",
+                                message=(
+                                    "BR2 evidence admission 的 Conversation 绑定与当前会话不一致；"
+                                    "下游任务未启动。"
+                                ),
+                            )
+                            return controller_result, state, "stale"
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status="running",
+                            reason_code="BR2_EVIDENCE_ADMISSION_READY",
+                            updates={
+                                "controller_status": status.value,
+                                "current_task_id": inspection.current_task_id,
+                            },
+                            event_type="br2.evidence.consumer.ready",
+                            message=(
+                                "BR2 EvidenceGrant 已确认；正在通过 Controller 启动"
+                                " admission-verified consumer。"
+                            ),
+                        )
+                        try:
+                            controller_result = self._advance_controller_once(
+                                project_id=project_id,
+                                conversation_id=conversation_id,
+                                state=state,
+                                controller_result=controller_result,
+                                operation="br2-evidence-consumer",
+                                request_identity=str(
+                                    state.get("evidence_admission_digest") or ""
+                                ),
+                            )
+                        except (ScientificAgentHarnessControllerError, ValueError) as exc:
+                            state = self._transition(
+                                project_id=project_id,
+                                conversation_id=conversation_id,
+                                status="stale_authority",
+                                reason_code="CONVERSATIONAL_AUTHORITY_STALE",
+                                updates={
+                                    "controller_status": status.value,
+                                    "current_task_id": inspection.current_task_id,
+                                },
+                                event_type="br2.evidence.consumer.failed",
+                                message=(
+                                    "BR2 admission consumer 未能通过当前 Controller authority chain；"
+                                    "下游任务已停止。"
+                                ),
+                            )
+                            raise ScientificAgentConversationStaleAuthority(
+                                "the BR2 evidence admission consumer could not be advanced exactly"
+                            ) from exc
+                        continue
             terminal_l1_updates: dict[str, Any] = {}
             if status in {
                 AgentHarnessControllerStatus.SUCCEEDED,
@@ -4832,8 +4820,20 @@ class ScientificAgentConversationSessionService:
                     active_publication = self._read_active_publication(state, project_id)
                 except (ScientificAgentConversationStaleAuthority, FileNotFoundError):
                     active_publication = None
-                if active_publication is not None and self._is_br2_mapping_proposal(
-                    active_publication
+                plan_has_admission_consumer = any(
+                    task.task_id == BR2_EVIDENCE_CONSUMER_TASK_ID
+                    for task in active_publication.proposal.run_plan.tasks
+                ) if active_publication is not None else False
+                has_registered_admission = bool(
+                    self.projects.read_artifact_registry(
+                        project_id,
+                        controller_result.execution.run_id,
+                    ).get("scientific_evidence_admission")
+                )
+                if (
+                    active_publication is not None
+                    and self._is_br2_mapping_proposal(active_publication)
+                    and not (plan_has_admission_consumer and has_registered_admission)
                 ):
                     try:
                         review_projection = self._project_br2_candidate_review(
@@ -5907,6 +5907,7 @@ class ScientificAgentConversationSessionService:
         state: dict[str, Any],
         provider: LLMProvider | None,
         provider_binding_digest: str,
+        force_progress: bool = False,
     ) -> ScientificAgentConversationTurnResult:
         """Project or resume an active Controller without replanning.
 
@@ -6002,7 +6003,7 @@ class ScientificAgentConversationSessionService:
                 llm_used=int(resumed_state.get("recovery_provider_calls") or 0) > before_provider_calls,
             )
         resumable_reason = state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
-        if resumable_reason and (
+        if (resumable_reason or force_progress) and (
             provider is not None
             or state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP"
             or state.get("reason_code") == "RECOVERY_SUCCESSOR_COMMITTED"

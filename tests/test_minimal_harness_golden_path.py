@@ -124,19 +124,24 @@ def _confirm_and_turn(
     *,
     response: dict[str, object],
     message_id: str,
-    content: str = "确认执行",
 ) -> object:
-    appended = client.post(
-        f"/api/projects/{_PROJECT_ID}/conversations/{_CONVERSATION_ID}/messages",
+    pending = client.get(endpoint)
+    assert pending.status_code == 200, pending.get_json()
+    pending_session = pending.get_json()["session"]
+    structured = client.post(
+        endpoint + "/approve",
         json={
-            "role": "user",
-            "content": content,
-            "client_message_id": message_id,
+            "expected_proposal_digest": pending_session["proposal_digest"],
+            "authorization_mode": "stepwise",
+            "requested_preauthorized_gate_ids": [],
+            "confirmed": True,
+            "client_request_id": message_id,
+            "note": "Explicit structured test approval.",
         },
     )
-    assert appended.status_code == 201, appended.get_json()
+    assert structured.status_code == 200, structured.get_json()
     return client.post(
-        endpoint + "/turn",
+        endpoint + "/tick",
         json={"run_id": _RUN_ID, "llm_provider": _provider(response)},
     )
 
@@ -275,6 +280,7 @@ def test_minimal_harness_golden_path_authorizes_executes_and_replays(
         ),
         actor="alice",
         actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        conversation_id=_CONVERSATION_ID,
     )
     assert replay.receipt is not None
     first_receipt = control_store.list_harness_controller_action_receipts(

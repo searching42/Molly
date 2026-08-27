@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from flask import Flask, Response, after_this_request, jsonify, request, stream_with_context
+from pydantic import ValidationError
 
 from ai4s_agent.actor_identity import resolve_authenticated_actor
 from ai4s_agent.llm_provider import LLMProviderError, LLMProviderManager
@@ -40,12 +41,10 @@ from ai4s_agent.scientific_agent_replanner import (
 from ai4s_agent.scientific_agent_run_input_binding import (
     ScientificAgentRunInputBindingError,
 )
+from ai4s_agent.schemas import AgentPlanAuthorizationRequest
 
 
 _POLL_SECONDS = 0.75
-_AUTHORITY_TURN_MODES = frozenset(
-    {"approval", "dataset_gate_approval", "gate_approval", "remote_approval"}
-)
 _RECOVERY_TURN_MODES = frozenset({"recovery"})
 
 
@@ -219,10 +218,7 @@ def register_scientific_agent_conversation_routes(
                         role=CONTROL_PLANE_ROLE,
                     )
                 except (LLMProviderError, ValueError) as exc:
-                    if (
-                        turn_mode not in _AUTHORITY_TURN_MODES
-                        and turn_mode not in _RECOVERY_TURN_MODES
-                    ) or not _approval_provider_fallback_allowed(exc):
+                    if turn_mode not in _RECOVERY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
                         raise
                     resolution = resolve_llm_provider_payload(
                         {"llm_provider": None},
@@ -230,11 +226,6 @@ def register_scientific_agent_conversation_routes(
                         providers=llm_providers,
                         role=CONTROL_PLANE_ROLE,
                     )
-            actor = resolve_authenticated_actor(
-                request,
-                required=turn_mode in _AUTHORITY_TURN_MODES,
-            )
-
             def run_turn(resolved):
                 with resolved.provider_context as provider:
                     return service.handle_turn(
@@ -243,17 +234,13 @@ def register_scientific_agent_conversation_routes(
                         run_id=run_id,
                         provider=provider,
                         provider_binding_digest=resolved.provider_binding_digest,
-                        actor=actor,
                         input_bundle_id=str(payload.get("input_bundle_id") or "").strip(),
                     )
 
             try:
                 result = run_turn(resolution)
             except (LLMProviderError, ValueError) as exc:
-                if (
-                    turn_mode not in _AUTHORITY_TURN_MODES
-                    and turn_mode not in _RECOVERY_TURN_MODES
-                ) or not _approval_provider_fallback_allowed(exc):
+                if turn_mode not in _RECOVERY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
                     raise
                 fallback = resolve_llm_provider_payload(
                     {"llm_provider": None},
@@ -313,6 +300,71 @@ def register_scientific_agent_conversation_routes(
                         "ok": False,
                         "error_code": "scientific_agent_session_failed",
                         "error": "The scientific Agent session could not continue safely.",
+                    }
+                ),
+                409,
+            )
+
+    @app.post(base + "/approve")
+    def approve_scientific_agent_plan(project_id: str, conversation_id: str):
+        """Approve a pending plan through an explicit typed authority action."""
+
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {
+                "expected_proposal_digest",
+                "authorization_mode",
+                "requested_preauthorized_gate_ids",
+                "confirmed",
+                "client_request_id",
+                "note",
+            }
+            if set(payload).difference(allowed):
+                raise ValueError("plan approval contains an unsupported field")
+            parsed = AgentPlanAuthorizationRequest.model_validate(payload)
+            actor = resolve_authenticated_actor(request, required=True)
+            result = service.approve_pending_plan(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                request=parsed,
+                actor=actor,
+            )
+            return jsonify({"ok": True, **result.as_dict()})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except ScientificAgentConversationAuthorizationRequired:
+            return _fixed_error(
+                "authorization_actor_required",
+                "Structured plan approval requires a server-resolved actor.",
+                403,
+            )
+        except ScientificAgentConversationStaleAuthority:
+            return _fixed_error(
+                "stale_authority",
+                "The pending scientific Agent plan is stale and must be reviewed again.",
+                409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "plan_approval_not_pending",
+                "The conversation has no pending scientific Agent plan approval.",
+                409,
+            )
+        except (ValidationError, ValueError):
+            return _fixed_error(
+                "invalid_plan_approval_request",
+                "Invalid structured scientific Agent plan approval request.",
+                400,
+            )
+        except Exception:
+            app.logger.warning("scientific_agent_plan_approval_failed")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "plan_approval_failed",
+                        "error": "The plan approval could not continue safely.",
                     }
                 ),
                 409,
@@ -472,7 +524,12 @@ def register_scientific_agent_conversation_routes(
                     run_id=run_id,
                     provider=provider,
                     provider_binding_digest=resolution.provider_binding_digest,
-            )
+                    # Calling this endpoint is the explicit continuation
+                    # operation after a typed Controller action. Chat turns
+                    # never set this flag and therefore cannot progress a
+                    # pending Gate or remote approval.
+                    force_progress=True,
+                )
             return jsonify({"ok": True, **result.as_dict()})
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "conversation not found"}), 404

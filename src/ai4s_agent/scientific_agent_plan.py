@@ -166,8 +166,11 @@ def _scientific_agent_plan_system_prompt(
             "select the server-registered `pdf_corpus` input when it is available, and select "
             "the available logical execution profile `mineru-v1` for the parser when it is present. The server "
             "will expand that tool into parse_document -> extract_oled_evidence -> "
-            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. Do not select "
-            "training, generation, prediction, ranking, confirmation, or any other downstream task."
+            "map_oled_contextual_semantics -> prepare_oled_candidate_raw_dataset. The server "
+            "then binds the non-planner-visible consume_oled_candidate_evidence_admission "
+            "continuation, which remains blocked until structured scientific confirmation. "
+            "Do not select training, generation, prediction, ranking, confirmation, or any "
+            "other downstream task."
         )
         if prompt_version == SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION_V2:
             prompt += (
@@ -1450,6 +1453,7 @@ class AgentExecutionPlanCompiler:
                 ),
                 registry=self.registry,
                 skip_satisfied_dependencies=skip_satisfied_dependencies,
+                include_post_tasks=True,
             )
         except ValueError as exc:
             raise ScientificAgentPlanError("registered task dependency expansion failed") from exc

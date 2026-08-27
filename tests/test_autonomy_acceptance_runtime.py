@@ -677,17 +677,20 @@ def test_l1_l2_handoff_starts_fresh_l1_budget_epoch(
     assert body["session"]["authorization_id"] == ""
     successor_id = body["proposal"]["proposal_id"]
 
-    appended = client.post(
-        f"/api/projects/{project_id}/conversations/{conversation_id}/messages",
+    approved_plan = client.post(
+        endpoint + "/approve",
         json={
-            "role": "user",
-            "content": "确认执行",
-            "client_message_id": "user-message-l1-l2-fresh-epoch",
+            "expected_proposal_digest": body["proposal"]["proposal_digest"],
+            "authorization_mode": "stepwise",
+            "requested_preauthorized_gate_ids": [],
+            "confirmed": True,
+            "client_request_id": "structured-plan-l1-l2-fresh-epoch",
+            "note": "Explicit structured test approval.",
         },
     )
-    assert appended.status_code == 201, appended.get_json()
+    assert approved_plan.status_code == 200, approved_plan.get_json()
     approved = client.post(
-        endpoint + "/turn",
+        endpoint + "/tick",
         json={"run_id": state["run_id"], "llm_provider": {"provider": "stub", "model": "stub", "stub_response": {}}},
     )
     assert approved.status_code == 200, approved.get_json()

@@ -67,7 +67,13 @@ from ai4s_agent.oled_llm_context_request import (
     load_frozen_oled_llm_provider_invocation_manifest,
     verify_oled_br2_replay_binding,
 )
-from ai4s_agent.schemas import ParsedDocument
+from ai4s_agent.schemas import (
+    ParsedDocument,
+    ScientificEvidenceAdmissionV1,
+    ScientificEvidenceConsumptionReceiptV1,
+)
+from ai4s_agent.scientific_agent_evidence import EvidenceGrantService
+from ai4s_agent.storage import ProjectStorage
 
 
 _ADAPTER_PREFIX = "br2_contextual_mapping"
@@ -576,6 +582,78 @@ def prepare_oled_candidate_raw_dataset_adapter(payload: dict[str, Any]) -> dict[
         return _failed("candidate_raw_dataset_failed", str(exc))
 
 
+def consume_oled_candidate_evidence_admission_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Make exact BR2 evidence available only after admission verification."""
+
+    try:
+        project_id = str(payload.get("project_id") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        conversation_id = str(payload.get("conversation_id") or "").strip()
+        workspace_dir = str(payload.get("workspace_dir") or "").strip()
+        if not project_id or not run_id or not conversation_id or not workspace_dir:
+            raise ValueError(
+                "project_id, run_id, conversation_id, and workspace_dir are required"
+            )
+        admission_path = _required_path(
+            payload,
+            "scientific_evidence_admission_path",
+        )
+        admission = ScientificEvidenceAdmissionV1.model_validate(
+            _read_json(admission_path)
+        )
+        verified = EvidenceGrantService(
+            storage=ProjectStorage(Path(workspace_dir)),
+        ).verify_br2_admission(
+            project_id=project_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            admission_id=admission.admission_id,
+        )
+        if verified.model_dump(mode="json") != admission.model_dump(mode="json"):
+            raise ValueError("registered BR2 admission differs from its canonical publication")
+        receipt = ScientificEvidenceConsumptionReceiptV1(
+            project_id=project_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            source_id=verified.source_id,
+            source_digest=verified.source_digest,
+            candidate_package_digest=verified.candidate_package_digest,
+            review_digest=verified.review_digest,
+            paper_id=verified.paper_id,
+            admission_id=verified.admission_id,
+            admission_digest=verified.admission_digest,
+            grant_id=verified.grant_id,
+            grant_digest=verified.grant_digest,
+            scope=verified.scope,
+            actor=verified.actor,
+            actor_source=verified.actor_source,
+            semantic_boundary=verified.semantic_boundary,
+            consumed_at=now_iso(),
+        )
+        output_path = _output_root(payload) / "confirmed_oled_evidence.json"
+        publish_json_no_replace(
+            output_path,
+            receipt.model_dump(mode="json"),
+            trusted_root=_output_root(payload),
+        )
+        return {
+            "status": "success",
+            "adapter": "consume_oled_candidate_evidence_admission",
+            "outputs": {"confirmed_oled_evidence": str(output_path)},
+            "summary": {
+                "admission_id": verified.admission_id,
+                "admission_digest": verified.admission_digest,
+                "source_id": verified.source_id,
+                "source_digest": verified.source_digest,
+                "semantic_boundary": verified.semantic_boundary.value,
+            },
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return _failed("br2_admission_verification_failed", str(exc))
+
+
 def _load_parsed_document(payload: dict[str, Any]) -> ParsedDocument:
     return ParsedDocument.model_validate(
         _read_json(_required_path(payload, "parsed_document_path"))
@@ -756,6 +834,7 @@ def _persist_response_binding_failure(
 
 
 __all__ = [
+    "consume_oled_candidate_evidence_admission_adapter",
     "extract_oled_evidence_adapter",
     "map_oled_contextual_semantics_adapter",
     "prepare_oled_candidate_raw_dataset_adapter",

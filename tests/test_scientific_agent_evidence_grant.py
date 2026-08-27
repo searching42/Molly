@@ -16,7 +16,11 @@ from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
     OledBr2CandidateRawDataset,
     OledBr2CandidateRawDatasetReview,
 )
-from ai4s_agent.planner import br2_contextual_mapping_task_registry_v1
+from ai4s_agent.executor import RunPlanExecutor
+from ai4s_agent.planner import (
+    br2_contextual_mapping_task_registry_v1,
+    expand_run_plan,
+)
 from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerAction,
@@ -25,9 +29,11 @@ from ai4s_agent.schemas import (
     EvidenceGrantRequestCheckpointV1,
     EvidenceGrantScope,
     EvidenceGrantV1,
+    ScientificEvidenceAdmissionV1,
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_evidence import (
+    BR2_EVIDENCE_CONSUMER_TASK_ID,
     BR2_EVIDENCE_SCOPE,
     EvidenceGrantAuthorizationRequired,
     EvidenceGrantConflict,
@@ -213,6 +219,57 @@ def test_explicit_br2_confirmation_publishes_and_replays_exact_admission(
     )
     assert len(grant_files) == 1
     assert len(admission_files) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "verify_run_id", "verify_conversation_id"),
+    [
+        ("run_id", "foreign-run", "foreign-run", "conversation-1"),
+        ("conversation_id", "foreign-conversation", "evidence-run", "foreign-conversation"),
+        ("source_id", "foreign-source", "evidence-run", "conversation-1"),
+        ("actor", "foreign-actor", "evidence-run", "conversation-1"),
+        ("actor_source", "server:foreign-action", "evidence-run", "conversation-1"),
+    ],
+)
+def test_verify_br2_admission_rejects_forged_semantic_bindings(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    verify_run_id: str,
+    verify_conversation_id: str,
+) -> None:
+    storage, service = _service(tmp_path)
+    _write_br2_outputs(storage, run_id="evidence-run")
+    source = service.current_br2_source(
+        project_id="evidence-project",
+        run_id="evidence-run",
+    )
+    confirmed = service.confirm_br2_candidate_evidence(
+        project_id="evidence-project",
+        run_id="evidence-run",
+        conversation_id="conversation-1",
+        expected_source_digest=source.source_digest,
+        confirmed=True,
+        client_request_id="forged-admission-base",
+        actor=_ACTOR,
+    )
+    payload = confirmed.admission.model_dump(mode="json")
+    payload[field] = value
+    # Recompute the typed admission identity so this is a schema-valid forged
+    # artifact.  The downstream verifier, not Pydantic's digest check, must
+    # reject the foreign authority lineage.
+    payload["admission_id"] = ""
+    payload["admission_digest"] = ""
+    forged = ScientificEvidenceAdmissionV1.model_validate(payload)
+    service.grant_store.publish_admission(admission=forged)
+
+    with pytest.raises(EvidenceGrantConflict):
+        service.verify_br2_admission(
+            project_id="evidence-project",
+            run_id=verify_run_id,
+            conversation_id=verify_conversation_id,
+            admission_id=forged.admission_id,
+        )
 
 
 def test_checkpoint_rejects_expected_digest_retargeting() -> None:
@@ -563,11 +620,13 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
         run_id="evidence-run",
         controller_execution_id="controller-evidence",
         execution_digest="sha256:" + "3" * 64,
+        conversation_id="conversation-1",
+        task_slots=[SimpleNamespace(task_id=BR2_EVIDENCE_CONSUMER_TASK_ID)],
     )
     inspection = SimpleNamespace(
-        status=AgentHarnessControllerStatus.SUCCEEDED,
-        current_task_id="prepare_oled_candidate_raw_dataset",
-        next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        status=AgentHarnessControllerStatus.ACTIVE,
+        current_task_id=BR2_EVIDENCE_CONSUMER_TASK_ID,
+        next_action=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
         inspection_digest="sha256:" + "4" * 64,
     )
     controller_result = SimpleNamespace(execution=execution, inspection=inspection, receipt=None)
@@ -598,10 +657,59 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
     class FakeController:
         def __init__(self):
             self.calls: list[dict[str, object]] = []
+            self.current = controller_result
 
         def get(self, **kwargs):
             self.calls.append(kwargs)
-            return controller_result
+            return self.current
+
+        def advance(self, **kwargs):
+            self.calls.append(kwargs)
+            registry = storage.read_artifact_registry(
+                "evidence-project",
+                "evidence-run",
+            )
+            plan = expand_run_plan(
+                run_id="evidence-run",
+                requested_tasks=[BR2_EVIDENCE_CONSUMER_TASK_ID],
+                available_artifacts=[
+                    "candidate_raw_dataset",
+                    "candidate_raw_dataset_review",
+                ],
+                registry=br2_contextual_mapping_task_registry_v1(),
+            )
+            input_artifacts = {
+                artifact_id: str(storage.run_dir("evidence-project", "evidence-run") / relative)
+                for artifact_id, relative in registry.items()
+                if artifact_id
+                in {
+                    "candidate_raw_dataset",
+                    "candidate_raw_dataset_review",
+                    "scientific_evidence_admission",
+                }
+            }
+            result = RunPlanExecutor(
+                storage=storage,
+                registry=br2_contextual_mapping_task_registry_v1(),
+                evidence_service=evidence_service,
+            ).execute(
+                project_id="evidence-project",
+                run_plan=plan,
+                input_artifacts=input_artifacts,
+                conversation_id="conversation-1",
+            )
+            assert result["status"] == "SUCCEEDED"
+            self.current = SimpleNamespace(
+                execution=execution,
+                inspection=SimpleNamespace(
+                    status=AgentHarnessControllerStatus.SUCCEEDED,
+                    current_task_id=BR2_EVIDENCE_CONSUMER_TASK_ID,
+                    next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+                    inspection_digest="sha256:" + "5" * 64,
+                ),
+                receipt=None,
+            )
+            return self.current
 
     fake_controller = FakeController()
     service.controller = fake_controller
@@ -667,7 +775,14 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
     assert body["session"]["status"] == "succeeded"
     assert body["session"]["evidence_grant_consumed"] is True
     assert body["session"]["evidence_semantic_boundary"] == "SCIENTIFIC_CONFIRMATION"
-    assert len(fake_controller.calls) == controller_calls_before_confirmation + 1
+    assert len(fake_controller.calls) == controller_calls_before_confirmation + 2
+    confirmed_registry = storage.read_artifact_registry(
+        "evidence-project",
+        "evidence-run",
+    )
+    assert confirmed_registry["confirmed_oled_evidence"].endswith(
+        "br2_contextual_mapping/confirmed_oled_evidence.json"
+    )
 
     replay = client.post(
         endpoint,
