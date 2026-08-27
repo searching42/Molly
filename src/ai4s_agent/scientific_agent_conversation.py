@@ -167,6 +167,7 @@ AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
 )
 TICK_PROGRESS_REASONS = AUTONOMY_L1_RESUMABLE_PAUSE_REASONS | frozenset(
     {
+        "BR2_EVIDENCE_ADMISSION_READY",
         "RUN_STARTED",
     }
 )
@@ -4708,7 +4709,10 @@ class ScientificAgentConversationSessionService:
                     # not depend on an LLM provider.  The executor invoked by
                     # Controller performs the final admission verification
                     # immediately before stage/adapter execution.
-                    if inspection.next_action == AgentHarnessControllerAction.EXECUTE_LOCAL_TASK:
+                    if inspection.next_action in {
+                        AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                        AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
+                    }:
                         bound_conversation = str(
                             getattr(controller_result.execution, "conversation_id", "")
                             or ""
@@ -5898,6 +5902,98 @@ class ScientificAgentConversationSessionService:
             controller=_controller_public(controller_result),
         )
 
+    def _finalize_recovered_br2_evidence(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        controller_result: ControllerAdvanceResult,
+    ) -> dict[str, Any]:
+        """Close a deterministic BR2 consumer recovery after a restart."""
+
+        if self.evidence_service is None:
+            raise EvidenceGrantUnavailable(
+                "server-owned evidence confirmation is not configured"
+            )
+        if (
+            controller_result.inspection.status
+            != AgentHarnessControllerStatus.SUCCEEDED
+        ):
+            raise EvidenceGrantConflict(
+                "the recovered BR2 evidence consumer is not terminally successful"
+            )
+        admission_id = str(state.get("evidence_admission_id") or "")
+        if not admission_id:
+            raise EvidenceGrantConflict(
+                "the recovered BR2 evidence admission binding is incomplete"
+            )
+        admission = self.evidence_service.verify_br2_admission(
+            project_id=project_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            admission_id=admission_id,
+        )
+        expected_bindings = {
+            "source_id": str(state.get("evidence_source_id") or ""),
+            "source_digest": str(state.get("evidence_source_digest") or ""),
+            "grant_id": str(state.get("evidence_grant_id") or ""),
+            "grant_digest": str(state.get("evidence_grant_digest") or ""),
+            "admission_digest": str(state.get("evidence_admission_digest") or ""),
+        }
+        actual_bindings = {
+            "source_id": admission.source_id,
+            "source_digest": admission.source_digest,
+            "grant_id": admission.grant_id,
+            "grant_digest": admission.grant_digest,
+            "admission_digest": admission.admission_digest,
+        }
+        if expected_bindings != actual_bindings:
+            raise EvidenceGrantConflict(
+                "the recovered BR2 evidence admission binding changed"
+            )
+        updates = {
+            "run_id": run_id,
+            "controller_status": controller_result.inspection.status.value,
+            "current_task_id": controller_result.inspection.current_task_id,
+            "evidence_confirmation_required": False,
+            "evidence_grant_consumed": True,
+            "evidence_source_id": admission.source_id,
+            "evidence_source_digest": admission.source_digest,
+            "evidence_grant_id": admission.grant_id,
+            "evidence_grant_digest": admission.grant_digest,
+            "evidence_grant_scope": admission.scope.value,
+            "evidence_admission_schema_version": admission.schema_version,
+            "evidence_admission_id": admission.admission_id,
+            "evidence_admission_digest": admission.admission_digest,
+            "evidence_semantic_boundary": admission.semantic_boundary.value,
+        }
+        return self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="succeeded",
+            reason_code="BR2_EVIDENCE_CONFIRMED",
+            updates=updates,
+            event_type="br2.evidence.confirmed",
+            message=(
+                "已从持久化 BR2 EvidenceGrant/admission 确定性恢复；"
+                "下游 exact-evidence consumer 已完成且 receipt 已验证。"
+            ),
+            event_data={
+                "controller_status": controller_result.inspection.status.value,
+                "current_task_id": controller_result.inspection.current_task_id,
+                "phase": "br2_evidence_admission_recovery",
+                "evidence_source_id": admission.source_id,
+                "evidence_source_digest": admission.source_digest,
+                "evidence_grant_id": admission.grant_id,
+                "evidence_grant_digest": admission.grant_digest,
+                "evidence_admission_id": admission.admission_id,
+                "evidence_admission_digest": admission.admission_digest,
+                "evidence_semantic_boundary": admission.semantic_boundary.value,
+            },
+        )
+
     def _handle_existing_execution(
         self,
         *,
@@ -6002,11 +6098,17 @@ class ScientificAgentConversationSessionService:
                 controller_result=controller_result,
                 llm_used=int(resumed_state.get("recovery_provider_calls") or 0) > before_provider_calls,
             )
-        resumable_reason = state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
+        reason_code = str(state.get("reason_code") or "")
+        resumable_reason = reason_code in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
+        provider_independent_reason = reason_code in {
+            "DETERMINISTIC_FASTPATH_STEP",
+            "RECOVERY_SUCCESSOR_COMMITTED",
+        }
+        br2_admission_recovery = reason_code == "BR2_EVIDENCE_ADMISSION_READY"
         if (resumable_reason or force_progress) and (
             provider is not None
-            or state.get("reason_code") == "DETERMINISTIC_FASTPATH_STEP"
-            or state.get("reason_code") == "RECOVERY_SUCCESSOR_COMMITTED"
+            or provider_independent_reason
+            or (force_progress and br2_admission_recovery)
         ):
             llm_calls_before = self._observed_l1_llm_calls(
                 controller_result=controller_result
@@ -6034,6 +6136,14 @@ class ScientificAgentConversationSessionService:
             # configured.  The public flag must describe an actual durable
             # Execution Agent call during this continuation.
             llm_used = llm_calls_after > llm_calls_before
+            if br2_admission_recovery:
+                resumed_state = self._finalize_recovered_br2_evidence(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    state=state,
+                    controller_result=controller_result,
+                )
             return self._active_execution_result(
                 project_id=project_id,
                 conversation_id=conversation_id,

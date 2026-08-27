@@ -114,6 +114,15 @@ The explicit BR2 route performs this sequence:
    immutable `confirmed_oled_evidence` receipt. A stale, foreign, retargeted,
    or malformed admission fails closed before the task stage or adapter effect.
 
+If the process exits after step 5 has persisted
+`running / BR2_EVIDENCE_ADMISSION_READY`, the same typed `/tick` entrypoint
+recognizes that exact deterministic state without resolving an LLM provider.
+It rereads the Controller and admission, lets the Controller reconcile an
+existing consumer receipt or execute the fixed consumer once, and then
+persists `succeeded / BR2_EVIDENCE_CONFIRMED`. A repeated confirmation or
+provider-less tick is a read-only replay after that terminal state and cannot
+create a second consumer effect or receipt.
+
 Admission verification rereads the current source and the grant. It rechecks
 every authority-relevant semantic binding carried by the producer: project,
 run, conversation, source ID and digest, package/review/paper identity, scope,

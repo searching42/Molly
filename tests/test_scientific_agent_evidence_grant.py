@@ -731,20 +731,104 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
         conversation_id="conversation-1",
     )["authorization_id"] == ""
     assert not (storage.project_dir("evidence-project") / "evidence-grants").exists()
-    controller_calls_before_confirmation = len(fake_controller.calls)
-
+    endpoint = (
+        "/api/projects/evidence-project/conversations/conversation-1/agent-session"
+        "/evidence/candidate_raw_dataset/confirm"
+    )
     import importlib
 
     route_module = importlib.import_module("ai4s_agent.routes.scientific_agent_conversation")
+    original_resolve_provider = route_module.resolve_llm_provider_payload
+    monkeypatch.setattr(
+        route_module,
+        "resolve_llm_provider_payload",
+        lambda *args, **kwargs: pytest.fail("BR2 deterministic recovery resolved an LLM"),
+    )
+
+    original_auto_progress = service._auto_progress
+
+    def crash_after_admission_ready(**_kwargs):
+        raise RuntimeError("simulated process crash after admission-ready state")
+
+    monkeypatch.setattr(service, "_auto_progress", crash_after_admission_ready)
+    crashed = client.post(
+        endpoint,
+        json={
+            "expected_source_digest": source.source_digest,
+            "confirmed": True,
+            "client_request_id": "route-confirm-1",
+        },
+    )
+    assert crashed.status_code == 409, crashed.get_json()
+    crashed_state = service.read_session(
+        project_id="evidence-project",
+        conversation_id="conversation-1",
+    )
+    assert crashed_state["status"] == "running"
+    assert crashed_state["reason_code"] == "BR2_EVIDENCE_ADMISSION_READY"
+    assert crashed_state["evidence_grant_id"]
+    assert crashed_state["evidence_admission_id"]
+    assert not (
+        storage.run_dir("evidence-project", "evidence-run")
+        / "br2_contextual_mapping"
+        / "confirmed_oled_evidence.json"
+    ).exists()
+
+    # A restarted coordinator must recover this deterministic consumer without
+    # asking the Execution Agent for a new decision or resolving a provider.
+    monkeypatch.setattr(service, "_auto_progress", original_auto_progress)
+    monkeypatch.setattr(service, "_observed_l1_llm_calls", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        service.execution_agent,
+        "create_proposal",
+        lambda **_kwargs: pytest.fail(
+            "BR2 admission recovery must not call the Execution Agent"
+        ),
+    )
+    recovered = client.post(
+        endpoint.rsplit("/evidence/", 1)[0] + "/tick",
+        json={"run_id": "evidence-run", "llm_provider": None},
+    )
+    assert recovered.status_code == 200, recovered.get_json()
+    recovered_body = recovered.get_json()
+    assert recovered_body["llm_used"] is False
+    assert recovered_body["session"]["status"] == "succeeded"
+    assert recovered_body["session"]["reason_code"] == "BR2_EVIDENCE_CONFIRMED"
+    advance_calls = [call for call in fake_controller.calls if "request" in call]
+    assert len(advance_calls) == 1
+    monkeypatch.setattr(
+        route_module,
+        "resolve_llm_provider_payload",
+        original_resolve_provider,
+    )
+
+    recovered_registry = storage.read_artifact_registry(
+        "evidence-project",
+        "evidence-run",
+    )
+    assert recovered_registry["confirmed_oled_evidence"].endswith(
+        "br2_contextual_mapping/confirmed_oled_evidence.json"
+    )
+
+    # A second provider-less restart tick reconciles the terminal session and
+    # cannot dispatch the consumer a second time.
+    tick_replay = client.post(
+        endpoint.rsplit("/evidence/", 1)[0] + "/tick",
+        json={"run_id": "evidence-run", "llm_provider": None},
+    )
+    assert tick_replay.status_code == 200, tick_replay.get_json()
+    assert (
+        tick_replay.get_json()["session"]["reason_code"]
+        == "BR2_EVIDENCE_CONFIRMED"
+    )
+    assert len([call for call in fake_controller.calls if "request" in call]) == 1
+
     monkeypatch.setattr(
         route_module,
         "resolve_llm_provider_payload",
         lambda *args, **kwargs: pytest.fail("structured evidence confirmation resolved an LLM"),
     )
-    endpoint = (
-        "/api/projects/evidence-project/conversations/conversation-1/agent-session"
-        "/evidence/candidate_raw_dataset/confirm"
-    )
+
     forged = client.post(
         endpoint,
         json={
@@ -758,7 +842,18 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
         },
     )
     assert forged.status_code == 400, forged.get_json()
-    assert not (storage.project_dir("evidence-project") / "evidence-grants").exists()
+    forged_state = service.read_session(
+        project_id="evidence-project",
+        conversation_id="conversation-1",
+    )
+    assert (
+        forged_state["evidence_grant_id"]
+        == recovered_body["session"]["evidence_grant_id"]
+    )
+    assert (
+        forged_state["evidence_admission_id"]
+        == recovered_body["session"]["evidence_admission_id"]
+    )
     confirmed = client.post(
         endpoint,
         json={
@@ -775,7 +870,7 @@ def test_real_br2_conversation_requires_structured_action_and_no_provider_call(
     assert body["session"]["status"] == "succeeded"
     assert body["session"]["evidence_grant_consumed"] is True
     assert body["session"]["evidence_semantic_boundary"] == "SCIENTIFIC_CONFIRMATION"
-    assert len(fake_controller.calls) == controller_calls_before_confirmation + 2
+    assert len([call for call in fake_controller.calls if "request" in call]) == 1
     confirmed_registry = storage.read_artifact_registry(
         "evidence-project",
         "evidence-run",

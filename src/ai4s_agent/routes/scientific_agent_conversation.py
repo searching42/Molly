@@ -486,6 +486,20 @@ def register_scientific_agent_conversation_routes(
                 project_id=project_id,
                 conversation_id=conversation_id,
             )
+            if session.get("reason_code") == "BR2_EVIDENCE_ADMISSION_READY":
+                # The BR2 admission consumer is a fixed deterministic local
+                # task.  Its restart entrypoint must not resolve or depend on
+                # any LLM provider, including a configured provider that is
+                # temporarily unavailable.
+                result = service.tick(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider=None,
+                    provider_binding_digest="",
+                    force_progress=True,
+                )
+                return jsonify({"ok": True, **result.as_dict()})
             if turn_mode in _RECOVERY_TURN_MODES:
                 # A tick can enter the same FAILED continuation path as a
                 # conversation turn.  The runtime, not this route, resolves
