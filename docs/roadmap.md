@@ -268,7 +268,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Dependency: after `M3.5-AUT-FAILURE-RECOVERY`.
   - Definition of Done: `EvidenceGrantV1` is a frozen, digest-bound, closed-world exact-source contract with mandatory project/source/provenance bindings; only a server-owned structured BR2 confirmation action can issue it. The action rereads the current candidate package and review artifact, fails closed on stale or unsafe source identity, publishes crash-safe no-replace grant/checkpoint artifacts, and consumes the exact grant into an immutable `ScientificEvidenceAdmissionV1` while preserving `SCIENTIFIC_CONFIRMATION`. Ordinary conversation and LLM/Execution Agent output remain non-authoritative; replay, conflicting replay, crash-window, multiprocess, symlink, source-isolation, provider-count, and AutonomyGrant-separation regressions are covered. This implementation/test closure is `I/T/—`; it does not claim a fresh representative runtime (`V`).
   - Implementation contract: [`Scientific Agent EvidenceGrant v1`](scientific-agent-evidence-grant-v1.md); generated contracts are [`evidence_grant.schema.json`](schemas/evidence_grant.schema.json) and [`scientific_evidence_admission.schema.json`](schemas/scientific_evidence_admission.schema.json).
-  - Closed by: Draft PR for `M3.5-AUT-FEEDBACK` (this branch). PR remains open and Draft during validation.
+  - Closed by: Draft PR #61 (`M3.5-AUT-FEEDBACK`). PR remains open and Draft during validation.
 
 - [ ] **M3.5-AUT-LEASE — Active-time accounting and autonomy lease**
   - State: `QUEUED`
