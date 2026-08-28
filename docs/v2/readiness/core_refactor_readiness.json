@@ -27,7 +27,7 @@
     "C4": "Minimal RunRequest -> ToolRegistry -> ToolPolicy -> tool -> ArtifactStore -> RunLedger -> lineage spike has not yet been evidenced.",
     "C5": "CORE-00 inventoried the real PR Fast and Full CI commands and current extras in docs/v2/reports/CORE-00.md; uv.lock is stale relative to pyproject.toml, and v2 migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
     "C6": "Representative licensed literature samples, OLED gold set and v2 BR1 parity runner/fixtures remain to be frozen.",
-    "C7": "CORE-00 recorded the loaded repository instruction chain, exact HEAD, stop conditions, and current launcher/readiness mismatch resolution in docs/v2/reports/CORE-00.md; final contract and owner-frozen baseline remain pending."
+    "C7": "CORE-00 recorded the loaded repository instruction chain, exact HEAD, stop conditions, and current launcher/readiness resolution in docs/v2/reports/CORE-00.md; the preparation-only contract is now recorded in docs/v2/CODEX_GOAL_EXECUTION_CONTRACT.md, while final contract approval and owner-frozen baseline remain pending."
   },
   "br1_cutover_conditions": {
     "B0": "PENDING",

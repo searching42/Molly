@@ -128,7 +128,10 @@ restart canary, or cutover operation was performed.
 
 ## Blockers and owner actions
 
-CORE-00 is complete as an audit but the implementation gate remains closed.
+CORE-00 is complete as an audit but the implementation gate remains closed. A
+preparation-only execution contract was added at
+`docs/v2/CODEX_GOAL_EXECUTION_CONTRACT.md`; it records the gate behavior without
+granting implementation or cutover authority.
 Before Goal-mode implementation, the Owner/maintainer must:
 
 1. record final approval of the exact spec and readiness contract;
