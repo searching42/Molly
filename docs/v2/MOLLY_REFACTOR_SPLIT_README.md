@@ -1,8 +1,8 @@
 # Molly 重构方案拆分说明
 
-> **状态**：`OWNER_REVIEWED_PREPARATION`  
-> **日期**：2026-08-28  
-> **当前用途**：为 Molly Core v2 的 `CORE-00` / Codex Goal preflight 提供仓库内上下文  
+> **状态**：`OWNER_REVIEWED_PREPARATION`
+> **日期**：2026-08-28
+> **当前用途**：为 Molly Core v2 的 `CORE-00` / Codex Goal preflight 提供仓库内上下文
 > **错误传播研究扩展**：非绑定；`IMPLEMENTATION_AUTHORIZED=false`
 
 ## 1. 拆分结果
@@ -11,12 +11,13 @@
 
 | 文件 | 地位 | 当前可否指导实现 |
 |---|---|---|
-| `MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md` | Core v2 核心重构规范 | 只有 readiness `C0-C7` 全部 PASS 后可指导生产重构 |
+| `MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md` | Core v2 核心重构规范，内容修订为 `OWNER_REVIEWED_DRAFT_V1_2` | 只有 readiness `C0-C7` 全部 PASS 后可指导生产重构 |
 | `MOLLY_CORE_MODULE_DISPOSITION_MATRIX_V1_1_BR1_HARDENED.csv` | Core v2 模块处置矩阵 | 与核心规格共同作为迁移边界 |
 | `MOLLY_ERROR_PROPAGATION_RESEARCH_EXTENSION.md` | 非绑定研究提案 | 不可以；需导师与 Owner 另行激活 |
 | `MOLLY_ERROR_PROPAGATION_EXTENSION_MODULES.csv` | 研究扩展组件清单 | 不可以；仅用于讨论和估算 |
-| `archive/MOLLY_V2_RESEARCH_DRIVEN_REFACTOR_SPEC.md` | 原始 research-driven 方案归档 | 不可直接交给 Codex 作为实施依据 |
 | `readiness/core_refactor_readiness.json` | Core v2 readiness 唯一机器可读入口 | Codex 必须先读取并据此决定是否仅执行 `CORE-00` |
+
+核心规格文件名暂时保留 `V1_1_BR1_HARDENED`，以避免当前 Goal launcher 的仓库路径发生不必要变化；文件内部状态和 readiness digest 已更新到本轮 UTF-8 修订版。
 
 ## 2. 当前 Core 重构冻结方向
 
@@ -84,7 +85,7 @@ environment digest
 
 当前仓库内 readiness 采用保守状态：尚未完成的条件保持 `PENDING`，不会为了让 Goal 模式继续而人工改成 `PASS`。
 
-## 6. 推荐仓库落位
+## 6. 当前仓库落位
 
 ```text
 docs/v2/
@@ -93,17 +94,16 @@ docs/v2/
 ├── MOLLY_ERROR_PROPAGATION_RESEARCH_EXTENSION.md
 ├── MOLLY_ERROR_PROPAGATION_EXTENSION_MODULES.csv
 ├── MOLLY_REFACTOR_SPLIT_README.md
-├── CODEX_GOAL_EXECUTION_CONTRACT.md
-├── readiness/
-│   └── core_refactor_readiness.json
-└── archive/
-    └── MOLLY_V2_RESEARCH_DRIVEN_REFACTOR_SPEC.md
+└── readiness/
+    └── core_refactor_readiness.json
 ```
+
+后续若 `C7` 需要仓库内固定完整 Goal execution contract，可在 `CORE-00` 中新增并冻结；当前 launcher 可由用户直接交给 Codex。
 
 ## 7. 当前状态
 
 ```yaml
-core_spec_digest: 70d706792d7cefd02738f2379266bb9903c6f9584240526a3a1bb9a55216c537
+core_spec_digest: 0f6c8a0e0c7ef6d1fc19b7c73ed9375f6cc6304f463f42e7bc6175ae6e0a55c7
 core_matrix_digest: 2c2eb52e902cdfeac01fa8ac05c6872f4782a0bc8c4d02937bc1338cfef80e3d
 candidate_baseline: 4352f137db3976cff31bf6cb30f543caa38f8013
 core_goal_mode_ready: false
