@@ -22,12 +22,12 @@
   "condition_notes": {
     "C0": "Core spec is staged as OWNER_REVIEWED_DRAFT_V1_2; explicit final APPROVED state has not been recorded in-repository.",
     "C1": "Exact immutable v1 freeze tag and legacy branch have not yet been created or verified.",
-    "C2": "High-coverage module matrix exists, but exact-HEAD per-file audit remains required before Goal-mode implementation.",
+    "C2": "CORE-00 exact-HEAD audit is recorded in docs/v2/reports/CORE-00.md at ae7892dbf8a6bfe85dd909056eadc2afecc40d9d: 50 matrix rows reviewed, 35 literal references classified, 32 resolved, 3 unresolved, and 32 semantic/group references requiring maintainer disposition. C2 remains PENDING.",
     "C3": "Provider allowlist, SSRF/download limits, credential profiles, license/provenance schema and private/public artifact boundaries remain to be frozen.",
     "C4": "Minimal RunRequest -> ToolRegistry -> ToolPolicy -> tool -> ArtifactStore -> RunLedger -> lineage spike has not yet been evidenced.",
-    "C5": "Migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
+    "C5": "CORE-00 inventoried the real PR Fast and Full CI commands and current extras in docs/v2/reports/CORE-00.md; uv.lock is stale relative to pyproject.toml, and v2 migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
     "C6": "Representative licensed literature samples, OLED gold set and v2 BR1 parity runner/fixtures remain to be frozen.",
-    "C7": "Goal launcher/contract drafts exist, but exact final baseline, stop conditions and repository instruction chain must be frozen with readiness."
+    "C7": "CORE-00 recorded the loaded repository instruction chain, exact HEAD, stop conditions, and current launcher/readiness mismatch resolution in docs/v2/reports/CORE-00.md; final contract and owner-frozen baseline remain pending."
   },
   "br1_cutover_conditions": {
     "B0": "PENDING",
@@ -48,5 +48,5 @@
   "error_propagation_extension_implementation_authorized": false,
   "owner_decision": "PENDING_FINAL_READINESS",
   "readiness_rule": "core_goal_mode_ready is true iff C0-C7 are all PASS; core_cutover_ready is true iff C0-C7 and B0-B4 are all PASS and Owner explicitly approves cutover.",
-  "last_updated": "2026-08-28"
+  "last_updated": "2026-08-29"
 }
