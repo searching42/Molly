@@ -1,260 +1,211 @@
-# Molly 长程科学任务错误传播研究扩展提案
+# Molly Long-Horizon Scientific Error Propagation Research Extension
 
-> **文档状态**：`RESEARCH_PROPOSAL`  
-> **导师审批**：`ADVISOR_APPROVAL_PENDING`  
-> **实施授权**：`false`  
-> **是否为 Core v2 前置条件**：`false`  
-> **依赖文档**：`MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC.md`  
-> **来源草案**：`MOLLY_V2_RESEARCH_DRIVEN_REFACTOR_SPEC.md`  
-> **当前仓库基线**：`main@4352f137db3976cff31bf6cb30f543caa38f8013`  
-> **用途**：保留错误传播方向的完整研究定义、实验协议和潜在工程扩展，供导师讨论和后续可行性评估  
-> **禁止用途**：导师与 Owner 未批准前，不得作为 Codex Goal 模式、Core v2 验收或代码实施的规范输入
+Status: `RESEARCH_PROPOSAL`
+Advisor approval: `PENDING`
+Implementation authorization: `false`
+Required for Core v2 refactor: `false`
+Repository baseline candidate: `main@4352f137db3976cff31bf6cb30f543caa38f8013`
 
----
+## 1. Purpose
 
-## 0. 文档治理
+This document preserves a possible research extension for studying error generation and propagation in long-horizon scientific-agent workflows. It is intentionally separated from the Molly Core v2 simplification refactor because the research direction has not yet been approved by the advisor.
 
-### 0.1 与 Core v2 的关系
+Nothing in this document authorizes implementation. Core v2 MUST remain usable without this extension.
 
-本提案不是 Core v2 的替代方案。Core v2 负责：
+## 2. Research premise
 
-```text
-RunLedger
-ArtifactStore
-ArtifactLineage
-AgentLoop
-ToolRegistry / ToolPolicy
-Literature Acquisition
-CanonicalDocument
-OLED Evidence Pipeline
-Optional BR1 Plugin
-```
+The central hypothesis is:
 
-本扩展在获批后可能增加：
+> Error semantics are domain-specific, while propagation mechanics may be studied with domain-general trajectory and artifact-dependency methods.
 
-```text
-Scientific Error Model
-ErrorInstance
-InterventionSpec
-PairedRunGroup
-RandomnessManifest
-Descendant Replay
-ExperimentStore
-PropagationOutcome
-Statistical Analysis
-Natural Failure Corpus
-```
+For OLED/material discovery, a scientific error can involve molecule identity, measurement condition, evidence binding, units, unsupported inference, dataset leakage, or downstream modeling decisions. Another scientific domain may require different semantic validators.
 
-依赖方向只能是：
+The extension therefore separates:
 
-```text
-Error-Propagation Extension → Molly Core v2
-```
+- domain-specific error semantics and validators;
+- domain-general run/artifact dependencies, controlled interventions, replay, and statistical comparison.
 
-Core 不得反向依赖本提案。
+## 3. Definitions
 
-### 0.2 当前未决状态
+The proposal distinguishes:
 
-在进入任何实现前，必须先讨论并决定：
+- `Error`: a confirmed violation of a declared scientific, evidence, or execution constraint;
+- `Uncertainty`: evidence is insufficient to establish validity or invalidity;
+- `Failure`: the task does not satisfy its acceptance goal; failure is not automatically an error;
+- `Propagation`: a validated upstream error produces a measurable downstream effect under a controlled intervention/replay design.
 
-- 该问题是否符合导师对课题方向、毕业要求和投稿节奏的判断；
-- 研究贡献应以材料科学、科学 Agent 还是通用 Agent reliability 为主；
-- OLED 全链是否具有足够真实任务复杂度；
-- 是否能获得足够领域人工标注；
-- 计算和 API 预算是否支持配对多轮实验；
-- 现有相关工作是否已覆盖关键创新点；
-- 第一篇工作是否只做上游文献→数据集，还是包括 BR1 下游建模与生成。
+Validation should avoid forced binary labels where scientific evidence is ambiguous. A future research extension may use states such as:
 
-### 0.3 审批结果
+- `VALID`
+- `INVALID`
+- `INDETERMINATE`
+- `DISPUTED`
 
-导师与 Owner 讨论后可给出：
+## 4. Potential validation scopes
 
-| 结果 | 含义 |
-|---|---|
-| `APPROVED_FOR_PILOT` | 只允许小规模可行性实验，不授权完整系统建设 |
-| `APPROVED_FOR_RESEARCH` | 研究问题和初步范围认可，可进入正式协议冻结 |
-| `APPROVED_WITH_CHANGES` | 调整任务链、领域、指标或投稿定位后复审 |
-| `DEFERRED` | 暂缓，Core v2 独立推进 |
-| `REJECTED` | 不采用该方向；本文档归档 |
+The Core v2 engineering scopes are `ARTIFACT`, `RELATION`, and `BUNDLE`. If this research extension is activated, a richer research vocabulary may distinguish:
 
-任何审批都不自动意味着一次性实现全部扩展。
+- `NODE`: validity of one artifact/value;
+- `EDGE`: validity of a relation or binding between two objects;
+- `SUBGRAPH`: consistency of a local scientific bundle;
+- `TRAJECTORY`: workflow-level properties such as stale state or leakage;
+- `OUTCOME`: final utility/performance evaluation.
 
----
+These scopes are research semantics, not current Core runtime requirements.
 
-# 第一部分：研究问题与边界
+## 5. Candidate OLED error classes
 
-## 1. 研究动机
+A future advisor-approved taxonomy may include:
 
-科学 Agent 的最终输出可能受到多种上游问题影响：
+- omission;
+- substitution;
+- molecule/entity misassociation;
+- condition mismatch such as solution vs film;
+- unit or scale error;
+- unsupported inference;
+- scientific constraint violation;
+- dataset or scaffold leakage;
+- objective/evaluation misalignment.
+
+Error origin should be tracked separately from semantic class. Candidate origins include source, acquisition, parser, LLM, deterministic tool, human review, model, evaluator, and environment.
+
+## 6. Controlled intervention track
+
+A possible causal experiment would start from a reviewed control artifact and create a minimal, pre-declared intervention artifact differing in one target error.
+
+Example:
 
 ```text
-来源论文中的问题
-        ↓
-全文获取或版本选择
-        ↓
-文档解析
-        ↓
-实体、条件、属性抽取
-        ↓
-数据集构建
-        ↓
-模型训练
-        ↓
-分子生成
-        ↓
-候选评价和决策
+Control:
+PLQY = 0.82
+phase = solution
+
+Intervention:
+PLQY = 0.82
+phase = film
 ```
 
-传统 Agent 评测通常只观察：
+Only downstream stages causally dependent on the changed artifact would be rerun. The original run must remain immutable.
 
-- 最终任务是否完成；
-- 最终答案是否正确；
-- 某个工具调用是否失败；
-- 首个明显错误步骤在哪里。
+Potential future schemas include:
 
-科学任务还需要回答：
+- `ErrorInstance`
+- `InterventionSpec`
+- `RandomnessManifest`
+- `PairedRunGroup`
+- `PropagationOutcome`
 
-- 一个局部错误是否真正影响了后续结果；
-- 错误在跨表示转换中是否改变形态；
-- 某些验证器是否吸收了错误；
-- 某个错误是否只增加结果方差而不改变均值；
-- 错误是否让代理指标变好但科学有效性变差；
-- 随机训练和分子生成下，影响是否稳定存在；
-- 不同科学领域的错误语义不同，哪些传播机制仍可复用。
+None of these belong to the current Core v2 implementation.
 
-本提案的核心不是构造更大的通用 Agent 框架，而是建立可检验的科学错误传播定义与实验协议。
+## 7. Natural failure track
 
-## 2. 候选研究主问题
+Controlled errors have strong causal interpretability but may be artificial. A complementary natural-failure corpus could collect errors produced by real agent runs and use expert annotation to test ecological validity.
 
-> **在文献驱动的 OLED 材料发现 Agent 中，不同来源和语义类型的科学错误，如何跨证据、数据集、模型、生成与候选决策阶段传播、放大、衰减、掩盖、补偿或恢复？**
+Natural failures should not be mixed statistically with controlled interventions without an explicit analysis plan.
 
-### 2.1 研究子问题
+## 8. Randomness and repeated runs
 
-| 编号 | 问题 |
-|---|---|
-| `RQ1` | 错误最早由来源、获取、解析、LLM、确定性工具、人工、模型还是评价器产生？ |
-| `RQ2` | 哪类错误更容易直接传播，哪类被下游吸收或掩盖？ |
-| `RQ3` | 传播覆盖范围与依赖深度、分支数和验证延迟有什么关系？ |
-| `RQ4` | 在 LLM、训练和生成具有随机性时，错误如何改变结果分布？ |
-| `RQ5` | 验证器或人工审核放在哪个阶段，单位成本的风险下降最大？ |
-| `RQ6` | 哪些传播模式可跨领域复用，哪些有效性判断必须由领域定义？ |
-| `RQ7` | 某些科学无效错误为何会改善代理指标，如何区分恢复、补偿和伪改善？ |
+Repeated runs do not eliminate randomness. They estimate the distribution of outcomes under a condition.
 
-### 2.2 候选假设
-
-以下只能作为预注册 呇设，不是预设结论会沣不得耜定：
-
-- `H1`：�早进入证据或数据链的错误，平均影响后代范围越大；
-- `H2`：实体错配与条件绑定错误比同幅度数值扰动更难被常规指标发现；
-- `H3`：部分无效干预会提高预测或候选评分，形成 metric-improving invalid intervention；
-- `H4`：早期领域验证器降低终端风险，但存在成本和误拒绝权衡；
-- `H5`：传播结构可以跨领域比较，科学真值判定不能完全跨域统一；
-- `H6`：单次运行无法可靠表示部分错误的传播风险；
-- `H7`：自然发生错误与人工注入错误的频率和传播模式存在系统差异。
-
-### 2.3 适用任务范围
-
-第一阶段建议限制为：
-
-> **Artifact-mediated、digitally executable、具有显式输入输出依赖并可重放的科学工作流。**
-
-OLED 候选任务链：
+A future experiment should compare paired distributions such as:
 
 ```text
-Literature Discovery
-        ↓
-Full-text Acquisition
-        ↓
-Document Parsing
-        ↓
-Evidence Extraction
-        ↓
-Contextual Mapping
-        ↓
-Dataset Construction
-        ↓ optional full-chain subset
-Property Modeling
-        ↓
-Molecule Generation
-        ↓
-Candidate Evaluation
+P(Y | do(control))
+versus
+P(Y | do(intervention))
 ```
 
-不建议首篇工作覆盖：
+Repeated runs of one error instance are not independent scientific samples. The design should distinguish:
 
-- 湿实验自动化；
-- 所有科学领域；
-- 多智能体协作；
-- 完整通用 Agent benchmark；
-- 无法重放的长期物理实验；
-- 以模型隐藏 CoT 为研究对象。
+- number of independent papers/tasks/error instances;
+- repetitions within each instance;
+- model/training/generation random seeds;
+- provider/model versions and run batch;
+- within-instance and between-instance variance.
 
-## 3. 潜在贡献边界
+Paired seeds and matched execution conditions should be used where meaningful.
 
-候选贡献可以是：
+## 9. Possible propagation outcomes
 
-1. 科学错误与不确定性、失败、结果质量的操作化区分；
-2. OLED 领域错误 taxonomy；
-3. controlled error intervention 数据集；
-4. paired stochastic descendant replay 协议；
-5. 传播、掩盖、补偿、恢复和伪改善指标；
-6. 人工、确定性 validator 和 LLM judge 的权威分层；
-7. 自然错误轨迹与受控错误的对照；
-8. 错误对上游数据集和下游模型/生成分布的实证影响；
-9. 验证位置与成本收益分析。
+A future analyzer may classify effects such as:
 
-不应把以下内容作为主要创新：
+- direct transmission;
+- transformation;
+- amplification;
+- attenuation;
+- masking;
+- compensation;
+- recovery;
+- delayed manifestation;
+- no measurable downstream effect.
 
-- 单纯集成 OpenAlex、MinerU、LLM、Uni-Mol 和 REINVENT4；
-- 另一个通用插件框架；
-- 只找“首个错误步骤”；
-- 只用 LLM judge 给轨迹打标签；
-- 将多次运行取平均称为消除随机性；
-- 根据最终分数倒推中间步骤是否错误。
+An invalid intervention that improves one downstream metric remains scientifically invalid. Such a result may indicate metric gaming, compensation, evaluator misalignment, or another system bias rather than successful scientific reasoning.
 
----
+## 10. Human annotation boundary
 
-# 第二部分：科学错误模型
+Human experts would be needed to define and calibrate scientific ground truth, but they should not need to intervene in every repeated run.
 
-## 4. 四个基础概念
-
-### 4.1 Error
-
-当一个对象、关系、局部组合、运行过程或结论违反**实验前已声明**的执行、证据、领域或任务约束时，称其存在错误。
-
-错误判断必须独立于下游结果。例如：
+A potential workflow is:
 
 ```text
-正确证据：PLQY = 0.52
-错误记录：PLQY = 0.82
-错误记录使候选平均预测分数上升
+deterministic validators
+-> evidence-aware automatic triage
+-> independent human review for gold labels
+-> adjudication of disagreement
+-> automated paired runs and scoring
+-> sampled post-run audit
 ```
 
-上升不改变该记录的错误身份。
+LLM judges may assist triage but should not be the sole authority for domain-scientific correctness.
 
-### 4.2 Uncertainty
+## 11. Relationship to Molly Core v2
 
-现有证据不足以可靠判断时，属于不确定性，而不是错误。
+Core v2 may retain low-cost metadata useful to this extension without implementing it:
 
-例如：论文只写“high photoluminescence quantum yield”，没有具体数值或测量环境。这不是错误，是 insufficient evidence。
+- run_id / step_id;
+- immutable artifact identity and SHA-256;
+- input/output artifact references;
+- tool and model versions;
+- prompt/config digests;
+- source locators;
+- random-seed metadata where available;
+- environment/version metadata.
 
-### 4.3 Failure
+These fields primarily serve provenance, reproducibility, stale-artifact detection, partial reruns, and BR1 current-run binding.
 
-最终任务未满足实验验收约束。
-例如：
+The dependency direction must be:
 
-- 文献分析只获得两条有效数据；
-- 模型训绀大败；
-- 生成器不胾达到相接卖情偙动；
-- API 中断。
+```text
+error-propagation research extension
+        -> Molly Core v2
+```
 
-失败叫能因错误引起，也可能因资源责乌，文献原本未动文统或不可实现相接目标引起。
+Core v2 MUST NOT depend on research-extension schemas.
 
-### 4.4 Propagation
+## 12. Activation gates
 
-上游已确认为 `INVALID` 的节点通过諡据依赖、关系依赖或上下文d��赖，由所定义干�
+Implementation of this extension requires a separate owner/advisor decision. A future activation process should at minimum require:
 
-�."��.9�"y�b9�)�� �/��a�.��布、迿策分布、可恢复性分或服。**可归因影响。
+- `R0`: advisor agrees the research question is worth pursuing;
+- `R1`: scope and publication claim are frozen;
+- `R2`: domain error taxonomy and annotation protocol are approved;
+- `R3`: intervention and replay semantics are approved;
+- `R4`: statistical analysis plan is frozen before large-scale experiments;
+- `R5`: representative gold annotations and agreement evidence exist;
+- `R6`: explicit Owner authorization to implement the extension.
 
-这些事件二生成一个可讱的转续/��同一上游错误多次重复运行，��/��{���s�>���>��r/��ߚv��>G�R���������fC�"۞�G����j�Rg�����J��#������G�:�"[�V#��S�"���v���k��'�((����иԁ�����ͅѥ�����I���ٕ��()�����ͅѥ����k�Rg�����7�ⷒ�#��c�r���3��/������ۖ��?�޻�.W�R ()I���ٕ���k�����b;�������/��۞�_��W�"[���ޗ�R皶��n{�r'�V#�*ۚ�((����и؁5�ͭ���(+������~��2���ג�7�>Úb��Rg����j����/��O�zs�>��n��v���ێ����z/�>C����ϖv���3������/�"�VÖ��Z�޻�?�nӖ���"[����o��_��צRg����r�f���+�6��
-�����g��7�?�FϞv�Rg����ʇ�r'��J���3�>����b�����2���:��n[�((����и܁A͕Ց�����ɽٕ����(+�^��V#�"[�Rg�����˦��>C��c�~C��o�B�2����3���ۖ��r'�V#���"[��G����r'�V#���2����/�f7�(+��/����h((�����zۚ*+��?��3���ޗ�"[�>�����R������*c�6��"C������#�ⷞj��c�r��Rg������v�����l(������o�ZÞR�"C�b��B���/��{�>��b����~C��o�B#�VÖ"k�����3���>�����;�r��B7�r7��c�R皶���7����^�v��l(�����6����r�����VÚ6���s����7�*��"��c�S����>�#�&��nk�f�:������ɥ���х���ɽ�Ѡ���Ѓ����䁅���ፕ�ѥ�����䁉��������������ȁ��ȁɕ���ݽɱ��ٕɥ����ѥ���(���((���Ը��������͕���ѥ���Σ��(+���⫦Rg����j�����ۢ�����
+Until all required research gates are satisfied, this proposal remains non-executable.
+
+## 13. Explicit non-authorization
+
+The presence of this document MUST NOT cause Codex or another coding agent to implement:
+
+- InterventionEngine;
+- ErrorInstance runtime;
+- PairedRunGroup runtime;
+- descendant-only counterfactual replay;
+- propagation statistics;
+- natural-failure benchmark infrastructure;
+- cross-domain error-propagation abstractions.
+
+Those capabilities require a separate research PR and explicit approval.
