@@ -1,0 +1,15 @@
+Capability,Status,CoreDependency,ProposedDestination,RequiredResearchGates,AcceptanceEvidence
+Scientific error model,RESEARCH_PROPOSAL,"Core OLED schemas, ValidationResult, SourceLocator",extensions/error_propagation/error_model.py,"R0,R1,R2",advisor-approved taxonomy with real OLED examples
+Extended validation scopes,RESEARCH_PROPOSAL,Core ARTIFACT/RELATION/BUNDLE validation,extensions/error_propagation/validation_scopes.py,"R2,R6",NODE/EDGE/SUBGRAPH/TRAJECTORY/OUTCOME contracts and tests
+ErrorAnnotation and ErrorInstance,RESEARCH_PROPOSAL,"Artifact identity, ReviewRecord",extensions/error_propagation/schemas.py,"R2,R5,R6",double-reviewed error instances with evidence
+InterventionSpec,RESEARCH_PROPOSAL,Immutable ArtifactStore and SourceLocator,extensions/error_propagation/interventions.py,"R3,R6",control/intervention minimal-diff validation
+ExperimentStore,RESEARCH_PROPOSAL,RunLedger IDs and Core artifact references,extensions/error_propagation/experiment_store.py,"R3,R4,R6",experiment metadata separated from Core authority
+RandomnessManifest,RESEARCH_PROPOSAL,Core model/tool/version/seed metadata,extensions/error_propagation/randomness.py,"R3,R4,R6",all stochastic sources captured or declared unavailable
+PairedRunGroup,RESEARCH_PROPOSAL,"RunRequest, RunLedger, RandomnessManifest",extensions/error_propagation/paired_runs.py,"R3,R4,R6",paired control/intervention manifests
+Descendant replay orchestration,RESEARCH_PROPOSAL,ArtifactLineage and explicit stage contracts,extensions/error_propagation/replay.py,"R3,R6",cached/component/live replay modes without mutating original runs
+Controlled OLED intervention catalog,RESEARCH_PROPOSAL,OLED reviewed dataset and validators,extensions/error_propagation/oled_interventions.py,"R2,R3,R5",reviewed templates for at least approved error classes
+PropagationOutcome and analyzer,RESEARCH_PROPOSAL,"PairedRunGroup, validators, domain metrics",extensions/error_propagation/outcomes.py,"R3,R4,R6","effect sizes, uncertainty and propagation classifications"
+Statistical analysis and export,RESEARCH_PROPOSAL,ExperimentStore and frozen analysis plan,extensions/error_propagation/statistics.py,"R4,R6",hierarchical/paired reports with CIs and per-instance effects
+Natural failure corpus,RESEARCH_PROPOSAL,Core natural run artifacts and annotation policy,extensions/error_propagation/natural_failures.py,"R1,R2,R5,R6","double annotation, adjudication and agreement report"
+BR1 downstream propagation subset,RESEARCH_PROPOSAL,Core BR1 optional plugin and approved upstream benchmark,extensions/error_propagation/br1_analysis.py,"R0,R3,R4,R6",paired train/generation subset with distribution metrics
+Benchmark release package,RESEARCH_PROPOSAL,Data/license policy and all approved extension artifacts,extensions/error_propagation/release.py,"R1,R5,R6","release-safe manifests, scripts and claim review"
