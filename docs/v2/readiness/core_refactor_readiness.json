@@ -1,0 +1,52 @@
+{
+  "schema_version": "molly_core_refactor_readiness.v1",
+  "generated_from_repository": "searching42/Molly",
+  "candidate_baseline": "4352f137db3976cff31bf6cb30f543caa38f8013",
+  "core_spec_path": "docs/v2/MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md",
+  "core_spec_sha256": "70d706792d7cefd02738f2379266bb9903c6f9584240526a3a1bb9a55216c537",
+  "core_matrix_path": "docs/v2/MOLLY_CORE_MODULE_DISPOSITION_MATRIX_V1_1_BR1_HARDENED.csv",
+  "core_matrix_sha256": "2c2eb52e902cdfeac01fa8ac05c6872f4782a0bc8c4d02937bc1338cfef80e3d",
+  "v1_freeze_commit": null,
+  "v1_freeze_tag": null,
+  "legacy_branch": null,
+  "conditions": {
+    "C0": "PENDING",
+    "C1": "PENDING",
+    "C2": "PENDING",
+    "C3": "PENDING",
+    "C4": "PENDING",
+    "C5": "PENDING",
+    "C6": "PENDING",
+    "C7": "PENDING"
+  },
+  "condition_notes": {
+    "C0": "Core spec is staged as OWNER_REVIEWED_DRAFT_V1_1; explicit final APPROVED state has not been recorded in-repository.",
+    "C1": "Exact immutable v1 freeze tag and legacy branch have not yet been created or verified.",
+    "C2": "High-coverage module matrix exists, but exact-HEAD per-file audit remains required before Goal-mode implementation.",
+    "C3": "Provider allowlist, SSRF/download limits, credential profiles, license/provenance schema and private/public artifact boundaries remain to be frozen.",
+    "C4": "Minimal RunRequest -> ToolRegistry -> ToolPolicy -> tool -> ArtifactStore -> RunLedger -> lineage spike has not yet been evidenced.",
+    "C5": "Migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
+    "C6": "Representative licensed literature samples, OLED gold set and v2 BR1 parity runner/fixtures remain to be frozen.",
+    "C7": "Goal launcher/contract drafts exist, but exact final baseline, stop conditions and repository instruction chain must be frozen with readiness."
+  },
+  "br1_cutover_conditions": {
+    "B0": "PENDING",
+    "B1": "PENDING",
+    "B2": "PENDING",
+    "B3": "PENDING",
+    "B4": "PENDING"
+  },
+  "br1_reference_evidence": {
+    "acceptance_readme": "docs/evidence/br1-conversation-real-acceptance-v1/README.md",
+    "acceptance_manifest": "docs/evidence/br1-conversation-real-acceptance-v1/acceptance_manifest.json",
+    "known_v1_acceptance_status": "runtime_verified",
+    "known_v1_control_plane_commit": "15a4365fb6597a231cbff5b083af23ad8b783c32"
+  },
+  "core_goal_mode_ready": false,
+  "core_cutover_ready": false,
+  "error_propagation_extension_required": false,
+  "error_propagation_extension_implementation_authorized": false,
+  "owner_decision": "PENDING_FINAL_READINESS",
+  "readiness_rule": "core_goal_mode_ready is true iff C0-C7 are all PASS; core_cutover_ready is true iff C0-C7 and B0-B4 are all PASS and Owner explicitly approves cutover.",
+  "last_updated": "2026-08-28"
+}
