@@ -3,7 +3,7 @@
   "generated_from_repository": "searching42/Molly",
   "candidate_baseline": "4352f137db3976cff31bf6cb30f543caa38f8013",
   "core_spec_path": "docs/v2/MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md",
-  "core_spec_sha256": "70d706792d7cefd02738f2379266bb9903c6f9584240526a3a1bb9a55216c537",
+  "core_spec_sha256": "0f6c8a0e0c7ef6d1fc19b7c73ed9375f6cc6304f463f42e7bc6175ae6e0a55c7",
   "core_matrix_path": "docs/v2/MOLLY_CORE_MODULE_DISPOSITION_MATRIX_V1_1_BR1_HARDENED.csv",
   "core_matrix_sha256": "2c2eb52e902cdfeac01fa8ac05c6872f4782a0bc8c4d02937bc1338cfef80e3d",
   "v1_freeze_commit": null,
@@ -20,7 +20,7 @@
     "C7": "PENDING"
   },
   "condition_notes": {
-    "C0": "Core spec is staged as OWNER_REVIEWED_DRAFT_V1_1; explicit final APPROVED state has not been recorded in-repository.",
+    "C0": "Core spec is staged as OWNER_REVIEWED_DRAFT_V1_2; explicit final APPROVED state has not been recorded in-repository.",
     "C1": "Exact immutable v1 freeze tag and legacy branch have not yet been created or verified.",
     "C2": "High-coverage module matrix exists, but exact-HEAD per-file audit remains required before Goal-mode implementation.",
     "C3": "Provider allowlist, SSRF/download limits, credential profiles, license/provenance schema and private/public artifact boundaries remain to be frozen.",
