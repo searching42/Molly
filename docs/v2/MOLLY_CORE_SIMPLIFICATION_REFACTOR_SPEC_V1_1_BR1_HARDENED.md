@@ -1,246 +1,462 @@
-# Molly 核心精简重构规格
+# Molly Core v2 Simplification Refactor Specification
 
-> **文档状态**：`OWNER_REVIEWED_DRAFT_V1_1`  
-> **文档用途**：冻结 Molly 近期可执行的、研究方向中性的核心精简方案  
-> **当前仓库**：`searching42/Molly`  
-> **审计基线**：`main@4352f137db3976cff31bf6cb30f543caa38f8013`  
-> **基线日期**：2026-08-28  
-> **拟议目标版本**：`Molly Core v2`  
-> **错误传播方向**：`NOT_REQUIRED_FOR_CORE_REFACTOR`  
-> **BR1 保留策略**：`OPTIONAL_INSTALL_BUT_MANDATORY_CUTOVER_PARITY`  
-> **实施状态**：本文档不自动授权代码改造；第 15 节前置条件全部通过后，方可生成 Codex Goal 模式任务  
-> **规范性关键词**：`MUST`、`MUST NOT`、`SHOULD`、`SHOULD NOT`、`MAY` 分别表示强制、禁止、建议、不建议和可选
+Status: `OWNER_REVIEWED_DRAFT_V1_2`
+Repository: `searching42/Molly`
+Audit baseline candidate: `main@4352f137db3976cff31bf6cb30f543caa38f8013`
+Research-error-propagation dependency: `NOT_REQUIRED_FOR_CORE_REFACTOR`
+BR1 policy: `OPTIONAL_INSTALL_BUT_MANDATORY_CUTOVER_PARITY`
+Implementation authorization: gated by `C0-C7`; default cutover additionally gated by `B0-B4` and explicit Owner approval.
 
----
+## 0. Purpose
 
-## 0. 文档治理
+This specification defines a research-direction-neutral simplification of Molly. It exists to reduce control-plane complexity while preserving scientific provenance, reproducibility, review boundaries, and the already-validated BR1 scientific capability.
 
-### 0.1 本文档解决什么
+The refactor MUST NOT assume that long-horizon scientific error propagation is the final research direction. Error-propagation-specific infrastructure is out of scope until separately approved.
 
-本文档只冻结已经较为确定的工程方向：
+The implementation objective is a small scientific workflow core with one execution path and explicit capability boundaries.
 
-1. 精简 Molly 当前过重的控制平面；
-2. 删除或归档 `Permission / Authorization / StartIntent` 等多层授权链；
-3. 将 Planner、Controller、Execution Agent、Replanner 和 Autonomy 多套运行语义收敛为一个小型运行循环；
-4. 保留必要的 artifact、来源、审核和可复现能力；
-5. 新增大规模、合规、可缓存的文献数据获取模块；
-6. 将 XML/JATS/HTML 作为优先全文格式，将 MinerU 降级为 PDF fallback parser；
-7. 将 OLED 抽取、Uni-Mol、REINVENT4、远程执行和 observability 放到清晰的领域或插件边界中；
-8. 在不假设未来论文方向的前提下，为后续研究扩展保留低成本接口。
+## 1. Core target architecture
 
-本文档不决定 Molly 是否最终用于“长程科学任务错误传播”研究。
-
-### 0.2 与错误传播提案的关系
-
-配套文档：
-
-```text
-MOLLY_ERROR_PROPAGATION_RESEARCH_EXTENSION.md
-```
-
-其状态为：
-
-```text
-RESEARCH_PROPOSAL
-ADVISOR_APPROVAL = PENDING
-IMPLEMENTATION_AUTHORIZED = false
-```
-
-二者的权威关系如下：
-
-```text
-docs/roadmap.md
-    └── 当前仓库状态与实施队列的唯一权威
-
-MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC.md
-    └── 近期核心重构的规范性规格
-
-MOLLY_ERROR_PROPAGATION_RESEARCH_EXTENSION.md
-    └── 非绑定研究提案；不得作为核心重构前置条件
-```
-
-除非 Owner 与导师通过卝独 ADR 明确激活研究扩展，否则 Codex MUST NOT 根据研究扩展文档实现：
-
-- `InterventionEngine`；
-- `ErrorInstance`；
-- `PairedRunGroup`；
-- descendant-only counterfactual replay；
-- `PropagationOutcome`；
-- 自然失败 benchmark；
-- 传播统计分析；
-- 跨领域错误传播能力。
-
-### 0.3 当前原始方案的保存
-
-原文件：
-
-```text
-MOLLY_V2_RESEARCH_DRIVEN_REFACTOR_SPEC.md
-```
-
-继续作为 `ARCHIVED_SOURCE_DRAFT` 保存，不覆盖、不删除。它记录了以错误传播为中心的完整重构设想，可在导师认可方向后作为研究扩展设计来源。
-
-### 0.4 审核结果
-
-Owner 对本文档只能给出：
-
-| 结果 | 含义 |
-|---|---|
-| `APPROVED` | 核心边界冻结，可开始完成前置条件 |
-| `APPROVED_WITH_CHANGES` | 按明确意见修改后复审 |
-| `REJECTED` | 不采用本次核心重构 |
-| `DEFERRED` | 暂不重构，继续维护 v1 |
-
-### 0.5 高影响变更
-
-以下变更 MUST 通过 ADR，而不能由 Codex 在实现中自行决定：
-
-- 是否维护 v1 API 兼容；
-- 是否继续保留独立 Controller；
-- 是否允许模型拥有 shell、SSH、文件系统路径或下载 URL；
-- 是否将 Conversation 重新设为执行权威；
-- 是否将 MinerU 恢复为强制入口；
-- 是否把 BR1 放入核心依赖；
-- 是否直接依赖 DeepSeek Harness；
-- 是否激活错误传播研究扩展；
-- 是否引入第二科学领域；
-- 是否修改人工审核边界。
-
----
-
-# 第一部分：目标与边界
-
-## 1. 执行摘要
-
-Molly v1 已证明严格 authority envelope、不可变请求、Gate、远程执行、恢复和审计链可以工作。但当前系统已经同时承担：
-
-```text
-Planner
-Permission
-Authorization
-StartIntent
-Controller
-Execution Agent v1/v2
-Replanner
-Autonomy L1/L2
-AuthorityRelation
-EvidenceGrant
-AutonomyLease
-Failure Recovery
-Conversation runtime
-Publication / adoption / reconciliation
-```
-
-这些抽象主要面向生产级、强治理、长时间自治执行。对于当前个人科研原型，它们形成了过大的代码、测试和状态空间，并且阻碍新增文献获取与科学数据处理能力。
-
-Molly Core v2 的目标不是构建另一个通用 Agent 框架，而是建立一个小而稳定的科学工作流核心：
+The target execution spine is:
 
 ```text
 RunRequest
-    ↓
-AgentLoop / RunEngine
-    ↓
-ToolRegistry + ToolPolicy
-    ↓
-Scientific tools
-    ↓
-ArtifactStore + RunLedger + ArtifactLineage
-    ↓
-Validation / Review
+  -> AgentLoop / RunEngine
+  -> ToolRegistry + ToolPolicy
+  -> Scientific tool
+  -> ArtifactStore + RunLedger + ArtifactLineage
+  -> ValidationResult / ReviewRecord
 ```
 
-核心科学路径为：
+The scientific default path is:
 
 ```text
-Literature Search
-        ↓
-Metadata / Full-text Resolution
-        ↓
-Structured Full Text First
-        ↓
-CanonicalDocument
-        ↓
-OLED Evidence Extraction and Mapping
-        ↓
-Human-reviewed Dataset
-        ↓
-Optional BR1 Inverse-design Plugin
+Literature metadata search
+  -> full-text resolution and compliant acquisition
+  -> structured full text first
+  -> CanonicalDocument
+  -> OLED evidence extraction and contextual mapping
+  -> digest-bound human review
+  -> dataset export
+  -> optional BR1 inverse-design plugin
 ```
 
-### 1.1 核心重构的确定性目标
+Core v2 MUST have exactly one authoritative execution path. UI, conversation, observability, remote compute, BR1, MinerU, and provider-specific adapters are projections or plugins around the core, not alternate authorities.
 
-本次重构 MUST：
+## 2. Mandatory simplification decisions
 
-- 删除 v2 中的 Permission / Authorization / StartIntent 多层链；
-- 不迁移 Autonomy L1/L2、AuthorityRelation、AutonomyLease；
-- 不迁移独立 Controller 状态机；
-- 将规划与重新规划降为同一个 AgentLoop 内的结构化模型输出；
-- 使用一个运行事实源，而不是多套互相投影的状态；
-- 保留 artifact hash、来源、输入输出关系、版本和审核绑定；
-- 支持文献 metadata、全文位置、下载和缓存；
-- 支持 XML/JATS/HTML/PDF 路由；
-- 让下游只依赖 `CanonicalDocument`；
-- 让 MinerU 成为可选 PDF fallback；
-- 让 OLED 领域语义与通用运行时解耦；
-- 让 Uni-Mol、REINVENT4 和远程执行成为可选插价；
-- 让 OTel/LangSmith 继续保持 observer-only；
-- BR1 可以不进入最小安装，但在默认入口切换或删除旧实现前，MUST 完成 v2 BR1 contract-parity 与 fresh-real acceptance；
-- 在 v2 BR1 验收通过前，冻结的 v1 BR1 入口、实现和证据 MUST 保持可运行、可回滚且不得被破坏。
+Core v2 MUST NOT migrate the following v1 control-plane abstractions as runtime authorities:
 
-### 1.2 方向中性原则
+- Permission
+- Authorization
+- StartIntent
+- independent Controller state machine
+- independent Replanner authority
+- Autonomy L1/L2
+- AuthorityRelation / AuthoritySet
+- AutonomyLease
+- EvidenceGrant usage/admission chains
+- autonomous failure-recovery successor authority
+- multi-layer publication/adoption/reconciliation authority
 
-核心重构 SHOULD 支持普通科研工作流所需的：
+These are preserved only in the frozen v1 line where needed for historical evidence and rollback.
 
-- provenance；
-- reproducibility；
-- staleness detection；
-- partial rerun；
-- source locator；
-- version pinning；
-- seed metadata。
-
-这些字段也可能支持未来错误传播研究，但不得因此提前实现研究专用抽象。
-
----
-
-## 2. 当前问题
-
-### 2.1 多层授权与状态链
-
-当前链路将一次实际工具执行拆分为多层对象：
+The replacement authority model is intentionally small:
 
 ```text
-Permission
-    ↓
-Authorization
-    ↓
-StartIntent
-    ↓
-Controller state
-    ↓
-Execution Agent
-    ↓
-Executor
-    ↓
-Publication / adoption / reconciliation
+RunRequest + closed ToolPolicy + exact ApprovalRecord
 ```
 
-问题包括：
+A `RunRequest` defines the goal, bounded inputs, profile, and run budget.
+A `ToolPolicy` defines a closed set of allowed tools and side-effect classes.
+An `ApprovalRecord` binds a human decision to one exact concrete tool-call digest when human approval is required.
 
-- 同一用户意图被多次编码和哈希；
-- 状态转换和恢复窗口成倍增加；
-- Codex 倾向于继续补兼容层，而不是减少抽象；
-- 科学能力开发被控制平面工作挤压。
+Unknown tools, unknown policy values, stale approvals, or mismatched digests MUST fail closed.
 
-### 2.2 多个运行语义
+## 3. Core data model
 
-Planner、Controller、Execution Agent、Replanner、Autonomy 和 Failure Recovery 各自拥有部分运行语义，容易形成：
+### 3.1 RunLedger
 
-- 第二状态机；
-- 重复的“当前状态”定义；
-- 不同模块对成功与失败的解释不一致；
-- 轨迹展示与执行事实脱节。
+RunLedger is the append-only factual execution record. It MUST record at least:
 
-### 2.3 Conversation 与执行过度耦合
+- run_id
+- step_id
+- event type
+- tool name and version
+- logical provider/model profile where applicable
+- input artifact ids
+- output artifact ids
+- status
+- timestamps
+- prompt/config digests where applicable
+- relevant seed metadata where available
 
-Conversation 可以作为 UI 和上下涻�q�^
+RunLedger MUST NOT be treated as a mutable Controller state machine.
+
+### 3.2 ArtifactStore
+
+Artifacts MUST be immutable or content-addressed after publication. Each artifact MUST carry:
+
+- artifact_id
+- SHA-256
+- media type
+- schema/version when applicable
+- producer step
+- input artifact references
+- provenance/source metadata
+- creation time
+
+Scientific records MUST remain traceable to source evidence.
+
+### 3.3 ArtifactLineage
+
+Core v2 keeps lightweight dependency relations only:
+
+- `CONSUMED_BY`
+- `PRODUCED_BY`
+- `DERIVED_FROM`
+- `SUPPORTED_BY`
+
+This is provenance/dependency lineage, not a causal-error graph.
+
+### 3.4 Validation and review
+
+Core validation scope is limited to:
+
+- `ARTIFACT`: one object is structurally/scientifically valid in isolation
+- `RELATION`: a binding between objects is valid
+- `BUNDLE`: a local set of related objects is internally consistent
+
+`ReviewRecord` MUST bind a human scientific decision to an exact artifact digest.
+
+Core v2 MUST NOT introduce research-specific `ErrorInstance`, `InterventionSpec`, `PairedRunGroup`, `PropagationOutcome`, or descendant counterfactual replay.
+
+## 4. Agent and tool execution
+
+There is one `AgentLoop` / `RunEngine`.
+
+A normal turn is:
+
+```text
+build bounded context
+-> model proposes structured action
+-> ToolRegistry resolves a known ToolSpec
+-> ToolPolicy checks the action
+-> optional exact approval check
+-> tool executes
+-> output schema validates
+-> artifacts publish
+-> RunLedger appends observation
+-> continue, stop, or request review
+```
+
+Planning and replanning MAY exist as structured model outputs inside the same loop. They MUST NOT become separate execution authorities.
+
+### 4.1 ToolRegistry
+
+Each ToolSpec SHOULD define:
+
+- name
+- input schema
+- output schema
+- risk/side-effect class
+- execution backend
+- timeout/resource envelope
+- human-approval requirement
+
+The model MUST NOT provide physical credentials, arbitrary shell, arbitrary SSH targets, arbitrary filesystem paths, or arbitrary publisher endpoints unless a separately approved tool contract explicitly allows a bounded value.
+
+## 5. Literature acquisition
+
+The current PDF/conversation/gate-coupled literature intake is to be rewritten.
+
+The acquisition subsystem SHOULD be separated into interfaces such as:
+
+```text
+MetadataProvider
+FullTextResolver
+FullTextFetcher
+AcquisitionCache
+AcquisitionScheduler
+```
+
+Initial provider work should prefer legitimate APIs, TDM endpoints, and open-access sources. Provider-specific rate limits, redirect limits, content-size limits, content-type checks, provenance, license metadata, and SSRF protections MUST be explicit.
+
+The implementation MUST NOT add CAPTCHA bypass, residential proxy rotation, fingerprint evasion, or other access-control bypass behavior.
+
+## 6. Document parsing
+
+All downstream extraction MUST consume a source-neutral `CanonicalDocument` rather than MinerU-specific bytes.
+
+Preferred routing:
+
+```text
+JATS/XML -> publisher XML -> HTML -> lightweight PDF text -> MinerU PDF fallback
+```
+
+`CanonicalDocument` SHOULD represent sections, blocks, tables, figures/references where available, plus stable typed source locators.
+
+MinerU is optional and PDF-fallback-only. Minimal Core installation and structured-text routes MUST work without MinerU.
+
+## 7. OLED scientific layer
+
+OLED remains the first supported scientific domain but Core MUST NOT claim universal domain semantics.
+
+The refactor SHOULD preserve and simplify:
+
+- OLED field/schema definitions
+- condition-aware molecular/property identity
+- deterministic evidence-candidate extraction
+- source/evidence locators
+- contextual structured LLM mapping
+- unit/duplicate/conflict/leakage validators
+- digest-bound dataset review
+- CSV/Parquet or equivalent deterministic export
+
+Deterministic extraction and validation SHOULD precede LLM semantic mapping when possible.
+
+## 8. LLM providers
+
+Provider abstraction is retained but simplified.
+
+Core SHOULD preserve:
+
+- server-owned logical provider/model profiles
+- structured output validation
+- bounded SSE transport where used
+- request/response/config digests
+- explicit timeout/error taxonomy
+
+Secrets MUST NOT enter prompts, artifacts, public evidence, or RunLedger payloads.
+
+## 9. Observability
+
+OpenTelemetry and LangSmith are optional observer-only exporters.
+
+Authoritative data comes from RunLedger and ArtifactStore. Exporter failure or absence MUST NOT alter execution outcomes or authoritative artifact bytes.
+
+## 10. Conversation, API, and UI
+
+Conversation is not an execution authority in Core v2. It MAY later map user intent into a RunRequest.
+
+Core acceptance MUST be possible through CLI or a minimal API without UI.
+
+UI migration is deferred until the core contracts stabilize.
+
+## 11. BR1 preservation and cutover contract
+
+BR1 is optional for minimal installation but mandatory before repository default cutover.
+
+The v1 verified BR1 reference path is preserved as historical evidence. The v2 BR1 plugin MUST re-establish functional/contract parity for:
+
+```text
+reviewed/current-run dataset
+-> applicability preflight
+-> fresh Uni-Mol training
+-> model packaging
+-> real REINVENT4 generation
+-> generation packaging
+-> current-model prediction
+-> deterministic candidate evaluation
+-> verified Computational Top-N projection
+```
+
+BR1 parity MUST verify:
+
+- no historical model is reused as fresh training
+- prediction is bound to the current-run trained model
+- generation/prediction/evaluation are bound to current-run artifacts
+- stale or foreign artifacts fail closed
+- scientific claim boundaries remain explicit
+- terminal projection replay is deterministic for frozen terminal inputs
+
+Fresh stochastic runs are NOT required to reproduce identical candidate molecules or identical scores across v1 and v2. Parity is defined by scientific stages, contracts, freshness, lineage, terminal evaluation semantics, and representative successful runtime evidence.
+
+### 11.1 Minimal remote-compute requirements
+
+If representative BR1 requires remote GPU execution, v2 MUST retain only the minimal reliable compute contract:
+
+- server-owned logical compute profile
+- durable JobHandle
+- idempotent submit
+- restart-safe inspect
+- restart-safe collect/adopt
+- no duplicate dispatch after control-plane restart
+- no stale/foreign output adoption
+
+The v1 remote authority graph and lease system MUST NOT be reintroduced.
+
+### 11.2 BR1 cutover gates
+
+- `B0`: frozen v1 BR1 remains runnable/inspectable from immutable reference and rollback instructions exist
+- `B1`: v2 BR1 contract fixtures and acceptance runner are frozen
+- `B2`: fresh-real v2 BR1 acceptance succeeds
+- `B3`: representative remote restart/inspect/collect canary succeeds when remote compute is used
+- `B4`: Owner reviews and approves the BR1 parity report and default cutover
+
+`CORE-08` MUST NOT execute unless B0-B4 are PASS and the Owner explicitly approves cutover.
+
+## 12. Package and plugin boundaries
+
+Target package shape may evolve during CORE-00/C2, but dependency direction MUST preserve a small core. A representative structure is:
+
+```text
+src/molly/
+  core/
+  llm/
+  acquisition/
+  documents/
+  evidence/
+  domains/oled/
+  observability/
+  cli.py
+plugins/
+  br1_inverse_design/
+  remote_compute/
+```
+
+Core MUST NOT import from the frozen `ai4s_agent` package after migration closure.
+
+Optional dependencies SHOULD be separated at least into core/minimal, PDF/MinerU, observability, BR1, and remote-compute groups where practical.
+
+## 13. Migration policy
+
+Use `docs/v2/MOLLY_CORE_MODULE_DISPOSITION_MATRIX_V1_1_BR1_HARDENED.csv` as the high-coverage migration inventory.
+
+Allowed disposition decisions are:
+
+- KEEP
+- MIGRATE
+- SIMPLIFY
+- REWRITE
+- PLUGIN
+- DEFER
+- ARCHIVE
+- DELETE_FROM_V2
+
+Before implementation beyond CORE-00, the matrix MUST be reconciled against the exact implementation HEAD at file level. Unclassified required modules are a blocker.
+
+Do not preserve an old abstraction merely to keep historical tests green. Freeze legacy tests with v1 and write v2 tests from approved v2 requirements.
+
+## 14. Readiness gates C0-C7
+
+Production refactor implementation is authorized only when `docs/v2/readiness/core_refactor_readiness.json` truthfully records all C0-C7 as PASS and `core_goal_mode_ready=true`.
+
+- `C0`: Owner-approved core scope/spec is frozen in repository
+- `C1`: immutable v1 freeze reference, legacy branch/tag strategy, rollback/evidence inventory are recorded
+- `C2`: exact-HEAD per-file module migration audit is complete
+- `C3`: acquisition/network/credential/license/private-public security boundaries are frozen
+- `C4`: minimal core contract spike and authority model are accepted
+- `C5`: package/dependency/test/CI boundaries are frozen
+- `C6`: representative literature/OLED fixtures and BR1 parity fixtures/runners are frozen
+- `C7`: final Goal-mode execution contract, stop conditions, and repository instruction chain are frozen
+
+No gate may be marked PASS without concrete evidence. Codex MUST NOT infer approval from intent.
+
+## 15. Implementation queue
+
+Recommended sequence:
+
+- `CORE-00`: documentation-only freeze, exact-HEAD audit, readiness work, branch/tag/rollback planning
+- `CORE-01`: RunLedger, ArtifactStore, ArtifactLineage, ValidationResult, ReviewRecord
+- `CORE-02`: RunRequest, ToolRegistry, ToolPolicy, ApprovalRecord, single AgentLoop/RunEngine
+- `CORE-03`: literature metadata/full-text acquisition, cache, provenance, security controls
+- `CORE-04`: CanonicalDocument and parser router; MinerU optional fallback
+- `CORE-05`: OLED extraction, contextual mapping, validators, human-reviewed dataset export
+- `CORE-06A`: BR1 scientific plugin migration
+- `CORE-06B`: minimal compute backend required by representative BR1
+- `CORE-06C`: BR1 contract-parity, fresh-real acceptance, restart evidence, parity report
+- `CORE-07`: minimal CLI/API and observer-only observability
+- `CORE-08`: default entrypoint cutover and removal/archival of obsolete v1 runtime paths
+
+CORE-08 is separately gated by B0-B4 and explicit Owner approval.
+
+## 16. Codex Goal-mode rules
+
+Codex MUST:
+
+1. inspect repository state before modifying code
+2. preserve v1 evidence and rollbackability
+3. update readiness only from real evidence
+4. prefer deletion/simplification over compatibility wrappers when v2 requirements permit
+5. keep one execution authority
+6. keep credentials/configuration server-owned
+7. add targeted tests for each migrated contract
+8. keep BR1 cutover blocked until B0-B4
+9. report blockers rather than fabricating evidence
+
+Codex MUST NOT:
+
+- modify `main` directly
+- force-push or move immutable freeze references
+- merge its own refactor PRs without explicit Owner direction
+- claim error-propagation research support
+- implement InterventionEngine, ErrorInstance, PairedRunGroup, descendant counterfactual replay, or propagation statistics
+- restore Permission/Authorization/StartIntent or the v1 autonomy/authority stack under new names
+- add arbitrary shell/SSH/filesystem/network authority to the model
+- silently weaken BR1 freshness, current-model binding, or scientific claim boundaries
+- delete the legacy BR1 path before v2 BR1 parity is accepted
+
+## 17. Stop conditions
+
+Codex MUST stop and report when:
+
+- C0-C7 are not all PASS before production refactor work
+- required exact-HEAD module disposition is missing or ambiguous
+- a security boundary is unresolved
+- a required private credential/resource/fixture is unavailable
+- BR1 fresh-real or remote canary evidence cannot be produced
+- a proposed simplification would weaken a frozen scientific or safety invariant
+- Owner approval is required for cutover
+
+Partial completion with an explicit blocker report is preferred over speculative compatibility code.
+
+## 18. Acceptance principles
+
+Core v2 is acceptable only if representative tests demonstrate:
+
+- one execution path
+- no v2 Permission/Authorization/StartIntent/autonomy authority imports
+- immutable/digest-bound artifacts and review
+- reproducible run inspection from RunLedger/lineage
+- structured full-text parsing can run without MinerU
+- compliant acquisition cache/provenance works on representative sources
+- OLED evidence can be traced to source locators
+- exporter failure is non-fatal
+- minimal installation does not require BR1 or MinerU
+- BR1 remains available through the frozen v1 reference until v2 parity passes
+- default cutover occurs only after B0-B4 and Owner approval
+
+## 19. Non-goals for the current refactor
+
+Current Core v2 does not aim to:
+
+- become a universal production Agent platform
+- support all scientific domains
+- maintain full v1 API compatibility
+- implement multi-agent teams
+- implement autonomous long-running authority leases
+- implement research-grade error propagation experiments
+- automate wet-lab execution
+- provide unrestricted shell or browser authority
+- ship a complete UI before core acceptance
+
+## 20. Owner review checklist
+
+Before enabling production Goal-mode work, verify:
+
+- [ ] core scope is approved
+- [ ] v1 freeze/rollback reference exists
+- [ ] exact-HEAD migration matrix is complete
+- [ ] acquisition security policy is frozen
+- [ ] minimal core contract is accepted
+- [ ] CI/dependency boundaries are frozen
+- [ ] representative fixtures are frozen
+- [ ] Goal-mode contract is frozen
+- [ ] readiness C0-C7 are evidence-backed PASS
+
+Before CORE-08, additionally verify:
+
+- [ ] B0-B4 are evidence-backed PASS
+- [ ] fresh-real BR1 parity report is accepted
+- [ ] Owner explicitly approves default cutover
