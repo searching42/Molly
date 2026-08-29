@@ -66,7 +66,7 @@ is non-binding and is not authorized for implementation.
 
 - Preserve the v1 freeze/tag/legacy rollback line; never force-move a freeze
   tag or delete legacy BR1 before cutover gates pass.
-- Keep one report at `docs/v2/reports/CORE-XX.md` per milestone and retain
+- Keep one report under `docs/v2/reports/` per milestone and retain
   independent, non-squashed milestone commits.
 - Run the repository's real compile, diff, targeted, and relevant regression
   commands; do not claim fresh-real BR1, remote, GPU, private-data, or

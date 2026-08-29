@@ -21,8 +21,8 @@ deletion, or BR1 parity claims.
 Instruction and project guidance loaded for this audit:
 
 - user-provided `AGENTS.md` validation policy in the task context;
-- `/Users/benton/openclaw-docker/workspace/AGENTS.md`;
-- `/Users/benton/openclaw-docker/workspace/agent/CLAUDE.md`;
+- the parent workspace `AGENTS.md`;
+- the legacy repository `CLAUDE.md`;
 - `/Users/benton/.codex/skills/ai4s-project-progress/SKILL.md`;
 - `/Users/benton/openclaw-docker/workspace/SOUL.md`;
 - the uploaded Goal-mode launcher.
@@ -78,10 +78,10 @@ checked against the repository root, `src/ai4s_agent`, and the checked-in
 - 35 literal path references were identified;
 - 32 literal references resolve at HEAD;
 - 3 literal references remain unresolved and require disposition clarification:
-  - `src/ai4s_agent/artifact_registry.py` (a related file exists under
-    `src/ai4s_agent/provenance/artifact_registry.py`);
-  - `src/ai4s_agent/controller.py`;
-  - `src/ai4s_agent/replanner.py`;
+  - the matrix's legacy `artifact_registry.py` location (a related file exists
+    under `src/ai4s_agent/provenance/artifact_registry.py`);
+  - the matrix's legacy `controller.py` location;
+  - the matrix's legacy `replanner.py` location;
 - 32 additional entries are intentionally semantic/group references rather than
   exact file paths and require owner/maintainer interpretation before migration.
 
