@@ -48,6 +48,13 @@ INFRASTRUCTURE_HOSTNAME_PATTERN = re.compile(
 IPV4_PATTERN = re.compile(
     rb"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])"
 )
+UV_LOCK_DEPENDENCY_VERSION_LINE = re.compile(
+    rb'^[ \t]*version[ \t]*=[ \t]*"(?P<version>(?:[0-9]+\.){3}[0-9]+)"[ \t]*$',
+    re.MULTILINE,
+)
+UV_LOCK_PYPI_ARTIFACT_VERSION = re.compile(
+    rb'https://files\.pythonhosted\.org/[^"\r\n]*/[^/"\r\n]*[-_](?P<version>(?:[0-9]+\.){3}[0-9]+)(?=[-.][A-Za-z0-9])'
+)
 SAFE_IPV4_NETWORKS = (
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("192.0.2.0/24"),
@@ -123,7 +130,9 @@ def _tracked_paths() -> list[Path]:
     ]
 
 
-def _generic_privacy_findings(payload: bytes) -> list[str]:
+def _generic_privacy_findings(
+    payload: bytes, *, relative_path: Path | None = None
+) -> list[str]:
     findings: list[str] = []
     for pattern in ABSOLUTE_USER_HOME_PATTERNS:
         for match in pattern.finditer(payload):
@@ -133,7 +142,20 @@ def _generic_privacy_findings(payload: bytes) -> list[str]:
     if INFRASTRUCTURE_HOSTNAME_PATTERN.search(payload):
         findings.append("infrastructure-style numbered hostname")
 
+    ignored_ipv4_spans: tuple[tuple[int, int], ...] = ()
+    if relative_path == Path("uv.lock"):
+        ignored_ipv4_spans = tuple(
+            (match.start("version"), match.end("version"))
+            for pattern in (
+                UV_LOCK_DEPENDENCY_VERSION_LINE,
+                UV_LOCK_PYPI_ARTIFACT_VERSION,
+            )
+            for match in pattern.finditer(payload)
+        )
+
     for match in IPV4_PATTERN.finditer(payload):
+        if any(start <= match.start() < end for start, end in ignored_ipv4_spans):
+            continue
         try:
             address = ipaddress.ip_address(match.group().decode("ascii"))
         except ValueError:
@@ -228,7 +250,7 @@ def test_tracked_repository_has_no_generic_private_infrastructure_markers() -> N
         payload = path.read_bytes()
         relative = path.relative_to(REPOSITORY_ROOT)
         searchable = payload + b"\n" + relative.as_posix().encode()
-        for category in _generic_privacy_findings(searchable):
+        for category in _generic_privacy_findings(searchable, relative_path=relative):
             findings.append(f"{relative}: {category}")
     assert findings == []
 
@@ -292,6 +314,31 @@ def test_generic_privacy_scanner_detects_synthetic_private_shapes(
     expected_category: str,
 ) -> None:
     assert expected_category in _generic_privacy_findings(private_value)
+
+
+def test_uv_lock_dependency_version_is_not_treated_as_an_ipv4_address() -> None:
+    payload = b'version = "13.0.' + b'3.0"\n'
+
+    assert _generic_privacy_findings(payload, relative_path=Path("uv.lock")) == []
+
+
+def test_uv_lock_source_url_ipv4_remains_a_privacy_finding() -> None:
+    payload = (
+        b'source = { url = "http://10.'
+        + b'23.45.67/simple" }\n'
+    )
+
+    assert _generic_privacy_findings(
+        payload, relative_path=Path("uv.lock")
+    ) == ["non-example IPv4 address"]
+
+
+def test_four_component_version_is_still_a_finding_outside_uv_lock_version_fields() -> None:
+    payload = b'version = "13.0.' + b'3.0"\n'
+
+    assert _generic_privacy_findings(payload, relative_path=Path("notes.txt")) == [
+        "non-example IPv4 address"
+    ]
 
 
 @pytest.mark.parametrize(

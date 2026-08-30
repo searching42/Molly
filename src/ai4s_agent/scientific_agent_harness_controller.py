@@ -226,6 +226,14 @@ _TERMINAL_CONTROLLER_ACTIONS = frozenset(
     }
 )
 
+_HUMAN_REMOTE_CONTINUATION_ACTIONS = frozenset(
+    {
+        AgentHarnessControllerAction.DISPATCH_REMOTE_TASK,
+        AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+        AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
+    }
+)
+
 
 def controller_action_boundary_class(
     action: AgentHarnessControllerAction,
@@ -549,6 +557,16 @@ class ScientificAgentHarnessController:
         usage_kind = service.usage_kind_for_controller_action(selected)
         if usage_kind is None:
             return None
+        human_authorized_remote = self._has_exact_human_remote_approval(
+            execution=execution,
+            action=selected,
+        )
+        if human_authorized_remote:
+            # Explicit human approval is a separate authority path.  It does
+            # not consume or renew autonomous lease budget, and the remote
+            # runtime-evidence guard and autonomous lease checks apply only to
+            # autonomous work.
+            return None
         try:
             require_remote_runtime = getattr(
                 service,
@@ -572,6 +590,107 @@ class ScientificAgentHarnessController:
             raise ScientificAgentHarnessControllerLeaseBlocked(
                 exc.reason_code
             ) from exc
+
+    def _has_exact_human_remote_approval(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        action: AgentHarnessControllerAction,
+        decision: AgentHarnessControllerDecision | None = None,
+    ) -> bool:
+        """Verify the persisted approval for one exact remote lifecycle.
+
+        The remote approval is a human authority path, not an autonomy lease
+        grant.  This check deliberately re-reads the request, slot binding,
+        and approval from their immutable server-owned stores before allowing
+        the exact dispatch, refresh, or adoption continuation to bypass
+        autonomous lease verification and accounting.  No
+        conversation/session projection is used as authority.
+        """
+
+        if action not in _HUMAN_REMOTE_CONTINUATION_ACTIONS:
+            return False
+
+        if decision is None:
+            inspection = self._inspect(execution)
+            if (
+                inspection.next_action != action
+                or inspection.current_task_index is None
+            ):
+                return False
+            slot = self._current_slot(execution, inspection)
+        else:
+            if (
+                decision.action_kind != action
+                or decision.controller_execution_id
+                != execution.controller_execution_id
+                or decision.controller_execution_digest != execution.execution_digest
+                or decision.task_index is None
+                or not 0 <= decision.task_index < len(execution.task_slots)
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "remote decision is not bound to the current Controller execution"
+                )
+            slot = execution.task_slots[decision.task_index]
+            if (
+                decision.task_id != slot.task_id
+                or decision.slot_id != slot.slot_id
+                or decision.attempt_ordinal != slot.attempt
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "remote decision is not bound to the current task slot"
+                )
+
+        if slot.execution_route != "remote_execution_service":
+            raise ScientificAgentHarnessControllerVerificationError(
+                "human remote approval is bound to a non-remote task"
+            )
+
+        binding = self._remote_slot_binding(execution, slot)
+        remote = self._remote_inspection(execution, slot)
+        request = remote.get("request")
+        remote_binding = remote.get("slot_binding")
+        approval = remote.get("approval")
+        if not isinstance(request, dict) or not isinstance(remote_binding, dict):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote approval evidence lacks its exact request binding"
+            )
+        if approval is None:
+            return False
+        if not isinstance(approval, dict):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote approval evidence is invalid"
+            )
+
+        expected_binding = binding.model_dump(mode="json")
+        if (
+            remote_binding != expected_binding
+            or remote.get("slot_binding_digest") != binding.slot_binding_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote approval slot binding is stale"
+            )
+        if (
+            request.get("project_id") != execution.project_id
+            or request.get("run_id") != execution.run_id
+            or request.get("task_id") != slot.task_id
+            or request.get("request_id") != binding.request_id
+            or request.get("request_sha256") != binding.request_sha256
+            or remote.get("request_digest") != binding.request_sha256
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote approval request identity is stale"
+            )
+        if (
+            approval.get("request_id") != request.get("request_id")
+            or approval.get("request_sha256") != request.get("request_sha256")
+            or not approval.get("approval_sha256")
+            or remote.get("approval_digest") != approval.get("approval_sha256")
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote approval digest binding is stale"
+            )
+        return True
 
     @staticmethod
     def _is_current_controller_policy(
@@ -2493,29 +2612,34 @@ class ScientificAgentHarnessController:
                         current_inspection,
                     )
                     if lease_service is not None and decision.executable:
-                        if self._decision_has_durable_effect(
+                        if not self._has_exact_human_remote_approval(
                             execution=execution,
+                            action=decision.action_kind,
                             decision=decision,
                         ):
-                            # A known Controller effect may be reconciled
-                            # after a process restart even when the lease's
-                            # wall-clock window has expired.  This path never
-                            # creates a new reservation or dispatches an
-                            # adapter.
-                            lease_service.reconcile_controller_effect(
+                            if self._decision_has_durable_effect(
                                 execution=execution,
                                 decision=decision,
-                            )
-                            reconcile_only = True
-                        else:
-                            # This is the effect boundary: the lease service
-                            # repeats current-grant verification and performs
-                            # the aggregate check-and-reserve while holding the
-                            # lease-level process lock.
-                            lease_operation = lease_service.begin_controller_effect(
-                                execution=execution,
-                                decision=decision,
-                            )
+                            ):
+                                # A known Controller effect may be reconciled
+                                # after restart even when the lease's
+                                # wall-clock window has expired.  This path
+                                # never creates a new reservation or dispatches
+                                # an adapter.
+                                lease_service.reconcile_controller_effect(
+                                    execution=execution,
+                                    decision=decision,
+                                )
+                                reconcile_only = True
+                            else:
+                                # This is the effect boundary: the lease
+                                # service repeats current-grant verification
+                                # and performs the aggregate check-and-reserve
+                                # while holding the lease-level process lock.
+                                lease_operation = lease_service.begin_controller_effect(
+                                    execution=execution,
+                                    decision=decision,
+                                )
                     receipt = self._execute_decision(
                         execution,
                         decision,
