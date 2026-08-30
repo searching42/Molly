@@ -1,0 +1,42 @@
+{
+  "schema_version": "molly_core_v2_literature_fixture_manifest.v1",
+  "status": "FROZEN_OFFLINE_SYNTHETIC_CONTRACT",
+  "fixture_policy": {
+    "redistributable": true,
+    "external_full_text_included": false,
+    "scientific_claims": false,
+    "network_required": false
+  },
+  "fixtures": [
+    {
+      "fixture_id": "minimal-jats-xml",
+      "path": "tests/fixtures/v2/synthetic/minimal.jats.xml",
+      "format": "JATS/XML",
+      "source": "synthetic://molly-core-v2/minimal-jats-001",
+      "license_or_access_status": "synthetic-public-safe",
+      "content_family": "xml",
+      "sha256": "784735519f4012f07a0a42a103aeecc51fa7b48e0ec89b072c6bfb2ffaafd544"
+    },
+    {
+      "fixture_id": "minimal-html",
+      "path": "tests/fixtures/v2/synthetic/minimal.html",
+      "format": "HTML",
+      "source": "synthetic://molly-core-v2/minimal-html-001",
+      "license_or_access_status": "synthetic-public-safe",
+      "content_family": "html",
+      "sha256": "04675438ee754a6e6d0ffc5e8be7eb14989743f6b1197a2f58c65b295e8da053"
+    }
+  ],
+  "pdf": {
+    "included": false,
+    "reason": "No reviewed redistributable PDF was present at the C6 audit; no license was inferred."
+  },
+  "real_literature_manifest_fields": [
+    "doi",
+    "canonical_source",
+    "provider",
+    "license_access_status",
+    "expected_acquisition_route",
+    "expected_content_family"
+  ]
+}
