@@ -1,6 +1,6 @@
 # Pre-CORE-02 Full CI Remediation
 
-Status: remediation in progress; CORE-02 has not started.
+Status: remediation complete; CORE-02 has not started.
 
 ## Scope and baseline
 
@@ -106,12 +106,20 @@ Completed focused checks:
 PR Fast: passed — 1,526 passed, 5,664 deselected in 225.93s
 (`PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20`).
 
-Full CI: passed — run `33298428018` on
-`cabdb9ed01dda65e1d04b0d2a457352358283cdd`.
+Final Full CI: passed — run `33299345904` on the exact remediation
+code/test HEAD `73bab404b927c4d86b5cf8f67e8f93ade5652a8d`.
 
 The compile/shard-policy job and all four weighted pytest shards passed:
-shard 0 in 10m46s, shard 1 in 13m34s, shard 2 in 16m16s, and shard 3 in
-20m58s. See the [Full CI run](https://github.com/searching42/Molly/actions/runs/33298428018).
+compile/shard policy in 7s, shard 0 in 14m1s, shard 1 in 12m21s, shard 2 in
+11m51s, and shard 3 in 20m49s. See the
+[final Full CI run](https://github.com/searching42/Molly/actions/runs/33299345904).
+
+The preceding documentation-corrected validation run was
+`33298428018` on `cabdb9ed01dda65e1d04b0d2a457352358283cdd`; it also passed
+the compile/shard-policy job and all four weighted pytest shards. The final
+run above verifies the remediation code/test HEAD after the report was
+updated to record the final evidence. Any subsequent report-only commit does
+not change executable code or test collection.
 
 The first follow-up Full CI attempt was run `33297534349` at
 `b3c6cd7a19587d0763bc05bce6931ba1b138c5e2`. Shards 1, 2, and 3 passed. Shard
