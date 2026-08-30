@@ -2,7 +2,7 @@
 
 Status: `BLOCKED_PRE_IMPLEMENTATION`
 
-Date: 2026-08-29 (Asia/Shanghai)
+Date: 2026-08-30 (Asia/Shanghai)
 
 This report records the read-only preflight required by the Core v2 Goal-mode
 launcher. It does not authorize production implementation, v1 cutover, legacy
@@ -11,24 +11,17 @@ deletion, or BR1 parity claims.
 ## Baseline and instruction chain
 
 - Repository: `searching42/Molly`
-- Worktree: `/Users/benton/Documents/ChatGPT/Molly v2/core-v2-launcher-1-2`
+- Worktree: `<WORKTREE_ROOT>`
 - Branch: `codex/molly-core-v2-launcher-1-2`
 - Exact HEAD: `ae7892dbf8a6bfe85dd909056eadc2afecc40d9d`
 - Candidate audit baseline from readiness: `4352f137db3976cff31bf6cb30f543caa38f8013`
 - HEAD is based on the candidate plus the merged Core v2 preflight docs; no v1
   freeze commit, tag, or legacy branch is recorded.
 
-Instruction and project guidance loaded for this audit:
-
-- user-provided `AGENTS.md` validation policy in the task context;
-- the parent workspace `AGENTS.md`;
-- the legacy repository `CLAUDE.md`;
-- `/Users/benton/.codex/skills/ai4s-project-progress/SKILL.md`;
-- `/Users/benton/openclaw-docker/workspace/SOUL.md`;
-- the uploaded Goal-mode launcher.
-
-`USER.md`, `MEMORY.md`, and the current/previous daily memory files were not
-present under `/Users/benton/openclaw-docker/workspace`.
+Applicable non-repository instructions were considered during execution,
+including the task-provided validation policy, repository guidance, the local
+project-progress skill, and the user-provided Goal-mode launcher. These
+instructions are execution context only and are not repository authority.
 
 ## Authority and digest verification
 
@@ -85,10 +78,11 @@ checked against the repository root, `src/ai4s_agent`, and the checked-in
 - 32 additional entries are intentionally semantic/group references rather than
   exact file paths and require owner/maintainer interpretation before migration.
 
-The v2 implementation locations are not present yet, as required by the gate:
-`src/molly/`, `plugins/br1_inverse_design/`, `plugins/remote_compute/`,
-`tests/molly/`, `scripts/v2/`, and `docs/v2/reports/` were absent before this
-report was added. No production runtime code was changed.
+The v2 implementation locations were not present at the audit baseline, as
+required by the gate: `src/molly/`, `plugins/br1_inverse_design/`,
+`plugins/remote_compute/`, `tests/molly/`, and `scripts/v2/` were absent before
+this report was added. The report directory is now present for evidence only.
+No production runtime code was changed.
 
 ## CI and dependency boundary inventory
 

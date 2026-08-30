@@ -5,13 +5,13 @@
   "core_spec_path": "docs/v2/MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md",
   "core_spec_sha256": "0f6c8a0e0c7ef6d1fc19b7c73ed9375f6cc6304f463f42e7bc6175ae6e0a55c7",
   "core_matrix_path": "docs/v2/MOLLY_CORE_MODULE_DISPOSITION_MATRIX_V1_1_BR1_HARDENED.csv",
-  "core_matrix_sha256": "2c2eb52e902cdfeac01fa8ac05c6872f4782a0bc8c4d02937bc1338cfef80e3d",
-  "v1_freeze_commit": null,
-  "v1_freeze_tag": null,
-  "legacy_branch": null,
+  "core_matrix_sha256": "d26366996db3df2783b3c0fcc8b03981902c2400c1dd6128d436fcdfb2d4fca4",
+  "v1_freeze_commit": "ae7892dbf8a6bfe85dd909056eadc2afecc40d9d",
+  "v1_freeze_tag": "molly-v1-pre-core-v2-20260829",
+  "legacy_branch": "legacy/molly-v1",
   "conditions": {
-    "C0": "PENDING",
-    "C1": "PENDING",
+    "C0": "PASS",
+    "C1": "PASS",
     "C2": "PENDING",
     "C3": "PENDING",
     "C4": "PENDING",
@@ -20,9 +20,9 @@
     "C7": "PENDING"
   },
   "condition_notes": {
-    "C0": "Core spec is staged as OWNER_REVIEWED_DRAFT_V1_2; explicit final APPROVED state has not been recorded in-repository.",
-    "C1": "Exact immutable v1 freeze tag and legacy branch have not yet been created or verified.",
-    "C2": "CORE-00 exact-HEAD audit is recorded in docs/v2/reports/CORE-00.md at ae7892dbf8a6bfe85dd909056eadc2afecc40d9d: 50 matrix rows reviewed, 35 literal references classified, 32 resolved, 3 unresolved, and 32 semantic/group references requiring maintainer disposition. C2 remains PENDING.",
+    "C0": "PASS: docs/v2/decisions/CORE_V2_SCOPE_APPROVAL.md records Owner approval for the exact Core spec digest and explicitly excludes error-propagation implementation, default cutover, and legacy deletion.",
+    "C1": "PASS: docs/v2/V1_ROLLBACK_AND_EVIDENCE_INVENTORY.md records the immutable freeze commit, tag, legacy branch, rollback commands, v1 BR1 evidence, BR2 inventory, and limitations; remote refs were verified to point to ae7892dbf8a6bfe85dd909056eadc2afecc40d9.",
+    "C2": "PASS: docs/v2/audit/V1_FILE_DISPOSITION_INVENTORY.csv contains one closed disposition for all 453 tracked src/ai4s_agent Python implementation files, generated from exact HEAD bc379401fd4d88efc714fb878628cb29e49765d2; AST parsing had 0 errors across 5,144 import nodes. The reconciled matrix is d26366996db3df2783b3c0fcc8b03981902c2400c1dd6128d436fcdfb2d4fca4, and the inventory digest is 6dc12b0a6d430e9fe6a31c38c3bfde2a12443dbe0dbdafb760859bd596ab83b3.",
     "C3": "Provider allowlist, SSRF/download limits, credential profiles, license/provenance schema and private/public artifact boundaries remain to be frozen.",
     "C4": "Minimal RunRequest -> ToolRegistry -> ToolPolicy -> tool -> ArtifactStore -> RunLedger -> lineage spike has not yet been evidenced.",
     "C5": "CORE-00 inventoried the real PR Fast and Full CI commands and current extras in docs/v2/reports/CORE-00.md; uv.lock is stale relative to pyproject.toml, and v2 migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
@@ -30,7 +30,7 @@
     "C7": "CORE-00 recorded the loaded repository instruction chain, exact HEAD, stop conditions, and current launcher/readiness resolution in docs/v2/reports/CORE-00.md; the preparation-only contract is now recorded in docs/v2/CODEX_GOAL_EXECUTION_CONTRACT.md, while final contract approval and owner-frozen baseline remain pending."
   },
   "br1_cutover_conditions": {
-    "B0": "PENDING",
+    "B0": "PASS",
     "B1": "PENDING",
     "B2": "PENDING",
     "B3": "PENDING",
@@ -48,5 +48,5 @@
   "error_propagation_extension_implementation_authorized": false,
   "owner_decision": "PENDING_FINAL_READINESS",
   "readiness_rule": "core_goal_mode_ready is true iff C0-C7 are all PASS; core_cutover_ready is true iff C0-C7 and B0-B4 are all PASS and Owner explicitly approves cutover.",
-  "last_updated": "2026-08-29"
+  "last_updated": "2026-08-30"
 }

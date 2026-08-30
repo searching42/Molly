@@ -10,8 +10,7 @@ approval and not an implementation authorization.
 
 ## Authoritative inputs
 
-The launcher is the user-provided file
-`/Users/benton/Downloads/CODEX_GOAL_MOLLY_CORE_V2_LAUNCHER_V1_2.md`. Before any
+The launcher is the user-provided `<USER_PROVIDED_LAUNCHER>`. Before any
 production implementation, the runner must verify these repository files at
 the exact implementation HEAD:
 

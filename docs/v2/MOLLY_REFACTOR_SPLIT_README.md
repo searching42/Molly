@@ -104,7 +104,7 @@ docs/v2/
 
 ```yaml
 core_spec_digest: 0f6c8a0e0c7ef6d1fc19b7c73ed9375f6cc6304f463f42e7bc6175ae6e0a55c7
-core_matrix_digest: 2c2eb52e902cdfeac01fa8ac05c6872f4782a0bc8c4d02937bc1338cfef80e3d
+core_matrix_digest: d26366996db3df2783b3c0fcc8b03981902c2400c1dd6128d436fcdfb2d4fca4
 candidate_baseline: 4352f137db3976cff31bf6cb30f543caa38f8013
 core_goal_mode_ready: false
 core_cutover_ready: false
