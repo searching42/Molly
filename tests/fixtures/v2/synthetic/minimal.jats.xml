@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article article-type="research-article" xml:lang="en"
+  xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <article-meta>
+      <article-id pub-id-type="synthetic">molly-v2-minimal-jats-001</article-id>
+      <title-group><article-title>Synthetic OLED fixture</article-title></title-group>
+      <abstract><p>Offline parser contract text only.</p></abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec id="results"><title>Results</title><p>A synthetic observation.</p></sec>
+  </body>
+</article>

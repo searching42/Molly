@@ -23,18 +23,25 @@
     "C0": "PASS: docs/v2/decisions/CORE_V2_SCOPE_APPROVAL.md records Owner approval for the exact Core spec digest and explicitly excludes error-propagation implementation, default cutover, and legacy deletion.",
     "C1": "PASS: docs/v2/V1_ROLLBACK_AND_EVIDENCE_INVENTORY.md records the immutable freeze commit, tag, legacy branch, rollback commands, v1 BR1 evidence, BR2 inventory, and limitations; remote refs were verified to point to ae7892dbf8a6bfe85dd909056eadc2afecc40d9.",
     "C2": "PASS: docs/v2/audit/V1_FILE_DISPOSITION_INVENTORY.csv contains one closed disposition for all 453 tracked src/ai4s_agent Python implementation files, generated from exact HEAD bc379401fd4d88efc714fb878628cb29e49765d2; AST parsing had 0 errors across 5,144 import nodes. The reconciled matrix is d26366996db3df2783b3c0fcc8b03981902c2400c1dd6128d436fcdfb2d4fca4, and the inventory digest is 6dc12b0a6d430e9fe6a31c38c3bfde2a12443dbe0dbdafb760859bd596ab83b3.",
-    "C3": "Provider allowlist, SSRF/download limits, credential profiles, license/provenance schema and private/public artifact boundaries remain to be frozen.",
-    "C4": "Minimal RunRequest -> ToolRegistry -> ToolPolicy -> tool -> ArtifactStore -> RunLedger -> lineage spike has not yet been evidenced.",
-    "C5": "CORE-00 inventoried the real PR Fast and Full CI commands and current extras in docs/v2/reports/CORE-00.md; uv.lock is stale relative to pyproject.toml, and v2 migration/CI suite boundaries and dependency extras remain to be frozen on the implementation baseline.",
-    "C6": "Representative licensed literature samples, OLED gold set and v2 BR1 parity runner/fixtures remain to be frozen.",
+    "C3": "PASS: docs/v2/contracts/ACQUISITION_SECURITY_AND_PROVENANCE.md freezes the closed OpenAlex/Crossref/Unpaywall/legal-source boundary, SSRF/DNS/redirect/size/type/timeout/rate/retry/cache rules, credential and artifact-class rules, provenance fields, prohibited bypasses, and adversarial test requirements; SHA-256 5e52b41fc9e2c516ab3f37d2df6dc96c5abdc78c7ed6482f01471c0ace590f0d.",
+    "C4": "PASS: docs/v2/reports/C4_CORE_CONTRACT_SPIKE.md records the isolated non-production spike and its result; tests/test_core_v2_contract_spike.py passed 13 tests; report SHA-256 554c4510d951997ed11db2faacce3286efe24812ee7ee345eec1d366e4578efa.",
+    "C5": "PASS: docs/v2/contracts/PACKAGE_DEPENDENCY_AND_CI_BOUNDARY.md freezes core/minimal, optional profile, and future CI-lane responsibilities; uv.lock was regenerated only from the current pyproject.toml, reviewed as 21 to 177 package entries with no pre-existing version changes or non-registry source, and uv lock --check passed. Contract SHA-256 ea79e7ece29b6fa9b99add50622b8ec0d22fad2235db1a3fe606e74b735eafe4; uv.lock SHA-256 f204dc52afd4d2b50e58651e75bb75a8f6fa0a0192d9f17e03c79891122b30c4.",
+    "C6": "PASS: docs/v2/fixtures/literature_fixture_manifest.json, oled_gold_fixture.json, and br1_parity_manifest.json freeze offline parser inputs, synthetic OLED identity/value/unit/condition/locator/conflict coverage, and the BR1 parity stages/invariants without a fresh-real claim; tests/test_core_v2_fixture_manifests.py passed 3 tests. Manifest SHA-256 values are 626792c1be7d00eb6da884e6cc100cf4e404a5bf0a924e1c2f2dc51deb992a03, 265c01225893a95e9eca034fb9fa6fb7a09ea28a281e4602a58de952006e8512, and 66734335c2707712049ef977f23f14eee9bdae35201471de4e34ebff844ff99c8.",
     "C7": "CORE-00 recorded the loaded repository instruction chain, exact HEAD, stop conditions, and current launcher/readiness resolution in docs/v2/reports/CORE-00.md; the preparation-only contract is now recorded in docs/v2/CODEX_GOAL_EXECUTION_CONTRACT.md, while final contract approval and owner-frozen baseline remain pending."
   },
   "br1_cutover_conditions": {
     "B0": "PASS",
-    "B1": "PENDING",
+    "B1": "PASS",
     "B2": "PENDING",
     "B3": "PENDING",
     "B4": "PENDING"
+  },
+  "br1_condition_notes": {
+    "B0": "PASS: immutable v1 reference and rollback/evidence inventory are recorded in docs/v2/V1_ROLLBACK_AND_EVIDENCE_INVENTORY.md.",
+    "B1": "PASS_CONTRACT_ONLY: docs/v2/fixtures/br1_parity_manifest.json freezes the required v2 BR1 stages, invariants, current-run binding, stale-artifact rejection, and deterministic terminal replay contract; it makes no fresh-real parity claim.",
+    "B2": "PENDING: no fresh-real v2 BR1 run was performed in CORE-00.",
+    "B3": "PENDING: no v2 remote-restart canary was performed in CORE-00.",
+    "B4": "PENDING: default cutover is not authorized by this Goal."
   },
   "br1_reference_evidence": {
     "acceptance_readme": "docs/evidence/br1-conversation-real-acceptance-v1/README.md",

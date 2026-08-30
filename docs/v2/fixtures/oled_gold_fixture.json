@@ -1,0 +1,57 @@
+{
+  "schema_version": "molly_core_v2_oled_gold_fixture.v1",
+  "status": "FROZEN_PUBLIC_SAFE_SYNTHETIC_CONTRACT",
+  "scientific_claims": false,
+  "value_status": "synthetic_fixture_value_only",
+  "source_fixture": "tests/fixtures/phase3_to_phase1/parsed_document.json",
+  "source_fixture_sha256": "e14b8bdb7b9441b8c695d4f6ed68df59691c39ad8dad115732ab7da3852c4f8c",
+  "source_note": "The source fixture explicitly states that all values are synthetic and generated for offline deterministic tests; these records are not experimental values.",
+  "records": [
+    {
+      "record_id": "oled-v2-001",
+      "molecule_identity": {"smiles": "CCO", "identity_basis": "fixture-canonical-string"},
+      "property": {"property_id": "plqy", "value": 0.65, "unit": "fraction"},
+      "measurement_condition": {"condition_status": "synthetic-fixture-condition", "medium": "not_applicable"},
+      "source_locator": {"path": "tests/fixtures/phase3_to_phase1/parsed_document.json", "page": 2, "table_id": "table_oled_001", "row_id": "row_000001"},
+      "claim_level": "synthetic_contract_only",
+      "duplicate_group": "cco-plqy",
+      "duplicate_relation": "primary"
+    },
+    {
+      "record_id": "oled-v2-002",
+      "molecule_identity": {"smiles": "CCO", "identity_basis": "fixture-canonical-string"},
+      "property": {"property_id": "plqy", "value": 0.66, "unit": "fraction"},
+      "measurement_condition": {"condition_status": "synthetic-fixture-condition", "medium": "not_applicable"},
+      "source_locator": {"path": "tests/fixtures/phase3_to_phase1/parsed_document.json", "page": 2, "table_id": "table_oled_001", "row_id": "row_000006"},
+      "claim_level": "synthetic_contract_only",
+      "duplicate_group": "cco-plqy",
+      "duplicate_relation": "consistent_duplicate_candidate"
+    },
+    {
+      "record_id": "oled-v2-003",
+      "molecule_identity": {"smiles": "CCN", "identity_basis": "fixture-canonical-string"},
+      "property": {"property_id": "plqy", "value": 0.58, "unit": "fraction"},
+      "measurement_condition": {"condition_status": "synthetic-fixture-condition", "medium": "not_applicable"},
+      "source_locator": {"path": "tests/fixtures/phase3_to_phase1/parsed_document.json", "page": 2, "table_id": "table_oled_001", "row_id": "row_000002"},
+      "claim_level": "synthetic_contract_only",
+      "duplicate_group": "ccn-plqy-conflict",
+      "duplicate_relation": "conflict_candidate"
+    },
+    {
+      "record_id": "oled-v2-004",
+      "molecule_identity": {"smiles": "CCN", "identity_basis": "fixture-canonical-string"},
+      "property": {"property_id": "plqy", "value": 0.91, "unit": "fraction"},
+      "measurement_condition": {"condition_status": "synthetic-fixture-condition", "medium": "not_applicable"},
+      "source_locator": {"path": "tests/fixtures/phase3_to_phase1/parsed_document.json", "page": 2, "table_id": "table_oled_001", "row_id": "row_000012"},
+      "claim_level": "synthetic_contract_only",
+      "duplicate_group": "ccn-plqy-conflict",
+      "duplicate_relation": "conflicting_duplicate_candidate"
+    }
+  ],
+  "required_invariants": [
+    "molecule identity, property value, unit, measurement condition, source locator, and claim level are present",
+    "consistent duplicate candidates are visible to a tolerance policy",
+    "conflicting duplicate candidates remain review-required and are not silently merged",
+    "fixture-only values cannot be reported as experimental or computational claims"
+  ]
+}

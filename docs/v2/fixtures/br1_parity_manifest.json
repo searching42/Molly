@@ -1,0 +1,48 @@
+{
+  "schema_version": "molly_core_v2_br1_parity_contract.v1",
+  "status": "FROZEN_CONTRACT_NO_FRESH_REAL_RUN",
+  "runner_mode": "offline_synthetic_contract_only",
+  "fresh_real_run_evidence": false,
+  "gpu_used_in_C6": false,
+  "remote_used_in_C6": false,
+  "source_v1_acceptance": {
+    "readme": "docs/evidence/br1-conversation-real-acceptance-v1/README.md",
+    "readme_sha256": "784976fdc739c266c1af47570e943ddd8b59a0e1341d78fb19ccc0fe273874c4",
+    "manifest": "docs/evidence/br1-conversation-real-acceptance-v1/acceptance_manifest.json",
+    "manifest_sha256": "fdbad5cccbd096bba390a5926671ecdab864d50877c24cf1d3eb66acd9c38bd2",
+    "known_v1_runtime_verified": true
+  },
+  "required_stages": [
+    {"stage": "reviewed_current_run_dataset", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "applicability_preflight", "required": true, "artifact_class": "PUBLIC_ARTIFACT"},
+    {"stage": "fresh_unimol_training", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "model_package", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "real_reinvent4_generation", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "generation_package", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "current_model_prediction", "required": true, "artifact_class": "PRIVATE_ARTIFACT_OR_PUBLIC_REVIEWED_ARTIFACT"},
+    {"stage": "deterministic_candidate_evaluation", "required": true, "artifact_class": "PUBLIC_ARTIFACT"},
+    {"stage": "verified_computational_top_n_projection", "required": true, "artifact_class": "PUBLIC_ARTIFACT"}
+  ],
+  "required_invariants": [
+    "fresh training is explicit and cannot be satisfied by a historical model",
+    "model package is bound to the current run and exact dataset digest",
+    "generation, prediction, and evaluation artifacts share current-run lineage",
+    "stale or foreign artifacts are rejected",
+    "scientific claims remain bounded to computational or fixture status",
+    "frozen terminal inputs have deterministic replay output"
+  ],
+  "synthetic_contract_runner": {
+    "test_path": "tests/test_core_v2_fixture_manifests.py",
+    "network": false,
+    "llm": false,
+    "gpu": false,
+    "remote_compute": false,
+    "fresh_real_parity_claim": false
+  },
+  "cutover_state": {
+    "B1": "PASS_CONTRACT_ONLY",
+    "B2": "PENDING_FRESH_REAL_BR1",
+    "B3": "PENDING_REMOTE_RESTART_CANARY",
+    "B4": "PENDING_OWNER_CUTOVER_APPROVAL"
+  }
+}
