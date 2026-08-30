@@ -137,6 +137,7 @@ def _default_connection_factory(
     try:
         raw.connect((address, route.port, 0, 0) if ip.version == 6 else (address, route.port))
         context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         # The IP is used for the TCP connection; the configured DNS hostname
         # is retained for certificate verification and SNI.
         return context.wrap_socket(raw, server_hostname=route.host)

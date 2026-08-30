@@ -6,6 +6,7 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import ssl
 from typing import Any
 
 import pytest
@@ -37,6 +38,7 @@ from molly.acquisition import (
     validate_resolved_addresses,
 )
 from molly.acquisition.errors import AcquisitionTimeoutError
+import molly.acquisition.transport as acquisition_transport
 from molly.core import (
     AgentLoop,
     ArtifactLineage,
@@ -617,6 +619,49 @@ def test_safe_transport_connects_to_validated_ip_and_keeps_dns_hostname_for_rout
     assert response.body == b"{}"
     assert connections == [(_public_ip(), "api.example.org")]
     assert resolver.calls == [("api.example.org", 443)]
+
+
+def test_default_connection_factory_requires_tls12_and_preserves_sni(monkeypatch) -> None:
+    route, _ = _transport_route()
+    raw_connections = []
+    contexts = []
+
+    class RawSocket:
+        def settimeout(self, value: float) -> None:
+            self.timeout = value
+
+        def connect(self, address) -> None:
+            self.address = address
+
+        def close(self) -> None:
+            return None
+
+    class TLSContext:
+        minimum_version = None
+
+        def wrap_socket(self, raw, *, server_hostname: str):
+            self.raw = raw
+            self.server_hostname = server_hostname
+            return self
+
+    def make_socket(*args, **kwargs):
+        raw = RawSocket()
+        raw_connections.append(raw)
+        return raw
+
+    def make_context():
+        context = TLSContext()
+        contexts.append(context)
+        return context
+
+    monkeypatch.setattr(acquisition_transport.socket, "socket", make_socket)
+    monkeypatch.setattr(acquisition_transport.ssl, "create_default_context", make_context)
+    result = acquisition_transport._default_connection_factory(_public_ip(), route, 3.0)
+
+    assert result is contexts[0]
+    assert contexts[0].minimum_version is ssl.TLSVersion.TLSv1_2
+    assert contexts[0].server_hostname == route.host
+    assert raw_connections[0].address == (_public_ip(), route.port)
 
 
 def test_safe_transport_rejects_peer_address_change_before_publishing() -> None:
