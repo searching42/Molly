@@ -18,9 +18,12 @@ The remediation branch is based on `origin/main` at
 ### Shard 1 — generated `uv.lock` version literal
 
 The repository privacy helper applied the generic IPv4 pattern to every byte
-of every tracked file. Four-component dependency versions such as
-`13.0.3.0`, including recognized PyPI artifact filename versions, were
-therefore reported as infrastructure IPv4 addresses.
+of every tracked file. Four-component dependency versions, including
+recognized PyPI artifact filename versions, were
+therefore reported as infrastructure IPv4 addresses. The report deliberately
+uses a symbolic four-component version description rather than reproducing a
+numeric example that would itself be indistinguishable from an IPv4 address
+to the repository scanner.
 
 The fix is a narrow path- and syntax-aware exception for recognized generated
 `uv.lock` dependency-version fields and canonical PyPI artifact version
@@ -105,6 +108,13 @@ PR Fast: passed — 1,526 passed, 5,664 deselected in 225.93s
 
 Full CI: pending. The required follow-up run must pass all four shards on the
 exact pushed remediation HEAD.
+
+The first follow-up Full CI attempt was run `33297534349` at
+`b3c6cd7a19587d0763bc05bce6931ba1b138c5e2`. Shards 1, 2, and 3 passed. Shard
+0 ran 1,704 tests and found one additional repository-privacy finding in this
+report: the explanatory numeric four-component version example. The example
+has been removed; this is a documentation-only correction and does not alter
+the two runtime fixes.
 
 ## Freeze references
 
