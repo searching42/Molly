@@ -16,6 +16,7 @@ import math
 import re
 from types import MappingProxyType
 from typing import Any
+import uuid
 
 from .errors import CoreContractError, PathSecurityError
 
@@ -70,6 +71,13 @@ def validate_identifier(value: str, *, field: str = "identifier") -> str:
             f"{field} must match {_IDENTIFIER_RE.pattern} and contain no path separators"
         )
     return value
+
+
+def new_server_id(prefix: str) -> str:
+    """Create a server-owned globally unique identifier for Core records."""
+
+    validate_identifier(prefix, field="identifier prefix")
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 
 def validate_reference(value: str, *, field: str = "reference") -> str:

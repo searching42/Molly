@@ -341,6 +341,58 @@ class ArtifactLineage:
             append_all(descriptor, persisted.canonical_bytes() + b"\n")
             return persisted
 
+    def add_relation_idempotent(
+        self,
+        relation_type: str | RelationType,
+        subject_id: str,
+        object_id: str,
+        *,
+        relation_id: str,
+        created_at: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> LineageRelation:
+        """Append a deterministic relation, or verify an existing one.
+
+        Execution projections derive relation IDs from a durable success event.
+        Reconciliation may therefore encounter a relation already projected by
+        a previous process.  Identical semantic facts are returned unchanged;
+        a reused ID with different semantics fails closed.
+        """
+
+        relation_type = _relation_value(relation_type)
+        validate_reference(subject_id, field="subject_id")
+        validate_reference(object_id, field="object_id")
+        validate_identifier(relation_id, field="relation_id")
+        requested_timestamp = normalize_timestamp(
+            created_at or utc_timestamp(), field="created_at"
+        )
+        requested_metadata = freeze_json_mapping(
+            {} if metadata is None else metadata, field="lineage metadata"
+        )
+        existing_relations = self.relations
+        for existing in existing_relations:
+            if existing.relation_id != relation_id:
+                continue
+            if (
+                existing.relation_type != relation_type
+                or existing.subject_id != subject_id
+                or existing.object_id != object_id
+                or existing.created_at != requested_timestamp
+                or existing.metadata != requested_metadata
+            ):
+                raise LineageError(
+                    "deterministic lineage relation ID has conflicting semantics"
+                )
+            return existing
+        return self.add_relation(
+            relation_type,
+            subject_id,
+            object_id,
+            relation_id=relation_id,
+            created_at=requested_timestamp,
+            metadata=requested_metadata,
+        )
+
     def register(self, relation: LineageRelation) -> LineageRelation:
         """Append a prebuilt relation using the same integrity checks."""
 
