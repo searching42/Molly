@@ -111,6 +111,10 @@ class ToolSpec:
     output_schema: Mapping[str, Any] = field(default_factory=lambda: {})
     side_effect_class: str | SideEffectClass = SideEffectClass.PURE
     requires_approval: bool = False
+    # A non-secret host/backend binding.  It is part of the exact tool
+    # semantics and therefore the materialized-call digest, but is never
+    # included in the model-facing view.
+    execution_config_digest: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.name, field="tool name")
@@ -120,6 +124,14 @@ class ToolSpec:
         object.__setattr__(self, "side_effect_class", _side_effect_value(self.side_effect_class))
         if not isinstance(self.requires_approval, bool):
             raise ToolContractError("requires_approval must be boolean")
+        if self.execution_config_digest is not None:
+            object.__setattr__(
+                self,
+                "execution_config_digest",
+                validate_digest_reference(
+                    self.execution_config_digest, field="execution_config_digest"
+                ),
+            )
         object.__setattr__(
             self,
             "input_schema",
@@ -132,7 +144,7 @@ class ToolSpec:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "name": self.name,
             "version": self.version,
             "description": self.description,
@@ -141,6 +153,9 @@ class ToolSpec:
             "side_effect_class": self.side_effect_class,
             "requires_approval": self.requires_approval,
         }
+        if self.execution_config_digest is not None:
+            value["execution_config_digest"] = self.execution_config_digest
+        return value
 
     @property
     def spec_digest(self) -> str:

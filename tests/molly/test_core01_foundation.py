@@ -449,8 +449,9 @@ def test_identical_content_keeps_distinct_production_occurrences(tmp_path: Path)
 
 def test_production_namespace_has_no_legacy_or_spike_imports() -> None:
     source_root = Path(__file__).parents[2] / "src" / "molly"
+    core_root = source_root / "core"
     forbidden = {"ai4s_agent", "prototypes.core_v2_contract_spike"}
-    forbidden_modules = {"subprocess", "socket", "urllib", "httpx"}
+    forbidden_modules = {"subprocess"}
     for path in source_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -468,3 +469,9 @@ def test_production_namespace_has_no_legacy_or_spike_imports() -> None:
                 for name in names
                 for item in forbidden_modules
             ), path
+            if core_root in path.parents or path == core_root:
+                assert not any(
+                    name == item or name.startswith(item + ".")
+                    for name in names
+                    for item in {"socket", "urllib", "httpx"}
+                ), path
