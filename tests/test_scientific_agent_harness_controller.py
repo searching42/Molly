@@ -1164,7 +1164,7 @@ def test_production_controller_persists_unknown_effect_after_started_exception(
     ) == []
 
 
-def test_production_remote_controller_fails_closed_without_runtime_evidence(
+def test_production_remote_controller_allows_exact_human_approval_without_runtime_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1214,6 +1214,16 @@ def test_production_remote_controller_fails_closed_without_runtime_evidence(
         run_id="run-1",
         slot_id=slot.slot_id,
     )
+    lease_store = controller.autonomy_lease_service.store
+    leases = lease_store.list_leases(project_id="project-1")
+    assert len(leases) == 1
+    lease = leases[0]
+    lease_receipt_count_before_remote_approval = len(
+        lease_store.list_receipts(
+            project_id="project-1",
+            lease_id=lease.lease_id,
+        )
+    )
     approved = controller.approve_remote(
         project_id="project-1",
         controller_execution_id=created.execution.controller_execution_id,
@@ -1225,17 +1235,23 @@ def test_production_remote_controller_fails_closed_without_runtime_evidence(
         actor="alice",
     )
     assert approved.inspection.next_action == AgentHarnessControllerAction.DISPATCH_REMOTE_TASK
-    with pytest.raises(ScientificAgentHarnessControllerLeaseBlocked) as blocked:
-        controller.advance(
+    dispatched = controller.advance(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+        request=AgentHarnessControllerAdvanceRequest(
+            expected_controller_execution_digest=created.execution.execution_digest,
+            client_request_id="remote-lease-dispatch-1",
+        ),
+    )
+    assert dispatched.receipt is not None
+    assert dispatched.inspection.status.value == "running_remote"
+    assert transport.dispatches == 1
+    assert len(
+        lease_store.list_receipts(
             project_id="project-1",
-            controller_execution_id=created.execution.controller_execution_id,
-            request=AgentHarnessControllerAdvanceRequest(
-                expected_controller_execution_digest=created.execution.execution_digest,
-                client_request_id="remote-lease-dispatch-1",
-            ),
+            lease_id=lease.lease_id,
         )
-    assert blocked.value.reason_code == "AUTONOMY_REMOTE_BUDGET_ENFORCEMENT_UNAVAILABLE"
-    assert transport.dispatches == 0
+    ) == lease_receipt_count_before_remote_approval
 
 
 def test_controller_binds_br1_sources_before_effect_and_replays_exactly(
