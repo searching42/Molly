@@ -248,8 +248,20 @@ PR Fast tested commit: 3b1015f (the subsequent report update is documentation-on
 
 The CORE-01A content/provenance invariants and the merged PR #66 privacy and
 remote-approval behavior are both covered by these checks. Full CI is the
-remaining GitHub verification for the pushed integrated branch; its result is
-recorded here after all four shards complete.
+now-complete GitHub verification for the pushed integrated branch:
+
+```text
+Full CI run: 33303282920
+Full CI tested HEAD: 29e8e1a76c874241b229fc335fb270ee80226344
+compile/shard policy: PASS (7s)
+weighted shard 0: PASS (20m55s)
+weighted shard 1: PASS (15m40s)
+weighted shard 2: PASS (12m14s)
+weighted shard 3: PASS (15m06s)
+```
+
+See the [Full CI run](https://github.com/searching42/Molly/actions/runs/33303282920).
+Any subsequent report-only commit contains no executable or test changes.
 
 ## Known limitations and next milestone dependencies
 
