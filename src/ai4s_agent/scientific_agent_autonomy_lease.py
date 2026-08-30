@@ -1820,11 +1820,12 @@ class AutonomyLeaseService:
 
         The current remote lifecycle exposes status observations but no
         server-owned start/end runtime interval that can enforce the
-        immutable ``max_remote_runtime_seconds`` cap.  Remote dispatch,
-        monitoring, and output adoption therefore remain fail-closed until a
-        trusted lifecycle integration is wired.  This is intentionally a
-        server-only seam; no request, provider, or tool argument can enable
-        it.
+        immutable ``max_remote_runtime_seconds`` cap.  Autonomous remote
+        dispatch, monitoring, and output adoption therefore remain fail-closed
+        until a trusted lifecycle integration is wired.  The server-owned
+        Controller handles an exact human-approved remote request separately,
+        after re-reading and verifying its immutable request, slot, and
+        approval evidence; that path does not enter this autonomous guard.
         """
 
         token = str(getattr(action, "value", action) or "").strip().lower()
