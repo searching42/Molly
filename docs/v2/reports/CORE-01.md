@@ -111,14 +111,15 @@ Relevant v1 primitive/storage regression tests:
 tests/test_attempt_publication.py tests/test_storage.py: 39 passed
 ```
 
-The final verification record will additionally bind:
+Final verification record:
 
 ```text
 git diff --check: PASS
 python -m compileall -q src tests prototypes: PASS
 uv lock --check: PASS (185 packages resolved)
 focused CORE-01 + CORE-00 regression selection: 52 passed in 9.31s
-repository PR Fast selection: pending until the final pre-push check
+repository PR Fast selection: 1539 passed, 5661 deselected in 1091.91s (0:18:11)
+PR Fast command: PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20
 ```
 
 The production import boundary is covered by an AST test: no file under
