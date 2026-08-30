@@ -188,6 +188,12 @@ def freeze_json_mapping(value: Mapping[str, Any] | None, *, field: str) -> Mappi
     return frozen
 
 
+def freeze_json_value(value: Any, *, field: str) -> Any:
+    """Validate and recursively freeze any canonical JSON value."""
+
+    return _freeze_json(value, field=field)
+
+
 def thaw_json(value: Any) -> Any:
     """Convert internal immutable JSON containers into ordinary JSON values."""
 

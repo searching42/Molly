@@ -18,6 +18,7 @@ from .errors import (
 )
 from .ids import (
     canonical_json_bytes,
+    freeze_json_value,
     freeze_json_mapping,
     normalize_timestamp,
     sha256_bytes,
@@ -41,6 +42,11 @@ class SideEffectClass(str, Enum):
 
 
 SIDE_EFFECT_CLASSES = frozenset(item.value for item in SideEffectClass)
+
+# ToolResult.data is a bounded control-plane observation.  Larger reusable
+# content must be returned explicitly as an ArtifactDraft instead of being
+# embedded in every RunLedger success event.
+MAX_TOOL_RESULT_DATA_BYTES = 64 * 1024
 
 
 def _side_effect_value(value: str | SideEffectClass) -> str:
@@ -676,9 +682,23 @@ class MaterializedToolCall:
 
 
 class ToolExecutionContext:
-    """A bounded input reader; no store, ledger, registry, or path is exposed."""
+    """A bounded input reader and immutable projection of one materialized call.
 
-    __slots__ = ("run_id", "step_id", "call_id", "idempotency_key", "_input_artifact_ids", "_reader")
+    ``arguments`` is copied from the server-owned ``MaterializedToolCall`` and
+    recursively frozen.  It is the only argument source available to the
+    executor; no original model proposal or mutable caller dictionary is
+    exposed.
+    """
+
+    __slots__ = (
+        "run_id",
+        "step_id",
+        "call_id",
+        "idempotency_key",
+        "_arguments",
+        "_input_artifact_ids",
+        "_reader",
+    )
 
     def __init__(
         self,
@@ -687,6 +707,7 @@ class ToolExecutionContext:
         step_id: str,
         call_id: str,
         idempotency_key: str,
+        arguments: Mapping[str, Any],
         input_artifact_ids: Sequence[str],
         reader: Callable[[str], bytes],
     ) -> None:
@@ -699,14 +720,24 @@ class ToolExecutionContext:
         validate_digest_reference(idempotency_key, field="idempotency_key")
         if not callable(reader):
             raise ToolContractError("bounded artifact reader must be callable")
+        if not isinstance(arguments, Mapping):
+            raise ToolContractError("materialized tool arguments must be an object")
+        _reject_model_authority_fields(arguments)
         self.run_id = run_id
         self.step_id = step_id
         self.call_id = call_id
         self.idempotency_key = idempotency_key
+        self._arguments = freeze_json_mapping(arguments, field="execution arguments")
         self._input_artifact_ids = validate_artifact_ids(
             tuple(input_artifact_ids), field="input_artifact_ids"
         )
         self._reader = reader
+
+    @property
+    def arguments(self) -> Mapping[str, Any]:
+        """The immutable arguments from the exact MaterializedToolCall."""
+
+        return self._arguments
 
     @property
     def input_artifact_ids(self) -> tuple[str, ...]:
@@ -781,7 +812,17 @@ class ToolResult:
     artifacts: tuple[ArtifactDraft, ...] = ()
 
     def __post_init__(self) -> None:
-        _validate_json_data(self.data, field="tool result data")
+        try:
+            frozen_data = freeze_json_value(self.data, field="tool result data")
+            encoded_data = canonical_json_bytes(frozen_data)
+        except CoreContractError as exc:
+            raise ToolContractError("tool result data must contain canonical JSON data") from exc
+        if len(encoded_data) > MAX_TOOL_RESULT_DATA_BYTES:
+            raise ToolContractError(
+                "tool result data exceeds the bounded canonical size; "
+                "publish larger content through ArtifactDraft"
+            )
+        object.__setattr__(self, "data", frozen_data)
         converted = tuple(
             item if isinstance(item, ArtifactDraft) else ArtifactDraft(**item)
             for item in self.artifacts
@@ -810,6 +851,7 @@ class DecisionProvider(Protocol):
 __all__ = [
     "ArtifactDraft",
     "DecisionProvider",
+    "MAX_TOOL_RESULT_DATA_BYTES",
     "MaterializedToolCall",
     "RequestReviewAction",
     "SideEffectClass",

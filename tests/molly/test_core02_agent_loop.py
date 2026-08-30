@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from molly.core import (
     ArtifactLineage,
     ArtifactStore,
     ArtifactIntegrityError,
+    MAX_TOOL_RESULT_DATA_BYTES,
     MaterializedToolCall,
     RelationType,
     RequestReviewAction,
@@ -24,6 +26,7 @@ from molly.core import (
     RunBudget,
     RunLedger,
     RunRequest,
+    RunStateError,
     RunStatus,
     SchemaValidationError,
     SideEffectClass,
@@ -48,6 +51,7 @@ from molly.core.agent_loop import (
     TOOL_EXECUTION_STARTED,
     TOOL_EXECUTION_SUCCEEDED,
 )
+from molly.core.ids import canonical_json_bytes, sha256_bytes
 
 
 pytestmark = pytest.mark.unit
@@ -312,6 +316,75 @@ def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: 
     assert lineage.parents(child_id) == (parent.artifact_id,)
 
 
+def test_materialized_arguments_reach_executor_and_bind_digest(tmp_path: Path) -> None:
+    original_arguments = {"value": 6}
+    proposal = ToolCallProposal("emit", original_arguments)
+    original_arguments["value"] = 99
+    observed_arguments = []
+
+    def parameterized_executor(context):
+        observed_arguments.append(context.arguments)
+        assert context.arguments["value"] == 6
+        with pytest.raises(TypeError):
+            context.arguments["value"] = 7
+        return ToolResult({"value": context.arguments["value"]})
+
+    loop, request, _, ledger, _, _, _, _ = _environment(
+        tmp_path,
+        provider=ScriptedProvider(proposal),
+        executor=parameterized_executor,
+    )
+    assert loop.run(request).status == RunStatus.ACTIVE.value
+
+    materialized = MaterializedToolCall.from_dict(
+        _events(ledger, TOOL_CALL_MATERIALIZED)[0].metadata["materialized_call"]
+    )
+    assert materialized.arguments == {"value": 6}
+    assert observed_arguments[0] == materialized.arguments
+    changed = replace(materialized, arguments={"value": 7}, tool_call_digest=None)
+    assert changed.digest != materialized.digest
+    success = _events(ledger, TOOL_EXECUTION_SUCCEEDED)[0]
+    assert success.metadata["result_data"] == {"value": 6}
+
+
+def test_parameterized_output_changes_with_materialized_arguments(tmp_path: Path) -> None:
+    spec = _spec()
+    policy = _policy(spec)
+    store = ArtifactStore(tmp_path / "artifacts")
+    ledger = RunLedger(tmp_path / "events.jsonl")
+    lineage = ArtifactLineage(tmp_path / "lineage.jsonl")
+    registry = ToolRegistry()
+
+    def multiply_executor(context):
+        return ToolResult({"value": context.arguments["value"] * 2}, artifacts=())
+
+    registry.register(spec, multiply_executor)
+    for value in (6, 7):
+        provider = ScriptedProvider(ToolCallProposal("emit", {"value": value}))
+        loop = AgentLoop(
+            store=store,
+            ledger=ledger,
+            lineage=lineage,
+            registry=registry,
+            policy=policy,
+            decision_provider=provider,
+        )
+        request = RunRequest.create(
+            goal=f"multiply {value}",
+            tool_policy_digest=policy.digest,
+            budget=RunBudget(max_decisions=2, max_tool_calls=2, max_steps=2),
+        )
+        assert loop.run(request).status == RunStatus.ACTIVE.value
+
+    successes = _events(ledger, TOOL_EXECUTION_SUCCEEDED)
+    assert [event.metadata["result_data"]["value"] for event in successes] == [12, 14]
+    calls = [
+        MaterializedToolCall.from_dict(event.metadata["materialized_call"])
+        for event in _events(ledger, TOOL_CALL_MATERIALIZED)
+    ]
+    assert calls[0].digest != calls[1].digest
+
+
 def test_tool_execution_context_rejects_undeclared_artifacts(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
     first = store.put(b"first", media_type="text/plain")
@@ -323,9 +396,13 @@ def test_tool_execution_context_rejects_undeclared_artifacts(tmp_path: Path) -> 
         step_id="step_context",
         call_id="call_context",
         idempotency_key="a" * 64,
+        arguments={"value": 1},
         input_artifact_ids=(first.artifact_id,),
         reader=store.read,
     )
+    assert context.arguments == {"value": 1}
+    with pytest.raises(TypeError):
+        context.arguments["value"] = 2
     assert context.read_artifact(first.artifact_id) == b"first"
     with pytest.raises(ToolAccessError):
         context.read_artifact(second.artifact_id)
@@ -376,6 +453,50 @@ def test_exact_approval_resume_reuses_persisted_call_without_provider_recreation
             decision=ApprovalDecision.APPROVED,
             reviewer_ref="reviewer-ref",
         ))
+
+
+def test_approval_restart_preserves_exact_parameterized_arguments(tmp_path: Path) -> None:
+    spec = _spec(approval=True)
+    policy = _policy(spec)
+    original_arguments = {"value": 6}
+    first_provider = ScriptedProvider(ToolCallProposal("emit", original_arguments))
+    observed_arguments = []
+
+    def parameterized_executor(context):
+        observed_arguments.append(context.arguments)
+        return ToolResult({"value": context.arguments["value"]})
+
+    loop, request, store, ledger, lineage, registry, _, _ = _environment(
+        tmp_path,
+        spec=spec,
+        policy=policy,
+        provider=first_provider,
+        executor=parameterized_executor,
+    )
+    waiting = loop.run(request)
+    original_arguments["value"] = 99
+    call = MaterializedToolCall.from_dict(waiting.pending_call)
+    assert call.arguments == {"value": 6}
+    approval = ApprovalRecord.for_call(
+        call,
+        decision=ApprovalDecision.APPROVED,
+        reviewer_ref="reviewer-ref",
+    )
+
+    resume_provider = ScriptedProvider()
+    resumed_loop = AgentLoop(
+        store=ArtifactStore(store.root),
+        ledger=RunLedger(ledger.path),
+        lineage=ArtifactLineage(lineage.path),
+        registry=registry,
+        policy=policy,
+        decision_provider=resume_provider,
+    )
+    resumed = resumed_loop.run(request, approval=approval)
+    assert resumed.status == RunStatus.ACTIVE.value
+    assert resume_provider.calls == 0
+    assert observed_arguments == [{"value": 6}]
+    assert _events(ledger, TOOL_EXECUTION_SUCCEEDED)[0].metadata["result_data"] == {"value": 6}
 
 
 def test_rejected_approval_is_durable_and_does_not_execute(tmp_path: Path) -> None:
@@ -543,6 +664,115 @@ def test_identical_outputs_across_runs_keep_distinct_occurrences(tmp_path: Path)
         requests[0].run_id,
         requests[1].run_id,
     ]
+
+
+def test_success_data_is_visible_to_the_next_decision_turn(tmp_path: Path) -> None:
+    spec = _spec(name="calculate")
+    policy = _policy(spec)
+
+    class ResultAwareProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.contexts = []
+
+        def next_action(self, context, model_visible_tools):
+            self.calls += 1
+            self.contexts.append(context)
+            if self.calls == 1:
+                return ToolCallProposal("calculate", {"value": 21})
+            assert context.previous_tool_outcome["data"]["value"] == 42
+            return StopAction("result consumed")
+
+    provider = ResultAwareProvider()
+
+    def calculate(context):
+        return ToolResult({"value": context.arguments["value"] * 2}, artifacts=())
+
+    loop, request, _, ledger, _, _, _, _ = _environment(
+        tmp_path,
+        spec=spec,
+        policy=policy,
+        provider=provider,
+        executor=calculate,
+    )
+    result = loop.run(request)
+    assert result.status == RunStatus.STOPPED.value
+    assert provider.calls == 2
+    success = _events(ledger, TOOL_EXECUTION_SUCCEEDED)[0]
+    expected_digest = sha256_bytes(canonical_json_bytes({"value": 42}))
+    assert success.output_artifact_ids == ()
+    assert success.metadata["result_data"] == {"value": 42}
+    assert success.metadata["result_data_sha256"] == expected_digest
+    assert provider.contexts[1].previous_tool_outcome["data_sha256"] == expected_digest
+
+
+def test_data_only_result_and_observation_survive_restart(tmp_path: Path) -> None:
+    spec = _spec()
+    policy = _policy(spec)
+    first_provider = ScriptedProvider(ToolCallProposal("emit", {"value": 21}))
+
+    def calculate(context):
+        return ToolResult({"value": context.arguments["value"] * 2}, artifacts=())
+
+    loop, request, store, ledger, lineage, registry, _, _ = _environment(
+        tmp_path,
+        spec=spec,
+        policy=policy,
+        provider=first_provider,
+        executor=calculate,
+    )
+    first = loop.run(request)
+    assert first.status == RunStatus.ACTIVE.value
+    success = _events(ledger, TOOL_EXECUTION_SUCCEEDED)[0]
+    expected_digest = sha256_bytes(canonical_json_bytes({"value": 42}))
+    assert success.output_artifact_ids == ()
+    assert success.metadata["result_data"] == {"value": 42}
+    assert success.metadata["result_data_sha256"] == expected_digest
+
+    restart_provider = ScriptedProvider(StopAction("after restart"))
+    restarted = AgentLoop(
+        store=ArtifactStore(store.root),
+        ledger=RunLedger(ledger.path),
+        lineage=ArtifactLineage(lineage.path),
+        registry=registry,
+        policy=policy,
+        decision_provider=restart_provider,
+    )
+    final = restarted.run(request)
+    assert final.status == RunStatus.STOPPED.value
+    assert restart_provider.calls == 1
+    assert restart_provider.contexts[0].previous_tool_outcome["data"] == {"value": 42}
+    assert restart_provider.contexts[0].previous_tool_outcome["data_sha256"] == expected_digest
+
+
+def test_tampered_success_result_digest_fails_closed(tmp_path: Path) -> None:
+    provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
+    loop, request, _, ledger, _, _, _, _ = _environment(tmp_path, provider=provider)
+    loop.run(request)
+    success = _events(ledger, TOOL_EXECUTION_SUCCEEDED)[0]
+    tampered_metadata = dict(success.metadata)
+    tampered_metadata["result_data"] = {"value": 999}
+    tampered = replace(success, metadata=tampered_metadata)
+
+    with pytest.raises(RunStateError, match="digest mismatch"):
+        loop._project((tampered,))
+
+
+def test_oversized_result_data_fails_as_tool_execution_failure(tmp_path: Path) -> None:
+    provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
+
+    def oversized(context):
+        return ToolResult({"value": "x" * MAX_TOOL_RESULT_DATA_BYTES})
+
+    loop, request, _, ledger, _, _, _, _ = _environment(
+        tmp_path,
+        provider=provider,
+        executor=oversized,
+    )
+    result = loop.run(request)
+    assert result.status == RunStatus.ACTIVE.value
+    assert len(_events(ledger, TOOL_EXECUTION_FAILED)) == 1
+    assert not _events(ledger, TOOL_EXECUTION_SUCCEEDED)
 
 
 def test_restart_reconciles_missing_lineage_idempotently(tmp_path: Path) -> None:

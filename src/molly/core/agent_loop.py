@@ -27,6 +27,7 @@ from .ids import (
     new_server_id,
     normalize_timestamp,
     sha256_bytes,
+    thaw_json,
     utc_timestamp,
     validate_digest_reference,
     validate_identifier,
@@ -43,6 +44,7 @@ from .runs import (
 )
 from .tools import (
     DecisionProvider,
+    MAX_TOOL_RESULT_DATA_BYTES,
     MaterializedToolCall,
     RequestReviewAction,
     StopAction,
@@ -275,6 +277,8 @@ class AgentLoop:
         materialized: list[tuple[LedgerEvent, MaterializedToolCall]] = []
         by_call: dict[str, list[LedgerEvent]] = {}
         for event in events:
+            if event.event_type == TOOL_EXECUTION_SUCCEEDED:
+                self._validated_success_result_data(event)
             if event.event_type == TOOL_CALL_MATERIALIZED:
                 raw = event.metadata.get("materialized_call")
                 if not isinstance(raw, Mapping):
@@ -503,7 +507,19 @@ class AgentLoop:
     def _context(self, request: RunRequest, events: tuple[LedgerEvent, ...]) -> RunContext:
         previous: Mapping[str, Any] | None = None
         for event in reversed(events):
-            if event.event_type in {TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED}:
+            if event.event_type == TOOL_EXECUTION_SUCCEEDED:
+                result_data, result_data_sha256 = self._validated_success_result_data(event)
+                previous = {
+                    "event_type": event.event_type,
+                    "status": event.status,
+                    "tool_name": event.tool_name,
+                    "tool_version": event.tool_version,
+                    "output_artifact_ids": list(event.output_artifact_ids),
+                    "data": thaw_json(result_data),
+                    "data_sha256": result_data_sha256,
+                }
+                break
+            if event.event_type == TOOL_EXECUTION_FAILED:
                 previous = {
                     "event_type": event.event_type,
                     "status": event.status,
@@ -543,6 +559,7 @@ class AgentLoop:
     def _project_success(self, success_event: LedgerEvent) -> None:
         if success_event.event_type != TOOL_EXECUTION_SUCCEEDED:
             raise ReconciliationError("only successful execution events can be projected")
+        self._validated_success_result_data(success_event)
         if success_event.step_id is None:
             raise ReconciliationError("successful execution is missing step_id")
         call_id = self._metadata_call_id(success_event)
@@ -721,6 +738,31 @@ class AgentLoop:
             },
         )
 
+    @staticmethod
+    def _validated_success_result_data(event: LedgerEvent) -> tuple[Any, str]:
+        """Validate the exact bounded observation stored by a success event."""
+
+        if event.event_type != TOOL_EXECUTION_SUCCEEDED:
+            raise RunStateError("only successful execution events contain result data")
+        metadata = event.metadata
+        if "result_data" not in metadata or "result_data_sha256" not in metadata:
+            raise RunStateError("successful execution is missing durable result data")
+        result_data = metadata["result_data"]
+        recorded_digest = metadata["result_data_sha256"]
+        try:
+            encoded = canonical_json_bytes(result_data)
+            computed_digest = sha256_bytes(encoded)
+            normalized_recorded = validate_digest_reference(
+                recorded_digest, field="result_data_sha256"
+            )
+        except Exception as exc:
+            raise RunStateError("successful execution contains invalid result data") from exc
+        if len(encoded) > MAX_TOOL_RESULT_DATA_BYTES:
+            raise RunStateError("successful execution result data exceeds its bounded size")
+        if normalized_recorded != computed_digest:
+            raise RunStateError("successful execution result data digest mismatch")
+        return result_data, computed_digest
+
     def _assert_current_call(self, request: RunRequest, call: MaterializedToolCall) -> ToolSpec:
         try:
             spec = self.registry.resolve_exact(
@@ -757,12 +799,19 @@ class AgentLoop:
             step_id=call.step_id,
             call_id=call.call_id,
             idempotency_key=call.idempotency_key,
+            arguments=call.arguments,
             input_artifact_ids=call.input_artifact_ids,
             reader=self.store.read,
         )
         try:
             raw_result = executor(context)
             result = raw_result if isinstance(raw_result, ToolResult) else ToolResult(**raw_result)
+            result_data_bytes = canonical_json_bytes(result.data)
+            if len(result_data_bytes) > MAX_TOOL_RESULT_DATA_BYTES:
+                raise ToolContractError(
+                    "tool result data exceeds the bounded canonical size; "
+                    "publish larger content through ArtifactDraft"
+                )
             spec.validate_output(result.data)
             output_records = tuple(
                 self.store.put(
@@ -789,7 +838,8 @@ class AgentLoop:
             metadata={
                 "call_id": call.call_id,
                 "tool_call_digest": call.tool_call_digest,
-                "result_data_sha256": sha256_bytes(canonical_json_bytes(result.data)),
+                "result_data": thaw_json(result.data),
+                "result_data_sha256": sha256_bytes(result_data_bytes),
             },
         )
         # The durable success fact is deliberately appended before this
