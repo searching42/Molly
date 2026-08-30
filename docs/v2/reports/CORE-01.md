@@ -188,7 +188,7 @@ repository PR Fast selection: 1541 passed, 5661 deselected in 197.37s (0:03:17)
 PR Fast run commit: `35e86ac` (documentation-bound report commit; no executable changes after the tested CORE-01A commit)
 ```
 
-Remote verification before final push:
+Historical remote verification before the final integration:
 
 ```text
 base: main@93fdb08e924f116451bf6472af9bf85a3d473f24
@@ -225,6 +225,31 @@ in `ArtifactLineage` and `RunLedger`.
 
 B2 = `PENDING`; B3 = `PENDING`; B4 = `PENDING`.
 `core_cutover_ready` remains `false`.
+
+## Final integrated verification
+
+After merging `origin/main` at `504657a760413386757066071bc0a6f800897238`,
+the final local integration checks passed:
+
+```text
+tests/molly/test_core01_foundation.py
+tests/test_core_v2_readiness_contracts.py
+tests/test_core_v2_contract_spike.py
+tests/test_core_v2_fixture_manifests.py: 35 passed in 3.03s
+tests/test_repository_privacy.py: 40 passed in 23.10s
+tests/test_br1_conversation_runtime_bridge.py: 6 passed in 417.06s
+tests/test_attempt_publication.py tests/test_storage.py tests/test_scientific_agent_autonomy_lease.py tests/test_scientific_agent_harness_controller.py tests/test_remote_resource_authority.py: 150 passed in 308.27s
+git diff --check: PASS
+python -m compileall -q src tests prototypes: PASS
+uv lock --check: PASS (185 packages resolved)
+PR Fast: 1541 passed, 5664 deselected in 382.48s (0:06:22)
+PR Fast tested commit: 3b1015f (the subsequent report update is documentation-only)
+```
+
+The CORE-01A content/provenance invariants and the merged PR #66 privacy and
+remote-approval behavior are both covered by these checks. Full CI is the
+remaining GitHub verification for the pushed integrated branch; its result is
+recorded here after all four shards complete.
 
 ## Known limitations and next milestone dependencies
 
