@@ -9,6 +9,7 @@ milestone are not started.
 repository: searching42/Molly
 base: origin/main@7b3ed82a880712f97b626d365d481295d01e8f3a
 branch: codex/molly-core-v2-core-02-agent-loop
+draft PR: #67 (https://github.com/searching42/Molly/pull/67)
 ```
 
 The base is the merged CORE-01 main line.  The accepted CORE-01 commit
@@ -18,8 +19,13 @@ readiness manifest still reports C0-C7 PASS, `core_goal_mode_ready=true`, and
 
 ## Implementation commits and files
 
-Implementation commit IDs are recorded here after the coherent branch commit is
-created.  The implementation adds:
+The coherent implementation commit is:
+
+```text
+1b86a439d42658cc69beb15888d2edddf08aac51
+```
+
+It adds:
 
 ```text
 src/molly/core/agent_loop.py
@@ -156,9 +162,27 @@ python -m compileall -q src tests prototypes: PASS
 CORE-01 + CORE-02 + readiness + C4 regression: 50 passed
 ```
 
-The final PR Fast and GitHub Full CI results, including the exact tested
-commit, are appended after the branch is pushed.  Full CI is required before
-this milestone is considered merge-ready.
+The final local PR Fast result on the implementation commit was:
+
+```text
+1559 passed, 5664 deselected in 190.34s (0:03:10)
+```
+
+The required GitHub Full CI result was:
+
+```text
+run: 33310620640
+tested HEAD: 1b86a439d42658cc69beb15888d2edddf08aac51
+compile and shard policy: PASS
+weighted shard 0: PASS
+weighted shard 1: PASS
+weighted shard 2: PASS
+weighted shard 3: PASS
+```
+
+Full CI is therefore PASS for the exact implementation/test HEAD.  A later
+report-only commit, if present, must not be treated as the executable/test
+commit validated by that run.
 
 ## Known limitations and next milestone dependencies
 
