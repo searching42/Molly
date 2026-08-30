@@ -184,6 +184,27 @@ Full CI is therefore PASS for the exact implementation/test HEAD.  A later
 report-only commit, if present, must not be treated as the executable/test
 commit validated by that run.
 
+The final report-only integration HEAD is:
+
+```text
+d1eaa5d69bc3eb48fd0dd7caa86fa5f75a938ed6
+```
+
+The GitHub checks for that final documentation HEAD are:
+
+```text
+PR Fast workflow: 33311591212 — PASS
+  compile and diff: PASS
+  pytest (PR fast): PASS
+CodeQL workflow: 33311589865 — PASS
+  Analyze (actions): PASS
+  Analyze (javascript-typescript): PASS
+  Analyze (python): PASS
+```
+
+These final checks contain no executable or test changes after the Full CI
+validated implementation/test HEAD.
+
 ## Known limitations and next milestone dependencies
 
 CORE-02 uses deterministic host-local tools in tests only.  It does not add an
