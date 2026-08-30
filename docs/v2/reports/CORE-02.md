@@ -168,7 +168,7 @@ The final local PR Fast result on the implementation commit was:
 1559 passed, 5664 deselected in 190.34s (0:03:10)
 ```
 
-The required GitHub Full CI result was:
+The original CORE-02 implementation GitHub Full CI result was:
 
 ```text
 run: 33310620640
@@ -206,6 +206,68 @@ The subsequent report synchronization commit is documentation-only and does
 not alter the executable or test tree.  Full CI remains the authoritative
 complete-suite result for implementation/test HEAD
 `1b86a439d42658cc69beb15888d2edddf08aac51`.
+
+## CORE-02A — executable arguments and durable observations
+
+CORE-02A corrected two execution-contract defects found during review:
+
+1. The validated `ToolCallProposal.arguments` were persisted in the
+   `MaterializedToolCall` but were not available to the host executor.
+2. Successful `ToolResult.data` was reduced to a digest, so the exact
+   structured observation could not be recovered by a later provider turn or
+   after restart.
+
+`ToolExecutionContext.arguments` is now an immutable recursive projection of
+the exact server-owned `MaterializedToolCall.arguments`.  The executor receives
+no proposal or alternate argument source.  Proposal construction, materialized
+call serialization, call digest, approval binding, and executor context
+therefore share one canonical argument value.  Mutating a caller-owned
+dictionary after proposal construction cannot change the call or its digest.
+
+`ToolResult.data` remains a bounded control-plane observation rather than an
+artifact.  The frozen limit is `MAX_TOOL_RESULT_DATA_BYTES = 65536`, measured
+as the length of canonical UTF-8 JSON bytes.  Larger observations fail as
+`TOOL_EXECUTION_FAILED` and must be published through an explicit
+`ArtifactDraft`.  A successful ledger event now stores both exact
+`result_data` and its canonical JSON SHA-256 `result_data_sha256`; the event
+hash chain consequently covers the structured observation.  Projection and
+restart validation reject missing, oversized, non-canonical, or digest-
+mismatched success data before it is exposed to a provider.
+
+The next `RunContext.previous_tool_outcome` is reconstructed from that durable
+success event and includes the event/tool identity, output artifact IDs,
+exact structured `data`, and `data_sha256`.  Data-only tools with no artifacts
+remain valid.  No result cache, automatic replay, new authority, or CORE-03
+integration was introduced.
+
+New regressions cover parameterized outputs, immutable argument projections,
+different argument digests, exact approval restart arguments, data-only
+successes, next-turn visibility, restart recovery, canonical result digests,
+oversized observations, and tampered result data.  The focused CORE-02 test
+module has `25 passed`; CORE-01 + CORE-02 + readiness + C4 regression has
+`57 passed`; relevant legacy storage regression has `37 passed`.
+
+The CORE-02A implementation/test HEAD is:
+
+```text
+341f3dd99ff993693b92161f0ef4f434bf9c35eb
+```
+
+Its final CI evidence is:
+
+```text
+PR Fast: 33314284269 — PASS
+CodeQL: 33314283405 — PASS
+Full CI: 33314298588 — PASS
+  compile and shard policy: PASS
+  weighted shard 0: PASS
+  weighted shard 1: PASS
+  weighted shard 2: PASS
+  weighted shard 3: PASS
+```
+
+The later report update is documentation-only and does not change the
+CORE-02A executable or test tree.
 
 ## Known limitations and next milestone dependencies
 
