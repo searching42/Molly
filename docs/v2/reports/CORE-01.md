@@ -8,6 +8,8 @@ Repository: `searching42/Molly`
 
 Branch: `codex/molly-core-v2-core-01-foundation`
 
+Draft PR: [#65](https://github.com/searching42/Molly/pull/65)
+
 Base commit: `93fdb08e924f116451bf6472af9bf85a3d473f24` (merged CORE-00
 PR #64 on `origin/main`)
 
@@ -120,6 +122,15 @@ uv lock --check: PASS (185 packages resolved)
 focused CORE-01 + CORE-00 regression selection: 52 passed in 9.31s
 repository PR Fast selection: 1539 passed, 5661 deselected in 1091.91s (0:18:11)
 PR Fast command: PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20
+```
+
+Remote verification at Draft PR creation:
+
+```text
+base: main@93fdb08e924f116451bf6472af9bf85a3d473f24
+head: codex/molly-core-v2-core-01-foundation@74dd576ce4af240385d2a0fe2993d20f451a30af
+Draft PR: #65 (OPEN, Draft)
+GitHub checks: pending at report binding; local PR Fast is the completed result above
 ```
 
 The production import boundary is covered by an AST test: no file under
