@@ -206,6 +206,26 @@ lineage relations including repeated-content occurrences, closed validation
 contracts, and exact review binding. No readiness gate was changed; C0-C7
 remain PASS, B2-B4 remain pending/unchanged, and no CORE-02 code was started.
 
+## Final integration after pre-CORE-02 remediation
+
+PR #66 (`https://github.com/searching42/Molly/pull/66`) was merged into
+`main` before this integration. The merged main SHA is
+`504657a760413386757066071bc0a6f800897238`.
+
+The CORE-01 branch was integrated from pre-integration HEAD
+`ca12ca92606d933d4006ed8f4b2451d6ef3fa032`; the resulting implementation
+merge commit is `d09911470ae51039e1dc8b6aa2e4bfa7415f92cc`.
+
+The pre-CORE-02 remediation changes legacy/CI behavior: it narrows the
+repository privacy scanner's generated-lockfile handling and separates exact
+human remote approval from autonomous remote-runtime lease enforcement. It
+does not alter the accepted CORE-01 content/provenance model. In particular,
+`ArtifactRecord` remains content-intrinsic, while occurrence provenance stays
+in `ArtifactLineage` and `RunLedger`.
+
+B2 = `PENDING`; B3 = `PENDING`; B4 = `PENDING`.
+`core_cutover_ready` remains `false`.
+
 ## Known limitations and next milestone dependencies
 
 CORE-01 intentionally provides local filesystem persistence only. It does not
