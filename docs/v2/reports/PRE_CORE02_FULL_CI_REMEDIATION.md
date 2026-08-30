@@ -106,8 +106,12 @@ Completed focused checks:
 PR Fast: passed — 1,526 passed, 5,664 deselected in 225.93s
 (`PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20`).
 
-Full CI: pending. The required follow-up run must pass all four shards on the
-exact pushed remediation HEAD.
+Full CI: passed — run `33298428018` on
+`cabdb9ed01dda65e1d04b0d2a457352358283cdd`.
+
+The compile/shard-policy job and all four weighted pytest shards passed:
+shard 0 in 10m46s, shard 1 in 13m34s, shard 2 in 16m16s, and shard 3 in
+20m58s. See the [Full CI run](https://github.com/searching42/Molly/actions/runs/33298428018).
 
 The first follow-up Full CI attempt was run `33297534349` at
 `b3c6cd7a19587d0763bc05bce6931ba1b138c5e2`. Shards 1, 2, and 3 passed. Shard
