@@ -40,7 +40,7 @@ created once and was not moved.
 | C4 | `PASS` | [`C4_CORE_CONTRACT_SPIKE.md`](C4_CORE_CONTRACT_SPIKE.md), SHA-256 `554c4510d951997ed11db2faacce3286efe24812ee7ee345eec1d366e4578efa`; `tests/test_core_v2_contract_spike.py`: 13 passed. | `364c910b912aeafe1f385abc7e8fee8cc34befd0` | The spike is local, single-process, standard-library-only, and not a production persistence or execution engine. |
 | C5 | `PASS` | [`PACKAGE_DEPENDENCY_AND_CI_BOUNDARY.md`](../contracts/PACKAGE_DEPENDENCY_AND_CI_BOUNDARY.md), SHA-256 `d1d73b8e495dc8d36bc6ef7609a10dd36d75c2d472c34a110ef8c460f5b059cf`; repaired `uv.lock` SHA-256 `f204dc52afd4d2b50e58651e75bb75a8f6fa0a0192d9f17e03c79891122b30c4`; `UV_CACHE_DIR=<LOCAL_UV_CACHE> uv lock --check`: pass. | `364c910b912aeafe1f385abc7e8fee8cc34befd0` | The current legacy `pyproject.toml` remains unchanged; future dependency separation is conceptual until later milestones. |
 | C6 | `PASS` | [`literature_fixture_manifest.json`](../fixtures/literature_fixture_manifest.json), [`oled_gold_fixture.json`](../fixtures/oled_gold_fixture.json), [`br1_parity_manifest.json`](../fixtures/br1_parity_manifest.json); `tests/test_core_v2_fixture_manifests.py`: 3 passed. | `364c910b912aeafe1f385abc7e8fee8cc34befd0` | Fixtures are synthetic/contract-only; no fresh-real BR1, GPU, remote, or network-live acceptance was performed. |
-| C7 | `PASS` | [`CODEX_GOAL_EXECUTION_CONTRACT.md`](../CODEX_GOAL_EXECUTION_CONTRACT.md), SHA-256 `e1af801f7ea2636af8fb9521106b8f8d4e1320e606771e15d1d82f1126793bd9`; this closure report; final readiness manifest. | C7 closure commit containing this report | Readiness authorizes later CORE-01 through CORE-07 Goals, not this Goal and not CORE-08. |
+| C7 | `PASS` | [`CODEX_GOAL_EXECUTION_CONTRACT.md`](../CODEX_GOAL_EXECUTION_CONTRACT.md), SHA-256 `e1af801f7ea2636af8fb9521106b8f8d4e1320e606771e15d1d82f1126793bd9`; this closure report; final readiness manifest. | `7767c9f144d9a013a2377b83abee6d38d8aacf8c` | Readiness authorizes later CORE-01 through CORE-07 Goals, not this Goal and not CORE-08. |
 
 ## Verification record
 
@@ -56,8 +56,8 @@ tests/test_core_v2_readiness_contracts.py   4 passed
 
 The existing v1 acceptance and repository documentation regression selections
 were also run as targeted checks and passed. The repository PR Fast selection
-is the final pre-push check for this coherent batch; its result is recorded in
-the final Git/PR verification below.
+was the final pre-push check for this coherent batch; its result is recorded
+below.
 
 No production Core v2 directory exists under `src/molly/`,
 `plugins/br1_inverse_design/`, or `plugins/remote_compute/` on this branch.
@@ -66,6 +66,21 @@ The public documentation scan found no absolute user-home paths, credentials,
 tokens, private endpoints, or local agent-context paths in the changed CORE-00
 authority documents. The documents use portable placeholders where an
 execution-context label is necessary.
+
+## Final Git/PR verification
+
+The final PR Fast selection ran at the C7 readiness evidence commit before the
+documentation-only audit binding update:
+
+```text
+commit: 7767c9f144d9a013a2377b83abee6d38d8aacf8c
+command: PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20
+result: 1526 passed, 5661 deselected in 1061.04s (0:17:41)
+```
+
+The subsequent report-binding commit changes documentation only and does not
+change executable code, test collection, readiness conditions, or the frozen
+contract digests.
 
 ## B0-B4 state
 
