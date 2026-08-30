@@ -183,17 +183,18 @@ python -m compileall -q src tests prototypes: PASS
 uv lock --check: PASS (185 packages resolved)
 focused CORE-00 + CORE-01 regression selection: 54 passed in 1.91s
 relevant v1 atomic publication/storage selection: 39 passed in 9.18s
-repository PR Fast selection: pending after the CORE-01A code/test amendment
 PR Fast command: PYTHONPATH=src PYTHONHASHSEED=0 python -m pytest -q -m "(unit and not slow) or pr_fast" --durations=20
+repository PR Fast selection: 1541 passed, 5661 deselected in 197.37s (0:03:17)
+PR Fast run commit: `35e86ac` (documentation-bound report commit; no executable changes after the tested CORE-01A commit)
 ```
 
-Remote verification before this report update:
+Remote verification before final push:
 
 ```text
 base: main@93fdb08e924f116451bf6472af9bf85a3d473f24
-head: codex/molly-core-v2-core-01-foundation@dc9dc6facebd41c67bf67aac9a9853750b129838 before this report update
+tested head: codex/molly-core-v2-core-01-foundation@35e86ac
 Draft PR: #65 (OPEN, Draft)
-GitHub checks: pending for the CORE-01A amendment; local PR Fast is run before final push/report binding
+GitHub checks: to be re-triggered/verified after the final CORE-01A push; local PR Fast passed at the commit above
 ```
 
 The production import boundary is covered by an AST test: no file under
