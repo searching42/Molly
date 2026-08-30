@@ -184,26 +184,28 @@ Full CI is therefore PASS for the exact implementation/test HEAD.  A later
 report-only commit, if present, must not be treated as the executable/test
 commit validated by that run.
 
-The final report-only integration HEAD is:
+The final executable/test evidence HEAD after the implementation was:
 
 ```text
-8a281c3c8e8d53a556cd80638f7d50e54e0eafee
+a1795b3054ad7c3ecae0f7e6b45c4b5826bc79f3
 ```
 
-The GitHub checks for that final documentation HEAD are:
+The GitHub checks for that evidence HEAD are:
 
 ```text
-PR Fast workflow: 33311591212 — PASS
+PR Fast workflow: 33312183371 — PASS
   compile and diff: PASS
   pytest (PR fast): PASS
-CodeQL workflow: 33311589865 — PASS
+CodeQL workflow: 33312181638 — PASS
   Analyze (actions): PASS
   Analyze (javascript-typescript): PASS
   Analyze (python): PASS
 ```
 
-These final checks contain no executable or test changes after the Full CI
-validated implementation/test HEAD.
+The subsequent report synchronization commit is documentation-only and does
+not alter the executable or test tree.  Full CI remains the authoritative
+complete-suite result for implementation/test HEAD
+`1b86a439d42658cc69beb15888d2edddf08aac51`.
 
 ## Known limitations and next milestone dependencies
 
