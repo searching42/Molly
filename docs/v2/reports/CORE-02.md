@@ -187,7 +187,7 @@ commit validated by that run.
 The final report-only integration HEAD is:
 
 ```text
-d1eaa5d69bc3eb48fd0dd7caa86fa5f75a938ed6
+8a281c3c8e8d53a556cd80638f7d50e54e0eafee
 ```
 
 The GitHub checks for that final documentation HEAD are:
