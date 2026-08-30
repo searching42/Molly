@@ -6,6 +6,11 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
+
+pytestmark = pytest.mark.unit
+
 
 ROOT = Path(__file__).parents[1]
 

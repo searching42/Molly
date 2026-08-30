@@ -23,6 +23,9 @@ from prototypes.core_v2_contract_spike.contract import (
 )
 
 
+pytestmark = pytest.mark.unit
+
+
 def _state(tmp_path: Path):
     root = tmp_path / "state"
     store = ArtifactStore(root)

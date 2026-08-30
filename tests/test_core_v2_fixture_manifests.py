@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import pytest
+
+
+pytestmark = pytest.mark.unit
+
 
 ROOT = Path(__file__).parents[1]
 
