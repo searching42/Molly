@@ -16,6 +16,7 @@ import math
 import re
 from types import MappingProxyType
 from typing import Any
+import uuid
 
 from .errors import CoreContractError, PathSecurityError
 
@@ -70,6 +71,13 @@ def validate_identifier(value: str, *, field: str = "identifier") -> str:
             f"{field} must match {_IDENTIFIER_RE.pattern} and contain no path separators"
         )
     return value
+
+
+def new_server_id(prefix: str) -> str:
+    """Create a server-owned globally unique identifier for Core records."""
+
+    validate_identifier(prefix, field="identifier prefix")
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 
 def validate_reference(value: str, *, field: str = "reference") -> str:
@@ -178,6 +186,12 @@ def freeze_json_mapping(value: Mapping[str, Any] | None, *, field: str) -> Mappi
     if not isinstance(frozen, Mapping):
         raise CoreContractError(f"{field} must be a JSON object")
     return frozen
+
+
+def freeze_json_value(value: Any, *, field: str) -> Any:
+    """Validate and recursively freeze any canonical JSON value."""
+
+    return _freeze_json(value, field=field)
 
 
 def thaw_json(value: Any) -> Any:

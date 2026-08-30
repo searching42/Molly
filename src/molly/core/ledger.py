@@ -261,6 +261,17 @@ class RunLedger:
 
         return self.events
 
+    def for_run(self, run_id: str) -> tuple[LedgerEvent, ...]:
+        """Return an immutable snapshot of facts for one run identity."""
+
+        validate_identifier(run_id, field="run_id")
+        return tuple(event for event in self.events if event.run_id == run_id)
+
+    def events_for_run(self, run_id: str) -> tuple[LedgerEvent, ...]:
+        """Descriptive alias for :meth:`for_run`."""
+
+        return self.for_run(run_id)
+
     def __iter__(self):
         return iter(self.events)
 

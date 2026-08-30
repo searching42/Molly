@@ -53,3 +53,55 @@ class ReviewError(MollyCoreError):
 
 class ReviewBindingError(ReviewError):
     """A review does not bind to the exact artifact digest being inspected."""
+
+
+class RunError(MollyCoreError):
+    """Base class for bounded run-request and AgentLoop failures."""
+
+
+class RunBindingError(RunError):
+    """A run was resumed with a different immutable request or policy."""
+
+
+class RunStateError(RunError):
+    """A run's append-only facts cannot support a safe state projection."""
+
+
+class BudgetError(RunError):
+    """A run budget is invalid or exhausted."""
+
+
+class ToolError(MollyCoreError):
+    """Base class for closed tool contracts and host execution failures."""
+
+
+class ToolContractError(ToolError):
+    """A tool, action, schema, or execution context is outside its contract."""
+
+
+class SchemaValidationError(ToolContractError):
+    """Tool input or output data does not satisfy its declared JSON schema."""
+
+
+class ToolAccessError(ToolContractError):
+    """A host tool attempted to read outside its declared input set."""
+
+
+class ToolPolicyError(ToolContractError):
+    """A tool call is outside the immutable run ToolPolicy."""
+
+
+class ToolExecutionError(ToolError):
+    """A host-owned tool failed or returned an invalid result."""
+
+
+class ApprovalError(MollyCoreError):
+    """An approval is absent, stale, malformed, or bound to another call."""
+
+
+class ActionError(MollyCoreError):
+    """A DecisionProvider returned an unknown or malformed action."""
+
+
+class ReconciliationError(MollyCoreError):
+    """A factual ledger event cannot be safely projected into lineage."""
