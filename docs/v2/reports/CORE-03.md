@@ -1,6 +1,6 @@
 # Molly Core v2 CORE-03 compliant literature acquisition
 
-Status: `IMPLEMENTED — offline network-mock acceptance`
+Status: `IMPLEMENTED — offline network-mock acceptance; final CI PASS`
 
 This report records the CORE-03 acquisition milestone only.  CORE-04 and all
 later milestones have not started.
@@ -9,7 +9,7 @@ later milestones have not started.
 repository: searching42/Molly
 base: origin/main@f67ed5441b075c0259b088f20690424c1a799aae
 branch: codex/molly-core-v2-core-03-acquisition
-draft PR: pending final local verification
+draft PR: #68 (https://github.com/searching42/Molly/pull/68), remains Draft
 accepted CORE-02 ancestor: 90423ca6edd2fa0df2c7f2540d2db37fee8486ef
 accepted CORE-02A ancestor: 341f3dd99ff993693b92161f0ef4f434bf9c35eb
 ```
@@ -99,7 +99,8 @@ non-canonical hosts, traversal, unconfigured hosts, and unsafe query fields.
 Each connection resolves the server-owned hostname, rejects non-global/private,
 loopback, link-local, multicast, unspecified, and reserved IPv4/IPv6 results,
 connects to the validated address, retains the configured hostname for TLS SNI
-and certificate verification, and checks the connected peer when available.
+and certificate verification, enforces a TLS 1.2 minimum, and checks the
+connected peer when available.
 The HTTP client is manual and does not inherit proxy/environment routing or
 perform an uncontrolled second hostname lookup.
 
@@ -169,7 +170,8 @@ DOI/query/schema bounds and no arbitrary URL authority
 exact host/port/userinfo/scheme/path/query route policy
 IPv4/IPv6 denied-address, peer-pinning, redirect, loop, and target checks
 stream/content-length/size/content-type/transfer/content-encoding checks
-timeout, Retry-After/backoff, retry class, and authentication behavior
+TLS minimum/SNI setup, total-deadline timeout, Retry-After/backoff, retry
+class, and authentication behavior
 synthetic credential reflection and durable URL/cache/provenance redaction
 public/private occurrence classification without ArtifactRecord mutation
 ```
@@ -177,17 +179,20 @@ public/private occurrence classification without ArtifactRecord mutation
 The current focused local evidence is:
 
 ```text
-CORE-03 suite: 37 passed
-CORE-01 + CORE-02 + CORE-03 focused regression: 77 passed
+CORE-03 suite: 38 passed
+CORE-01 + CORE-02 + CORE-03 focused regression: 78 passed
 C4/readiness/fixture regression: 20 passed
 repository privacy: 40 passed
 legacy literature/phase3 smoke: 57 passed
+combined focused CORE-00/CORE-01/CORE-02/CORE-03/privacy regression: 138 passed
 git diff --check: PASS
 python -m compileall -q src tests prototypes: PASS
 uv lock --check: PASS (185 packages resolved)
-PR Fast: pending final coherent branch validation
-Full CI: pending Draft PR and final pushed HEAD
-CodeQL: pending Draft PR checks
+PR Fast CI: PASS (workflow 33319379334; compile/diff and pytest jobs PASS)
+CodeQL: PASS (workflow 33319377259; actions, JavaScript/TypeScript, Python,
+and aggregate checks PASS)
+Full CI: PASS (workflow 33319781765; compile/shard policy and weighted shards
+0, 1, 2, and 3 PASS)
 ```
 
 The refined import boundary keeps `molly.core` network-free while permitting
@@ -219,6 +224,28 @@ CORE-04 work has started.
 
 ## Final CI synchronization
 
-This section is updated after the final executable/test HEAD is pushed.  A
-later report-only update must identify the exact executable/test HEAD covered
-by Full CI and must not be treated as new runtime or test evidence.
+The final executable/test HEAD covered by the complete GitHub validation is:
+
+```text
+dcf316c48ef06db0588cefc4de4a1de4da5ba126
+```
+
+The Full CI run was [33319781765](https://github.com/searching42/Molly/actions/runs/33319781765).
+Its compile/shard policy job `99279619320` passed, followed by:
+
+```text
+weighted shard 0: 99279641344 — PASS (12m23s)
+weighted shard 1: 99279641322 — PASS (18m20s)
+weighted shard 2: 99279641321 — PASS (20m34s)
+weighted shard 3: 99279641331 — PASS (12m51s)
+```
+
+The final PR Fast workflow was [33319379334](https://github.com/searching42/Molly/actions/runs/33319379334),
+and the final CodeQL workflow was [33319377259](https://github.com/searching42/Molly/actions/runs/33319377259);
+all required checks passed.  CodeQL’s initial review identified the need for
+an explicit TLS 1.2 floor; that bounded transport hardening and its regression
+test are included in the final HEAD.
+
+This report update is documentation-only and does not change the executable
+or test files covered by Full CI.  If the report-only commit has a later HEAD,
+the complete-test evidence remains bound to the exact HEAD above.
