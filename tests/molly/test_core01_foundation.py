@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from molly.core import (
+    ArtifactConflictError,
     ArtifactIntegrityError,
     ArtifactLineage,
     ArtifactStore,
@@ -47,14 +48,31 @@ def test_artifact_store_is_content_addressed_and_restart_safe(tmp_path: Path) ->
         media_type="application/json",
         schema_name="fixture.record",
         schema_version="1",
-        producer_step_id="step_parse",
-        provenance={"source": "synthetic:core01"},
     )
     digest = hashlib.sha256(payload).hexdigest()
 
     assert record.artifact_id == f"sha256:{digest}"
     assert record.sha256 == digest
     assert record.size_bytes == len(payload)
+    assert record.to_dict() == {
+        "artifact_id": f"sha256:{digest}",
+        "sha256": digest,
+        "media_type": "application/json",
+        "schema_name": "fixture.record",
+        "schema_version": "1",
+        "size_bytes": len(payload),
+        "stored_at": record.stored_at,
+    }
+    assert not {
+        "producer_step_id",
+        "input_artifact_ids",
+        "provenance",
+        "created_at",
+    } & record.to_dict().keys()
+    assert not hasattr(record, "producer_step_id")
+    assert not hasattr(record, "input_artifact_ids")
+    assert not hasattr(record, "provenance")
+    assert not hasattr(record, "created_at")
     assert store.object_path(record.artifact_id) == root / "objects" / digest[:2] / digest
     assert store.read(record.artifact_id) == payload
     assert store.get_metadata(record.artifact_id) == record
@@ -93,8 +111,38 @@ def test_artifact_store_rejects_symlink_escape_and_secret_metadata(tmp_path: Pat
 
     with pytest.raises(PathSecurityError):
         store.read(record.artifact_id)
-    with pytest.raises(CoreContractError):
+    with pytest.raises(TypeError):
         store.put(b"new", media_type="text/plain", provenance={"api_key": "never"})
+
+
+def test_artifact_store_rejects_conflicting_intrinsic_metadata(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    payload = b"same immutable bytes"
+    record = store.put(
+        payload,
+        media_type="application/json",
+        schema_name="fixture.record",
+        schema_version="1",
+        stored_at="2026-01-01T00:00:00Z",
+    )
+
+    omitted_schema = store.put(payload, media_type="application/json")
+    assert omitted_schema == record
+    assert omitted_schema.schema_name == "fixture.record"
+    assert omitted_schema.schema_version == "1"
+    assert omitted_schema.stored_at == "2026-01-01T00:00:00.000000Z"
+
+    with pytest.raises(ArtifactConflictError, match="media_type"):
+        store.put(payload, media_type="text/plain")
+    with pytest.raises(ArtifactConflictError, match="schema_name"):
+        store.put(payload, media_type="application/json", schema_name="other.record")
+    with pytest.raises(ArtifactConflictError, match="schema_version"):
+        store.put(
+            payload,
+            media_type="application/json",
+            schema_name="fixture.record",
+            schema_version="2",
+        )
 
 
 def test_artifact_record_is_immutable_and_digest_bound() -> None:
@@ -103,7 +151,7 @@ def test_artifact_record_is_immutable_and_digest_bound() -> None:
         artifact_id=f"sha256:{digest}",
         sha256=digest,
         media_type="text/plain",
-        created_at="2026-01-01T00:00:00Z",
+        stored_at="2026-01-01T00:00:00Z",
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -202,17 +250,18 @@ def test_canonical_json_is_stable_for_equivalent_mappings() -> None:
 def test_lineage_records_bounded_relations_and_reloads(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
     parent = store.put(b"parent", media_type="text/plain")
-    child = store.put(
-        b"child",
-        media_type="text/plain",
-        producer_step_id="step_1",
-        input_artifact_ids=(parent.artifact_id,),
-    )
+    child = store.put(b"child", media_type="text/plain")
     source = store.put(b"source", media_type="text/plain")
     path = tmp_path / "lineage.jsonl"
     lineage = ArtifactLineage(path)
 
-    created = lineage.add_artifact(child)
+    created = lineage.record_production(
+        artifact_id=child.artifact_id,
+        producer_step_id="step_1",
+        input_artifact_ids=(parent.artifact_id,),
+        metadata={"run_id": "run_1"},
+        created_at="2026-01-01T00:00:00Z",
+    )
     lineage.register_artifact(source.artifact_id)
     supported = lineage.add_relation(
         RelationType.SUPPORTED_BY,
@@ -236,6 +285,7 @@ def test_lineage_records_bounded_relations_and_reloads(tmp_path: Path) -> None:
     }
     assert lineage.parents(child.artifact_id) == (parent.artifact_id,)
     assert lineage.producer_steps(child.artifact_id) == ("step_1",)
+    assert created[0].metadata["run_id"] == "run_1"
     assert lineage.supported_by(child.artifact_id) == (source.artifact_id,)
     assert consumed.previous_relation_sha256 == supported.relation_sha256
 
@@ -302,14 +352,14 @@ def test_review_record_binds_exact_artifact_digest() -> None:
         artifact_id=f"sha256:{digest}",
         sha256=digest,
         media_type="text/plain",
-        created_at="2026-01-01T00:00:00Z",
+        stored_at="2026-01-01T00:00:00Z",
     )
     other_digest = hashlib.sha256(b"other").hexdigest()
     other = ArtifactRecord(
         artifact_id=f"sha256:{other_digest}",
         sha256=other_digest,
         media_type="text/plain",
-        created_at="2026-01-01T00:00:00Z",
+        stored_at="2026-01-01T00:00:00Z",
     )
     review = ReviewRecord.for_artifact(
         artifact,
@@ -326,6 +376,75 @@ def test_review_record_binds_exact_artifact_digest() -> None:
     review.assert_matches(artifact)
     with pytest.raises(ReviewBindingError):
         review.assert_matches(other)
+
+
+def test_identical_content_keeps_distinct_production_occurrences(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    parent_a = store.put(b"parent-A", media_type="text/plain")
+    parent_b = store.put(b"parent-B", media_type="text/plain")
+    content_x = b"identical output from two occurrences"
+
+    artifact_a = store.put(content_x, media_type="text/plain")
+    artifact_b = store.put(content_x, media_type="text/plain")
+    assert artifact_a.artifact_id == artifact_b.artifact_id
+    assert artifact_a.sha256 == artifact_b.sha256
+    assert artifact_a.stored_at == artifact_b.stored_at
+
+    path = tmp_path / "lineage.jsonl"
+    lineage = ArtifactLineage(path)
+    lineage.record_production(
+        artifact_id=artifact_a.artifact_id,
+        producer_step_id="step_A",
+        input_artifact_ids=(parent_a.artifact_id,),
+        metadata={"run_id": "run_A"},
+        created_at="2026-01-01T00:00:00Z",
+    )
+    lineage.record_production(
+        artifact_id=artifact_b.artifact_id,
+        producer_step_id="step_B",
+        input_artifact_ids=(parent_b.artifact_id,),
+        metadata={"run_id": "run_B"},
+        created_at="2026-01-01T00:00:01Z",
+    )
+
+    produced = [
+        relation
+        for relation in lineage.for_subject(artifact_a.artifact_id)
+        if relation.relation_type == RelationType.PRODUCED_BY.value
+    ]
+    assert [(item.object_id, item.metadata["run_id"]) for item in produced] == [
+        ("step_A", "run_A"),
+        ("step_B", "run_B"),
+    ]
+    assert lineage.producer_steps(artifact_a.artifact_id) == ("step_A", "step_B")
+    assert lineage.parents(artifact_a.artifact_id) == (
+        parent_a.artifact_id,
+        parent_b.artifact_id,
+    )
+    assert artifact_a.to_dict().get("producer_step_id") is None
+    assert artifact_a.to_dict().get("input_artifact_ids") is None
+
+    reopened = ArtifactLineage(path)
+    assert len(reopened.relations) == 4
+    assert reopened.producer_steps(artifact_a.artifact_id) == ("step_A", "step_B")
+    assert reopened.parents(artifact_a.artifact_id) == (
+        parent_a.artifact_id,
+        parent_b.artifact_id,
+    )
+
+    reopened.record_production(
+        artifact_id=artifact_a.artifact_id,
+        producer_step_id="step_C",
+        input_artifact_ids=(parent_a.artifact_id,),
+        metadata={"run_id": "run_C"},
+        created_at="2026-01-01T00:00:02Z",
+    )
+    assert len(reopened.relations) == 6
+    assert reopened.producer_steps(artifact_a.artifact_id) == (
+        "step_A",
+        "step_B",
+        "step_C",
+    )
 
 
 def test_production_namespace_has_no_legacy_or_spike_imports() -> None:

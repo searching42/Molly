@@ -20,6 +20,7 @@ from .ids import (
     thaw_json,
     utc_timestamp,
     validate_artifact_id,
+    validate_artifact_ids,
     validate_identifier,
     validate_reference,
     validate_sha256,
@@ -156,8 +157,16 @@ class ArtifactLineage:
         self._known_ids = set()
         self._strict = False
         for value in known_ids:
-            self.register_identity(value)
+            self._known_ids.add(validate_reference(value, field="lineage identity"))
         self._strict = strict or bool(self._known_ids)
+
+    def _hydrate_persisted_identities(self) -> None:
+        """Remember identities already persisted before enabling strict mode."""
+
+        if self.path is None or self._strict or not self.path.exists():
+            return
+        for relation in self._read_relations():
+            self._known_ids.update((relation.subject_id, relation.object_id))
 
     def _read_relations(self) -> list[LineageRelation]:
         if self.path is None:
@@ -203,44 +212,84 @@ class ArtifactLineage:
         return iter(self.relations)
 
     def register_identity(self, value: str) -> str:
+        self._hydrate_persisted_identities()
         validated = validate_reference(value, field="lineage identity")
         self._known_ids.add(validated)
         self._strict = True
         return validated
 
     def register_artifact(self, artifact_id: str) -> str:
+        self._hydrate_persisted_identities()
         validated = validate_artifact_id(artifact_id)
         self._known_ids.add(validated)
         self._strict = True
         return validated
 
     def register_step(self, step_id: str) -> str:
+        self._hydrate_persisted_identities()
         validated = validate_identifier(step_id, field="step_id")
         self._known_ids.add(validated)
         self._strict = True
         return validated
 
     def add_artifact(self, record: ArtifactRecord) -> tuple[LineageRelation, ...]:
-        """Register an artifact and its direct input/producer provenance."""
+        """Register an artifact identity without inventing an occurrence.
+
+        Artifact content metadata is not authoritative production provenance.
+        Use :meth:`record_production` when a run/step occurrence is known.
+        """
 
         if not isinstance(record, ArtifactRecord):
             raise LineageError("add_artifact requires an ArtifactRecord")
         self.register_artifact(record.artifact_id)
-        relations: list[LineageRelation] = []
-        if record.producer_step_id is not None:
-            self.register_step(record.producer_step_id)
-            relations.append(
-                self.add_relation(
-                    RelationType.PRODUCED_BY,
-                    record.artifact_id,
-                    record.producer_step_id,
-                )
-            )
-        for input_id in record.input_artifact_ids:
+        return ()
+
+    def record_production(
+        self,
+        *,
+        artifact_id: str,
+        producer_step_id: str,
+        input_artifact_ids: Iterable[str] = (),
+        metadata: Mapping[str, Any] | None = None,
+        created_at: str | None = None,
+    ) -> tuple[LineageRelation, ...]:
+        """Record one production occurrence for an immutable artifact.
+
+        The same ``artifact_id`` may be passed repeatedly for identical bytes
+        produced by different steps or runs.  Each call appends its own
+        ``PRODUCED_BY`` relation and its direct ``DERIVED_FROM`` relations;
+        no first-writer artifact metadata is consulted or copied.
+        """
+
+        artifact_id = validate_artifact_id(artifact_id)
+        producer_step_id = validate_identifier(producer_step_id, field="producer_step_id")
+        input_ids = validate_artifact_ids(tuple(input_artifact_ids), field="input_artifact_ids")
+        self.register_artifact(artifact_id)
+        self.register_step(producer_step_id)
+        for input_id in input_ids:
             self.register_artifact(input_id)
-            relations.append(
-                self.add_relation(RelationType.DERIVED_FROM, record.artifact_id, input_id)
+
+        occurrence_metadata = {} if metadata is None else metadata
+        occurrence_timestamp = created_at or utc_timestamp()
+        relations = [
+            self.add_relation(
+                RelationType.PRODUCED_BY,
+                artifact_id,
+                producer_step_id,
+                created_at=occurrence_timestamp,
+                metadata=occurrence_metadata,
             )
+        ]
+        relations.extend(
+            self.add_relation(
+                RelationType.DERIVED_FROM,
+                artifact_id,
+                input_id,
+                created_at=occurrence_timestamp,
+                metadata=occurrence_metadata,
+            )
+            for input_id in input_ids
+        )
         return tuple(relations)
 
     def _check_known(self, subject_id: str, object_id: str) -> None:

@@ -21,13 +21,10 @@ from .ids import (
     artifact_id_for_sha256,
     artifact_sha256,
     canonical_json_bytes,
-    freeze_json_mapping,
     normalize_timestamp,
     sha256_bytes,
-    thaw_json,
     utc_timestamp,
     validate_artifact_id,
-    validate_artifact_ids,
     validate_identifier,
     validate_sha256,
 )
@@ -42,11 +39,8 @@ class ArtifactRecord:
     media_type: str
     schema_name: str | None = None
     schema_version: str | None = None
-    producer_step_id: str | None = None
-    input_artifact_ids: tuple[str, ...] = ()
-    created_at: str = field(default_factory=utc_timestamp)
-    provenance: dict[str, Any] = field(default_factory=dict)
     size_bytes: int = 0
+    stored_at: str = field(default_factory=utc_timestamp)
 
     def __post_init__(self) -> None:
         validate_artifact_id(self.artifact_id)
@@ -60,24 +54,13 @@ class ArtifactRecord:
         for value, field_name in (
             (self.schema_name, "schema_name"),
             (self.schema_version, "schema_version"),
-            (self.producer_step_id, "producer_step_id"),
         ):
             if value is not None:
                 validate_identifier(value, field=field_name)
         object.__setattr__(
             self,
-            "input_artifact_ids",
-            validate_artifact_ids(self.input_artifact_ids, field="input_artifact_ids"),
-        )
-        object.__setattr__(
-            self,
-            "created_at",
-            normalize_timestamp(self.created_at, field="created_at"),
-        )
-        object.__setattr__(
-            self,
-            "provenance",
-            freeze_json_mapping(self.provenance, field="provenance"),
+            "stored_at",
+            normalize_timestamp(self.stored_at, field="stored_at"),
         )
         if not isinstance(self.size_bytes, int) or self.size_bytes < 0:
             raise CoreContractError("size_bytes must be a non-negative integer")
@@ -107,11 +90,8 @@ class ArtifactRecord:
             "media_type": self.media_type,
             "schema_name": self.schema_name,
             "schema_version": self.schema_version,
-            "producer_step_id": self.producer_step_id,
-            "input_artifact_ids": list(self.input_artifact_ids),
-            "created_at": self.created_at,
-            "provenance": thaw_json(self.provenance),
             "size_bytes": self.size_bytes,
+            "stored_at": self.stored_at,
         }
 
     @classmethod
@@ -137,15 +117,8 @@ class ArtifactRecord:
                     if value.get("schema_version") is None
                     else str(value["schema_version"])
                 ),
-                producer_step_id=(
-                    None
-                    if value.get("producer_step_id") is None
-                    else str(value["producer_step_id"])
-                ),
-                input_artifact_ids=tuple(value.get("input_artifact_ids", ())),
-                created_at=str(value["created_at"]),
-                provenance=dict(value.get("provenance", {})),
                 size_bytes=int(size),
+                stored_at=str(value["stored_at"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ArtifactIntegrityError("artifact metadata is malformed") from exc
@@ -252,6 +225,53 @@ class ArtifactStore:
             raise ArtifactIntegrityError("artifact metadata is not valid UTF-8 JSON") from exc
         return ArtifactRecord.from_dict(value)
 
+    @staticmethod
+    def _assert_compatible_intrinsic_metadata(
+        existing: ArtifactRecord,
+        requested: ArtifactRecord,
+    ) -> None:
+        """Reject contradictory assertions about one content identity.
+
+        Optional schema fields are first-publication metadata.  A later call
+        may omit them, or may repeat a value already recorded, but it cannot
+        replace an existing value.  In particular, this method never considers
+        run, step, input, or source occurrence context because that context is
+        recorded by :class:`ArtifactLineage` and :class:`RunLedger`.
+        """
+
+        if existing.sha256 != requested.sha256 or existing.artifact_id != requested.artifact_id:
+            raise ArtifactConflictError("existing metadata conflicts with artifact identity")
+        if existing.media_type != requested.media_type:
+            raise ArtifactConflictError(
+                "existing artifact metadata conflicts on media_type: "
+                f"{existing.media_type!r} != {requested.media_type!r}"
+            )
+        for field_name in ("schema_name", "schema_version"):
+            existing_value = getattr(existing, field_name)
+            requested_value = getattr(requested, field_name)
+            if (
+                existing_value is not None
+                and requested_value is not None
+                and existing_value != requested_value
+            ):
+                raise ArtifactConflictError(
+                    f"existing artifact metadata conflicts on {field_name}: "
+                    f"{existing_value!r} != {requested_value!r}"
+                )
+
+    def _existing_record(
+        self,
+        metadata_path: Path,
+        object_path: Path,
+        requested: ArtifactRecord,
+    ) -> ArtifactRecord:
+        existing = self._read_record(metadata_path)
+        self._assert_compatible_intrinsic_metadata(existing, requested)
+        existing_payload = self._read_verified_bytes(object_path, requested.sha256)
+        if existing.size_bytes != len(existing_payload):
+            raise ArtifactIntegrityError("existing metadata size does not match artifact bytes")
+        return existing
+
     def put(
         self,
         content: bytes | bytearray | memoryview,
@@ -260,12 +280,14 @@ class ArtifactStore:
         content_type: str | None = None,
         schema_name: str | None = None,
         schema_version: str | None = None,
-        producer_step_id: str | None = None,
-        input_artifact_ids: tuple[str, ...] | list[str] = (),
-        created_at: str | None = None,
-        provenance: Mapping[str, Any] | None = None,
+        stored_at: str | None = None,
     ) -> ArtifactRecord:
-        """Publish bytes and immutable metadata, returning the first record."""
+        """Publish exact bytes and intrinsic metadata, returning the first record.
+
+        Production occurrence context is intentionally absent from this API.
+        Callers that need to bind an artifact to a run or step must record an
+        explicit production relation in :class:`ArtifactLineage`.
+        """
 
         if not isinstance(content, (bytes, bytearray, memoryview)):
             raise CoreContractError("artifact content must be bytes-like")
@@ -283,11 +305,8 @@ class ArtifactStore:
             media_type=media_type,
             schema_name=schema_name,
             schema_version=schema_version,
-            producer_step_id=producer_step_id,
-            input_artifact_ids=tuple(input_artifact_ids),
-            created_at=created_at or utc_timestamp(),
-            provenance={} if provenance is None else provenance,
             size_bytes=len(payload),
+            stored_at=stored_at or utc_timestamp(),
         )
         object_path, metadata_path = self._paths(record.artifact_id, create_prefix=True)
 
@@ -298,20 +317,11 @@ class ArtifactStore:
             self._read_verified_bytes(object_path, digest)
 
         if metadata_path.exists():
-            existing = self._read_record(metadata_path)
-            if existing.sha256 != digest or existing.artifact_id != record.artifact_id:
-                raise ArtifactConflictError("existing metadata conflicts with artifact identity")
-            existing_payload = self._read_verified_bytes(object_path, digest)
-            if existing.size_bytes != len(existing_payload):
-                raise ArtifactIntegrityError("existing metadata size does not match artifact bytes")
-            return existing
+            return self._existing_record(metadata_path, object_path, record)
 
         metadata_payload = canonical_json_bytes(record.to_dict()) + b"\n"
         self._publish_no_replace(metadata_path, metadata_payload)
-        existing = self._read_record(metadata_path)
-        if existing.sha256 != digest or existing.artifact_id != record.artifact_id:
-            raise ArtifactConflictError("published metadata conflicts with artifact identity")
-        return existing
+        return self._existing_record(metadata_path, object_path, record)
 
     def put_bytes(self, content: bytes, **kwargs: Any) -> ArtifactRecord:
         """Explicit alias for callers that want to emphasize byte content."""
