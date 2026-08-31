@@ -337,7 +337,7 @@ The next milestone is CORE-04 document normalization/parsing, subject to
 review of this acquisition implementation and its final CI evidence.  No
 CORE-04 work has started.
 
-## Final CI synchronization
+## Historical CORE-03 CI synchronization
 
 The final executable/test HEAD covered by the complete GitHub validation is:
 
@@ -361,6 +361,46 @@ all required checks passed.  CodeQL’s initial review identified the need for
 an explicit TLS 1.2 floor; that bounded transport hardening and its regression
 test are included in the final HEAD.
 
-This report update is documentation-only and does not change the executable
-or test files covered by Full CI.  If the report-only commit has a later HEAD,
-the complete-test evidence remains bound to the exact HEAD above.
+This historical synchronization is retained for audit history.  The
+CORE-03A synchronization below is the current closure evidence.
+
+## CORE-03A final CI synchronization
+
+The final executable/test HEAD covered by the CORE-03A complete GitHub
+validation is:
+
+```text
+ac6026afe2b6265930314498e4efcbb7d4722e4d
+```
+
+The CORE-03A Full CI run was
+[33346070107](https://github.com/searching42/Molly/actions/runs/33346070107).
+Its compile/shard policy job `99350324877` passed, followed by:
+
+```text
+weighted shard 0: 99350351025 — PASS
+weighted shard 1: 99350350996 — PASS
+weighted shard 2: 99350350989 — PASS
+weighted shard 3: 99350351014 — PASS
+```
+
+The executable/test HEAD PR Fast workflow was
+[33346055547](https://github.com/searching42/Molly/actions/runs/33346055547),
+with compile/diff job `99350278140` and pytest job `99350303023` both PASS.
+The corresponding CodeQL workflow was
+[33346053193](https://github.com/searching42/Molly/actions/runs/33346053193);
+actions, JavaScript/TypeScript, Python, and aggregate checks all passed.
+
+The later report-only commit is:
+
+```text
+66f908d — docs: record CORE-03A closure evidence
+```
+
+Its diff contains only this report.  The report-only PR Fast workflow was
+[33347292648](https://github.com/searching42/Molly/actions/runs/33347292648)
+and the report-only CodeQL workflow was
+[33347291138](https://github.com/searching42/Molly/actions/runs/33347291138);
+both passed.  The complete-test evidence remains bound to
+`ac6026afe2b6265930314498e4efcbb7d4722e4d`, while the current branch HEAD is
+the report-only `66f908d` commit.
