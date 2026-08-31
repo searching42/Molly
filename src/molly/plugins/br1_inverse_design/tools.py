@@ -1,0 +1,317 @@
+"""AgentLoop ToolSpecs for the optional BR1 inverse-design plugin."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from molly.core.artifacts import ArtifactStore
+from molly.core.errors import CoreContractError
+from molly.core.ids import canonical_json_bytes, sha256_bytes
+from molly.core.ledger import RunLedger
+from molly.core.tools import (
+    ArtifactDraft,
+    SideEffectClass,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+)
+
+from .dataset import DatasetGate
+from .evaluation import TopNEvaluationService
+from .reinvent import ReinventGenerationService
+from .runtime import Br1Runtime, DeterministicBr1Runtime
+from .schema import Br1PluginConfig
+from .prediction import UniMolPredictionService
+from .unimol import ApplicabilityService, UniMolTrainingService, draft_id
+
+
+def _summary_schema(properties: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": dict(properties),
+        "required": list(properties),
+    }
+
+
+def _artifact_id_schema() -> dict[str, Any]:
+    return {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"}
+
+
+def _stage_config_digest(config: Br1PluginConfig, stage: str) -> str:
+    return sha256_bytes(canonical_json_bytes({"plugin_config_digest": config.digest, "stage": stage}))
+
+
+@dataclass(slots=True)
+class Br1Services:
+    """Host-owned dependencies passed to plugin executors."""
+
+    store: ArtifactStore
+    ledger: RunLedger
+    config: Br1PluginConfig = Br1PluginConfig()
+    runtime: Br1Runtime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.store, ArtifactStore):
+            raise TypeError("Br1Services requires an ArtifactStore")
+        if not isinstance(self.ledger, RunLedger):
+            raise TypeError("Br1Services requires a RunLedger")
+        if not isinstance(self.config, Br1PluginConfig):
+            raise TypeError("Br1Services requires a Br1PluginConfig")
+        if self.runtime is None:
+            self.runtime = DeterministicBr1Runtime()
+        if not hasattr(self.runtime, "train") or not hasattr(self.runtime, "generate") or not hasattr(self.runtime, "predict"):
+            raise TypeError("Br1Services runtime does not implement the BR1 seam")
+
+    @property
+    def gate(self) -> DatasetGate:
+        return DatasetGate(self.store)
+
+    @property
+    def applicability(self) -> ApplicabilityService:
+        return ApplicabilityService(self.gate, self.config)
+
+    @property
+    def training(self) -> UniMolTrainingService:
+        return UniMolTrainingService(self.store, self.ledger, self.gate, self.runtime, self.config)  # type: ignore[arg-type]
+
+    @property
+    def generation(self) -> ReinventGenerationService:
+        return ReinventGenerationService(self.store, self.ledger, self.runtime, self.config)  # type: ignore[arg-type]
+
+    @property
+    def prediction(self) -> UniMolPredictionService:
+        return UniMolPredictionService(self.store, self.ledger, self.runtime, self.config)  # type: ignore[arg-type]
+
+    @property
+    def evaluation(self) -> TopNEvaluationService:
+        return TopNEvaluationService(self.store, self.ledger, self.config)
+
+
+def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...]:
+    config = config or Br1PluginConfig()
+    target_schema = {"type": "string", "enum": list(config.supported_target_properties)}
+    empty = {"type": "object", "additionalProperties": False}
+    preflight_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"target_property": target_schema},
+    }
+    train_input = preflight_input
+    generate_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024}},
+    }
+    predict_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"target_property": target_schema},
+    }
+    evaluate_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "top_n": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "direction": {"type": "string", "enum": ["MAX", "MIN"]},
+            "target_property": target_schema,
+        },
+    }
+    return (
+        ToolSpec(
+            name="br1_applicability_preflight",
+            version="1",
+            description="Validate one exact reviewed BR1 dataset for a supported target.",
+            input_schema=preflight_input,
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["PREFLIGHT_PASS"]},
+                "dataset_artifact_id": _artifact_id_schema(),
+                "preflight_artifact_id": _artifact_id_schema(),
+                "target_property": {"type": "string"},
+                "valid_row_count": {"type": "integer", "minimum": 1},
+            }),
+            side_effect_class=SideEffectClass.PURE,
+            execution_config_digest=_stage_config_digest(config, "applicability_preflight"),
+        ),
+        ToolSpec(
+            name="br1_train_unimol",
+            version="1",
+            description="Train a fresh Uni-Mol model from the exact reviewed dataset and preflight.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"target_property": target_schema},
+            },
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["TRAINED"]},
+                "dataset_artifact_id": _artifact_id_schema(),
+                "preflight_artifact_id": _artifact_id_schema(),
+                "model_artifact_id": _artifact_id_schema(),
+                "training_report_artifact_id": _artifact_id_schema(),
+                "training_config_digest": {"type": "string", "pattern": r"^[0-9a-f]{64}$"},
+                "unimol_version": {"type": "string"},
+                "seed": {"type": "integer", "minimum": 0},
+                "fresh_training": {"const": True},
+                "run_id": {"type": "string"},
+                "step_id": {"type": "string"},
+                "runtime_metadata": {"type": "object"},
+            }),
+            side_effect_class=SideEffectClass.REMOTE_COMPUTE,
+            execution_config_digest=_stage_config_digest(config, "train_unimol"),
+        ),
+        ToolSpec(
+            name="br1_generate_reinvent4",
+            version="1",
+            description="Generate fresh candidate molecules with the server-owned REINVENT4 profile.",
+            input_schema=generate_input,
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["GENERATED"]},
+                "model_artifact_id": _artifact_id_schema(),
+                "candidate_artifact_id": _artifact_id_schema(),
+                "generation_report_artifact_id": _artifact_id_schema(),
+                "generation_config_digest": {"type": "string", "pattern": r"^[0-9a-f]{64}$"},
+                "reinvent4_version": {"type": "string"},
+                "seed": {"type": "integer", "minimum": 0},
+                "candidate_count": {"type": "integer", "minimum": 1},
+                "current_run_model_binding": {"const": True},
+                "run_id": {"type": "string"},
+                "step_id": {"type": "string"},
+                "runtime_metadata": {"type": "object"},
+            }),
+            side_effect_class=SideEffectClass.REMOTE_COMPUTE,
+            execution_config_digest=_stage_config_digest(config, "generate_reinvent4"),
+        ),
+        ToolSpec(
+            name="br1_predict_unimol",
+            version="1",
+            description="Predict generated candidates using the current-run trained model.",
+            input_schema=predict_input,
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["PREDICTED"]},
+                "model_artifact_id": _artifact_id_schema(),
+                "candidate_artifact_id": _artifact_id_schema(),
+                "prediction_artifact_id": _artifact_id_schema(),
+                "prediction_report_artifact_id": _artifact_id_schema(),
+                "prediction_config_digest": {"type": "string", "pattern": r"^[0-9a-f]{64}$"},
+                "target_property": {"type": "string"},
+                "current_run_model_binding": {"const": True},
+                "run_id": {"type": "string"},
+                "step_id": {"type": "string"},
+                "runtime_metadata": {"type": "object"},
+            }),
+            side_effect_class=SideEffectClass.REMOTE_COMPUTE,
+            execution_config_digest=_stage_config_digest(config, "predict_unimol"),
+        ),
+        ToolSpec(
+            name="br1_evaluate_top_n",
+            version="1",
+            description="Deterministically evaluate predictions into a computational Top-N artifact.",
+            input_schema=evaluate_input,
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["EVALUATED"]},
+                "candidate_artifact_id": _artifact_id_schema(),
+                "prediction_artifact_id": _artifact_id_schema(),
+                "top_n_artifact_id": _artifact_id_schema(),
+                "evaluation_report_artifact_id": _artifact_id_schema(),
+                "evaluation_config_digest": {"type": "string", "pattern": r"^[0-9a-f]{64}$"},
+                "target_property": {"type": "string"},
+                "claim_boundary": {"const": "COMPUTATIONAL_ONLY"},
+                "deterministic_for_fixed_inputs": {"const": True},
+                "run_id": {"type": "string"},
+                "step_id": {"type": "string"},
+            }),
+            side_effect_class=SideEffectClass.PURE,
+            execution_config_digest=_stage_config_digest(config, "evaluate_top_n"),
+        ),
+    )
+
+
+def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[ToolSpec, ...]:
+    """Register only server-created executors in an existing ToolRegistry."""
+
+    if not isinstance(registry, ToolRegistry):
+        raise CoreContractError("register_br1_tools requires a ToolRegistry")
+    if not isinstance(services, Br1Services):
+        raise CoreContractError("register_br1_tools requires Br1Services")
+    specs = br1_tool_specs(services.config)
+
+    def preflight(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 1:
+            raise ValueError("br1_applicability_preflight requires one dataset artifact")
+        outcome = services.applicability.run(
+            context.input_artifact_ids[0],
+            target_property=context.arguments.get("target_property"),
+        )
+        return ToolResult(
+            data={
+                "status": "PREFLIGHT_PASS",
+                "dataset_artifact_id": outcome.inspection.artifact_id,
+                "preflight_artifact_id": draft_id(outcome.draft),
+                "target_property": outcome.preflight.target_property,
+                "valid_row_count": outcome.preflight.valid_row_count,
+            },
+            artifacts=(outcome.draft,),
+        )
+
+    def train(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 2:
+            raise ValueError("br1_train_unimol requires dataset and preflight artifacts")
+        target = str(context.arguments.get("target_property") or services.config.supported_target_properties[0])
+        outcome = services.training.run(
+            context.input_artifact_ids[0],
+            context.input_artifact_ids[1],
+            target_property=target,
+            run_id=context.run_id,
+            step_id=context.step_id,
+        )
+        return ToolResult(data=outcome.summary, artifacts=(outcome.model_draft, outcome.report_draft))
+
+    def generate(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 1:
+            raise ValueError("br1_generate_reinvent4 requires one current-run model artifact")
+        count = int(context.arguments.get("candidate_count", 8))
+        outcome = services.generation.run(
+            context.input_artifact_ids[0],
+            candidate_count=count,
+            run_id=context.run_id,
+            step_id=context.step_id,
+        )
+        return ToolResult(data=outcome.summary, artifacts=(outcome.candidate_draft, outcome.report_draft))
+
+    def predict(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 2:
+            raise ValueError("br1_predict_unimol requires model and candidate artifacts")
+        target = str(context.arguments.get("target_property") or services.config.supported_target_properties[0])
+        outcome = services.prediction.run(
+            context.input_artifact_ids[0],
+            context.input_artifact_ids[1],
+            target_property=target,
+            run_id=context.run_id,
+            step_id=context.step_id,
+        )
+        return ToolResult(data=outcome.summary, artifacts=(outcome.prediction_draft, outcome.report_draft))
+
+    def evaluate(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 2:
+            raise ValueError("br1_evaluate_top_n requires candidate and prediction artifacts")
+        target = str(context.arguments.get("target_property") or services.config.supported_target_properties[0])
+        outcome = services.evaluation.run(
+            context.input_artifact_ids[0],
+            context.input_artifact_ids[1],
+            top_n=int(context.arguments.get("top_n", 3)),
+            direction=str(context.arguments.get("direction", "MAX")),
+            target_property=target,
+            run_id=context.run_id,
+            step_id=context.step_id,
+        )
+        return ToolResult(data=outcome.summary, artifacts=(outcome.top_n_draft, outcome.report_draft))
+
+    executors = (preflight, train, generate, predict, evaluate)
+    for spec, executor in zip(specs, executors):
+        registry.register(spec, executor)
+    return specs
+
+
+__all__ = ["Br1Services", "br1_tool_specs", "register_br1_tools"]
