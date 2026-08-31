@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 molly-worker = "ai4s_agent.molly_worker:main"
+molly = "molly.cli:main"
 
 [project.optional-dependencies]
 quickstart = [

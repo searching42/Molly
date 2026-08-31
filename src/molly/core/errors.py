@@ -105,3 +105,11 @@ class ActionError(MollyCoreError):
 
 class ReconciliationError(MollyCoreError):
     """A factual ledger event cannot be safely projected into lineage."""
+
+
+class InspectionError(MollyCoreError):
+    """A read-only Core inspection cannot be produced safely."""
+
+
+class InspectionIntegrityError(InspectionError):
+    """Authoritative ledger, artifact, or lineage facts are contradictory."""

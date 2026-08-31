@@ -12,6 +12,8 @@ from .errors import (
     ArtifactNotFoundError,
     BudgetError,
     CoreContractError,
+    InspectionError,
+    InspectionIntegrityError,
     LedgerCorruptionError,
     LedgerError,
     LineageError,
@@ -33,6 +35,7 @@ from .errors import (
 )
 from .ledger import LedgerEvent, RunLedger
 from .lineage import ArtifactLineage, LineageRelation, RelationType
+from .inspection import ArtifactInspection, RunInspection, RunInspector, ToolCallInspection
 from .reviews import ReviewDecision, ReviewRecord
 from .runs import RunBudget, RunContext, RunRequest, RunResult, RunStatus
 from .tools import (
@@ -73,11 +76,14 @@ __all__ = [
     "ArtifactDraft",
     "BudgetError",
     "CoreContractError",
+    "InspectionError",
+    "InspectionIntegrityError",
     "DecisionProvider",
     "LedgerCorruptionError",
     "LedgerError",
     "LedgerEvent",
     "LineageError",
+    "ArtifactInspection",
     "MAX_TOOL_RESULT_DATA_BYTES",
     "LineageRelation",
     "MollyCoreError",
@@ -98,6 +104,8 @@ __all__ = [
     "RunRequest",
     "RunResult",
     "RunStateError",
+    "RunInspection",
+    "RunInspector",
     "RunStatus",
     "SchemaValidationError",
     "SideEffectClass",
@@ -105,6 +113,7 @@ __all__ = [
     "ToolAccessError",
     "ToolCallProposal",
     "ToolContractError",
+    "ToolCallInspection",
     "ToolError",
     "ToolExecutionContext",
     "ToolExecutionError",
