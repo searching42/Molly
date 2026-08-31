@@ -1,6 +1,6 @@
 # Molly Core v2 CORE-04 CanonicalDocument and deterministic parser router
 
-Status: `IMPLEMENTED — pending Full CI and CodeQL`
+Status: `PASS — Full CI and CodeQL complete`
 
 This report records the CORE-04 implementation only.  CORE-05 and all later
 milestones have not started.
@@ -10,7 +10,8 @@ repository: searching42/Molly
 base: origin/main@925fb97b909f2090899493e8c495ecff43c860c0
 branch: codex/molly-core-v2-core-04-canonical-document
 implementation commit: d5be2ba554853266fc3ea5ce3803b735e5da6a0a
-Draft PR: pending creation; remains Draft
+report commit: 8be0bfa6c2d2990f7f5517c46b09a31ad6bfd0c5
+Draft PR: #69 (https://github.com/searching42/Molly/pull/69), remains Draft
 ```
 
 The base is the merged CORE-03A main line.  The accepted CORE-03 commit
@@ -181,8 +182,21 @@ python -m compileall -q src tests prototypes: PASS
 git diff --check: PASS
 uv lock --check: PASS (185 packages resolved)
 PR Fast: PASS — 1,640 passed, 5,664 deselected in 18:43
-Full CI: pending
-CodeQL: pending
+```
+
+The final GitHub PR checks and Full CI were run against exact HEAD
+`8be0bfa6c2d2990f7f5517c46b09a31ad6bfd0c5`:
+
+```text
+PR checks workflow 33353482217: compile and diff PASS; pytest (PR fast) PASS
+Full CI workflow 33353499475: PASS
+  compile and shard policy: PASS
+  weighted shard 0: PASS (13m12s)
+  weighted shard 1: PASS (12m25s)
+  weighted shard 2: PASS (15m50s)
+  weighted shard 3: PASS (22m06s)
+CodeQL workflow 33353481171: PASS
+  actions, javascript-typescript, python, and aggregate CodeQL checks: PASS
 ```
 
 No live network, credentialed provider, real MinerU, GPU, remote compute,
@@ -220,8 +234,22 @@ VALIDATED:
   lineage behavior, and import/security boundaries.
 
 BLOCKED/PENDING:
-  Full CI and CodeQL evidence pending; live/real MinerU, network, GPU,
-  remote, BR1, and scientific acceptance are outside this milestone.
+  live/real MinerU, network, GPU, remote, BR1, and scientific acceptance are
+  outside this milestone.
+```
+
+## Final acceptance state
+
+```json
+{
+  "CORE-04": "PASS",
+  "core_goal_mode_ready": true,
+  "core_cutover_ready": false,
+  "B2": "PENDING",
+  "B3": "PENDING",
+  "B4": "PENDING",
+  "CORE-05": "NOT_STARTED"
+}
 ```
 
 CORE-05 has not started.  This report does not change readiness C0-C7 or
