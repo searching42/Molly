@@ -63,6 +63,14 @@ class RealAcceptanceError(RuntimeError):
     """The real acceptance environment or output contract failed closed."""
 
 
+class RemoteCommandError(RealAcceptanceError):
+    """A server-owned remote command returned a non-zero status."""
+
+
+class ArtifactTransferError(RealAcceptanceError):
+    """A server-owned artifact transfer could not be completed."""
+
+
 @dataclass(frozen=True, slots=True)
 class HostConfig:
     source_path: Path
@@ -126,9 +134,15 @@ def _run_checked(
     except OSError as exc:
         # Do not persist command lines or remote stderr: either may contain a
         # host-specific path or other environment metadata.
-        raise RealAcceptanceError(f"{operation} could not start") from exc
+        error_class = (
+            RemoteCommandError if operation == "remote command" else ArtifactTransferError
+        )
+        raise error_class(f"{operation} could not start") from exc
     except subprocess.CalledProcessError as exc:
-        raise RealAcceptanceError(f"{operation} failed with exit status {exc.returncode}") from exc
+        error_class = (
+            RemoteCommandError if operation == "remote command" else ArtifactTransferError
+        )
+        raise error_class(f"{operation} failed with exit status {exc.returncode}") from exc
 
 
 def _ssh(config: HostConfig, command: Sequence[str]) -> None:
