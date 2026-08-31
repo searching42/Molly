@@ -13,6 +13,7 @@ from .errors import (
 )
 from .models import (
     ACCEPTED_MEDIA_TYPES,
+    AccessStatus,
     AcquisitionConfig,
     AcquisitionProvenance,
     AcquisitionStatus,
@@ -58,6 +59,7 @@ from .transport import DNSResolver, NetworkResponse, NetworkTransport, SafeNetwo
 
 __all__ = [
     "ACCEPTED_MEDIA_TYPES",
+    "AccessStatus",
     "AccessProfileResolver",
     "AcquisitionCache",
     "AcquisitionCacheError",

@@ -147,10 +147,17 @@ def _default_connection_factory(
 
 
 @dataclass(slots=True)
-class _RateGate:
+class _ProviderConcurrencyGate:
     semaphore: threading.BoundedSemaphore
+    max_concurrent_requests: int
+
+
+@dataclass(slots=True)
+class _HostRateGate:
     lock: threading.Lock
+    requests_per_second: float
     next_allowed: float = 0.0
+    last_reserved_at: float | None = None
 
 
 class SafeNetworkTransport:
@@ -173,53 +180,90 @@ class SafeNetworkTransport:
         self._random = random_source
         self._connection_factory = connection_factory or _default_connection_factory
         self._wall_clock = wall_clock
-        self._gates: dict[tuple[str, str], _RateGate] = {}
+        self._provider_gates: dict[str, _ProviderConcurrencyGate] = {}
+        self._host_rate_gates: dict[tuple[str, int], _HostRateGate] = {}
         self._gates_lock = threading.Lock()
 
-    def _gate_for(self, config: ProviderConfig, route: ProviderRoute) -> _RateGate:
-        key = (config.provider_id, route.host)
+    def _provider_gate_for(self, config: ProviderConfig) -> _ProviderConcurrencyGate:
         with self._gates_lock:
-            gate = self._gates.get(key)
+            gate = self._provider_gates.get(config.provider_id)
             if gate is None:
-                gate = _RateGate(
+                gate = _ProviderConcurrencyGate(
                     semaphore=threading.BoundedSemaphore(config.max_concurrent_requests),
-                    lock=threading.Lock(),
+                    max_concurrent_requests=config.max_concurrent_requests,
                 )
-                self._gates[key] = gate
+                self._provider_gates[config.provider_id] = gate
+            elif gate.max_concurrent_requests != config.max_concurrent_requests:
+                raise AcquisitionPolicyError(
+                    "provider concurrency configuration changed within one transport"
+                )
             return gate
 
-    def _acquire_rate_slot(
+    def _host_rate_gate_for(
+        self, config: ProviderConfig, route: ProviderRoute
+    ) -> _HostRateGate:
+        key = (route.host, route.port)
+        with self._gates_lock:
+            gate = self._host_rate_gates.get(key)
+            if gate is None:
+                gate = _HostRateGate(
+                    lock=threading.Lock(),
+                    requests_per_second=config.requests_per_second,
+                )
+                self._host_rate_gates[key] = gate
+            else:
+                with gate.lock:
+                    effective_rate = min(
+                        gate.requests_per_second,
+                        config.requests_per_second,
+                    )
+                    if effective_rate != gate.requests_per_second:
+                        gate.requests_per_second = effective_rate
+                        if gate.last_reserved_at is not None:
+                            gate.next_allowed = max(
+                                gate.next_allowed,
+                                gate.last_reserved_at + (1.0 / effective_rate),
+                            )
+            return gate
+
+    def _acquire_provider_slot(
+        self,
+        config: ProviderConfig,
+        *,
+        deadline: float,
+    ) -> _ProviderConcurrencyGate:
+        gate = self._provider_gate_for(config)
+        if not gate.semaphore.acquire(timeout=self._remaining(deadline, self._monotonic)):
+            raise AcquisitionTimeoutError(
+                "acquisition total timeout exceeded while waiting for provider concurrency"
+            )
+        return gate
+
+    def _acquire_host_rate_slot(
         self,
         config: ProviderConfig,
         route: ProviderRoute,
         *,
         deadline: float,
-    ) -> _RateGate:
-        gate = self._gate_for(config, route)
-        if not gate.semaphore.acquire(timeout=self._remaining(deadline, self._monotonic)):
-            raise AcquisitionTimeoutError(
-                "acquisition total timeout exceeded while waiting for a slot"
-            )
-        try:
-            while True:
-                remaining = self._remaining(deadline, self._monotonic)
-                now = self._monotonic()
-                with gate.lock:
-                    wait_for = max(0.0, gate.next_allowed - now)
-                    if wait_for == 0:
-                        gate.next_allowed = now + (1.0 / config.requests_per_second)
-                        return gate
-                if wait_for >= remaining:
-                    raise AcquisitionTimeoutError(
-                        "acquisition total timeout exceeded while waiting for rate limit"
-                    )
-                self._sleeper(wait_for)
-        except Exception:
-            gate.semaphore.release()
-            raise
+    ) -> _HostRateGate:
+        gate = self._host_rate_gate_for(config, route)
+        while True:
+            remaining = self._remaining(deadline, self._monotonic)
+            now = self._monotonic()
+            with gate.lock:
+                wait_for = max(0.0, gate.next_allowed - now)
+                if wait_for == 0:
+                    gate.next_allowed = now + (1.0 / gate.requests_per_second)
+                    gate.last_reserved_at = now
+                    return gate
+            if wait_for >= remaining:
+                raise AcquisitionTimeoutError(
+                    "acquisition total timeout exceeded while waiting for host rate limit"
+                )
+            self._sleeper(wait_for)
 
     @staticmethod
-    def _release_rate_slot(gate: _RateGate) -> None:
+    def _release_provider_slot(gate: _ProviderConcurrencyGate) -> None:
         gate.semaphore.release()
 
     @staticmethod
@@ -346,13 +390,15 @@ class SafeNetworkTransport:
         secret_values: Iterable[str],
         deadline: float,
     ) -> NetworkResponse:
-        addresses = validate_resolved_addresses(
-            route.host, self.resolver.resolve(route.host, route.port)
-        )
-        address = addresses[0]
+        provider_gate = self._acquire_provider_slot(config, deadline=deadline)
+        address = ""
         connection: _Connection | None = None
-        gate = self._acquire_rate_slot(config, route, deadline=deadline)
         try:
+            addresses = validate_resolved_addresses(
+                route.host, self.resolver.resolve(route.host, route.port)
+            )
+            address = addresses[0]
+            self._acquire_host_rate_slot(config, route, deadline=deadline)
             timeout = min(config.connect_timeout_seconds, self._remaining(deadline, self._monotonic))
             connection = self._connection_factory(address, route, timeout)
             getpeername = getattr(connection, "getpeername", None)
@@ -406,7 +452,7 @@ class SafeNetworkTransport:
                     connection.close()
                 except OSError:
                     pass
-            self._release_rate_slot(gate)
+            self._release_provider_slot(provider_gate)
 
     def _one_redirect_chain(
         self,

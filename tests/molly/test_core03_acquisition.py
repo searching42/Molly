@@ -7,18 +7,22 @@ import io
 import json
 from pathlib import Path
 import ssl
+import threading
 from typing import Any
 
 import pytest
 
 from molly.acquisition import (
     AcquisitionCache,
+    AcquisitionCacheError,
     AcquisitionConfig,
     AcquisitionConfigurationError,
     AcquisitionIntegrityError,
     AcquisitionPolicyError,
     AcquisitionService,
     AcquisitionStatus,
+    AcquisitionTransportError,
+    AccessStatus,
     ArtifactClass,
     ConfiguredFullTextFetcher,
     EphemeralAccessMaterial,
@@ -55,7 +59,7 @@ from molly.core import (
     ToolRegistry,
 )
 from molly.core.agent_loop import TOOL_EXECUTION_FAILED, TOOL_EXECUTION_SUCCEEDED
-from molly.core.ids import artifact_id_for_sha256, sha256_bytes
+from molly.core.ids import artifact_id_for_sha256, canonical_json_bytes, sha256_bytes
 
 
 pytestmark = pytest.mark.unit
@@ -208,6 +212,7 @@ def _config(*, redistribution_basis: str = "verified-public") -> AcquisitionConf
                 "/articles/{path}",
                 path_prefix="/articles/",
                 accepted_content_types=("application/xml", "text/html", "application/pdf"),
+                access_status=AccessStatus.VERIFIED_OPEN_ACCESS,
                 access_basis="verified-open-access-route",
                 license_status="verified-open-access",
                 redistribution_basis=redistribution_basis,
@@ -392,6 +397,140 @@ def test_full_text_second_run_hits_resolution_and_body_cache(tmp_path: Path) -> 
     assert second.data["status"] == AcquisitionStatus.CACHE_HIT.value
     assert first.data["content_artifact_id"] == second.data["content_artifact_id"]
     assert first.data["provenance_artifact_id"] != second.data["provenance_artifact_id"]
+    assert len(transport.calls) == 2
+
+
+def _cache_manifest_for(service: AcquisitionService, provider: str) -> tuple[Path, dict[str, Any]]:
+    for path in sorted(service.cache.entries_root.glob("*.json")):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if value.get("provider") == provider:
+            return path, value
+    raise AssertionError(f"no cache manifest for {provider}")
+
+
+def _cache_body_path(service: AcquisitionService, manifest: dict[str, Any]) -> Path:
+    digest = manifest["cache_identity"]
+    return service.cache.bodies_root / digest[:2] / digest
+
+
+def test_metadata_cache_manifest_has_complete_provenance_and_preserves_retrieved_at(
+    tmp_path: Path,
+) -> None:
+    service, transport = _service(tmp_path)
+    service.metadata_lookup("10.1234/fixture")
+    manifest_path, first_manifest = _cache_manifest_for(service, "openalex")
+    required = {
+        "provider",
+        "provider_config_digest",
+        "route_id",
+        "route_policy_version",
+        "request_identity",
+        "canonical_identifier",
+        "source_url",
+        "resolved_url",
+        "redirect_chain",
+        "response_status",
+        "retrieved_at",
+        "access_status",
+        "license_status",
+        "access_basis",
+        "redistribution_basis",
+        "artifact_class",
+        "content_type",
+        "content_family",
+        "body_sha256",
+        "body_size",
+        "cache_identity",
+        "cache_status",
+        "access_profile_ref",
+        "stored_at",
+    }
+    assert required <= first_manifest.keys()
+    assert first_manifest["provider_config_digest"] == service.config.provider("openalex").config_digest
+    assert first_manifest["request_identity"]
+    assert first_manifest["canonical_identifier"] == "10.1234/fixture"
+    assert first_manifest["access_status"] == AccessStatus.CONFIGURED_AUTHORIZED.value
+    assert first_manifest["source_url"].startswith("https://api.openalex.example/")
+    assert first_manifest["resolved_url"] == first_manifest["source_url"]
+    assert first_manifest["redirect_chain"] == []
+    assert first_manifest["response_status"] == 200
+    assert first_manifest["content_type"] == "application/json"
+    assert first_manifest["content_family"] == "json"
+    assert first_manifest["body_size"] == _cache_body_path(service, first_manifest).stat().st_size
+    assert first_manifest["cache_identity"]
+    assert first_manifest["cache_status"] == "MISS"
+    assert first_manifest["access_profile_ref"] is None
+    retrieved_at = first_manifest["retrieved_at"]
+    calls = len(transport.calls)
+
+    service.metadata_lookup("doi:10.1234/fixture")
+    assert len(transport.calls) == calls
+    second_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert second_manifest["retrieved_at"] == retrieved_at
+    assert second_manifest["body_sha256"] == first_manifest["body_sha256"]
+
+
+def test_oa_resolution_cache_provenance_binds_full_text_resolution_evidence(
+    tmp_path: Path,
+) -> None:
+    service, transport = _service(tmp_path)
+    first = service.acquire_full_text("10.1234/fixture")
+    _, resolution_manifest = _cache_manifest_for(service, "unpaywall")
+    _, full_text_manifest = _cache_manifest_for(service, "repository")
+    assert resolution_manifest["route_id"] == "lookup"
+    assert resolution_manifest["canonical_identifier"] == "10.1234/fixture"
+    assert resolution_manifest["access_status"] == AccessStatus.CONFIGURED_AUTHORIZED.value
+    assert resolution_manifest["license_status"]
+    assert resolution_manifest["access_basis"]
+    assert resolution_manifest["redistribution_basis"]
+    assert resolution_manifest["access_profile_ref"] == "unpaywall-profile"
+    assert resolution_manifest["retrieved_at"]
+    assert resolution_manifest["stored_at"]
+
+    provenance = json.loads(first.artifacts[1].content)
+    assert provenance["resolution_provider"] == resolution_manifest["provider"]
+    assert provenance["resolution_provider_config_digest"] == resolution_manifest["provider_config_digest"]
+    assert provenance["resolution_request_identity"] == resolution_manifest["request_identity"]
+    assert provenance["resolution_cache_identity"] == resolution_manifest["cache_identity"]
+    assert provenance["resolution_body_sha256"] == resolution_manifest["body_sha256"]
+    assert provenance["resolution_route_policy_version"] == resolution_manifest["route_policy_version"]
+    assert provenance["resolution_retrieved_at"] == resolution_manifest["retrieved_at"]
+    assert provenance["cache_identity"] == full_text_manifest["cache_identity"]
+    assert provenance["retrieved_at"] == full_text_manifest["retrieved_at"]
+
+    second = service.acquire_full_text("doi:10.1234/fixture")
+    assert len(transport.calls) == 2
+    second_provenance = json.loads(second.artifacts[1].content)
+    for field in (
+        "resolution_provider",
+        "resolution_provider_config_digest",
+        "resolution_request_identity",
+        "resolution_cache_identity",
+        "resolution_body_sha256",
+        "resolution_retrieved_at",
+    ):
+        assert second_provenance[field] == provenance[field]
+    assert second_provenance["cache_status"] == AcquisitionStatus.CACHE_HIT.value
+
+
+def test_tampered_oa_resolution_body_fails_before_source_selection(tmp_path: Path) -> None:
+    service, transport = _service(tmp_path)
+    service.acquire_full_text("10.1234/fixture")
+    _, manifest = _cache_manifest_for(service, "unpaywall")
+    _cache_body_path(service, manifest).write_bytes(b"tampered")
+    with pytest.raises(AcquisitionIntegrityError):
+        service.acquire_full_text("10.1234/fixture")
+    assert len(transport.calls) == 2
+
+
+def test_tampered_oa_resolution_manifest_fails_before_source_selection(tmp_path: Path) -> None:
+    service, transport = _service(tmp_path)
+    service.acquire_full_text("10.1234/fixture")
+    manifest_path, manifest = _cache_manifest_for(service, "unpaywall")
+    manifest["access_status"] = AccessStatus.VERIFIED_OPEN_ACCESS.value
+    manifest_path.write_bytes(canonical_json_bytes(manifest) + b"\n")
+    with pytest.raises(AcquisitionCacheError, match="manifest binding mismatch"):
+        service.acquire_full_text("10.1234/fixture")
     assert len(transport.calls) == 2
 
 
@@ -789,6 +928,252 @@ def test_safe_transport_total_deadline_covers_rate_slot_before_connect() -> None
     )
     with pytest.raises(AcquisitionTimeoutError):
         transport.fetch("https://api.example.org/data", route=route, config=config)
+
+
+def test_provider_concurrency_is_global_across_different_hosts() -> None:
+    routes = tuple(
+        ProviderRoute(
+            f"route-{index}",
+            host,
+            "/data",
+            accepted_content_types=("application/json",),
+        )
+        for index, host in enumerate(
+            (
+                "provider-a.example.org",
+                "provider-b.example.org",
+                "provider-c.example.org",
+            )
+        )
+    )
+    config = ProviderConfig(
+        "shared-provider",
+        ProviderClass.METADATA,
+        routes,
+        max_concurrent_requests=2,
+    )
+    resolver = _Resolver((_public_ip(),))
+    release = threading.Event()
+    first_two_started = threading.Event()
+    third_started = threading.Event()
+    started: list[str] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def factory(address, selected_route, timeout):
+        with lock:
+            started.append(selected_route.host)
+            if len(started) == 2:
+                first_two_started.set()
+            if len(started) == 3:
+                third_started.set()
+        if not release.wait(5):
+            raise AssertionError("test release was not signalled")
+        return _Connection(
+            _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+            address,
+        )
+
+    transport = SafeNetworkTransport(
+        resolver=resolver,
+        connection_factory=factory,
+        sleeper=lambda _: None,
+    )
+
+    def invoke(route: ProviderRoute) -> None:
+        try:
+            transport.fetch(
+                f"https://{route.host}/data",
+                route=route,
+                config=config,
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=invoke, args=(route,)) for route in routes]
+    for thread in threads[:2]:
+        thread.start()
+    assert first_two_started.wait(2)
+    threads[2].start()
+    assert not third_started.wait(0.1)
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert started == [route.host for route in routes]
+
+
+def test_provider_concurrency_configuration_cannot_change_in_one_transport() -> None:
+    first_route = ProviderRoute("first", "provider-first.example.org", "/data")
+    second_route = ProviderRoute("second", "provider-second.example.org", "/data")
+    first_config = ProviderConfig(
+        "same-provider",
+        ProviderClass.METADATA,
+        (first_route,),
+        max_concurrent_requests=1,
+    )
+    changed_config = ProviderConfig(
+        "same-provider",
+        ProviderClass.METADATA,
+        (second_route,),
+        max_concurrent_requests=2,
+    )
+    transport = SafeNetworkTransport(
+        resolver=_Resolver((_public_ip(),)),
+        connection_factory=lambda address, selected_route, timeout: _Connection(
+            _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+            address,
+        ),
+        sleeper=lambda _: None,
+    )
+    transport.fetch(
+        "https://provider-first.example.org/data",
+        route=first_route,
+        config=first_config,
+    )
+    with pytest.raises(AcquisitionPolicyError, match="concurrency configuration"):
+        transport.fetch(
+            "https://provider-second.example.org/data",
+            route=second_route,
+            config=changed_config,
+        )
+
+
+def test_shared_host_rate_is_global_across_provider_ids() -> None:
+    route_a = ProviderRoute("route-a", "shared-rate.example.org", "/a")
+    route_b = ProviderRoute("route-b", "shared-rate.example.org", "/b")
+    config_a = ProviderConfig("provider-a", ProviderClass.METADATA, (route_a,))
+    config_b = ProviderConfig("provider-b", ProviderClass.METADATA, (route_b,))
+    clock = [0.0]
+    starts: list[float] = []
+    sleeps: list[float] = []
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        clock[0] += value
+
+    transport = SafeNetworkTransport(
+        resolver=_Resolver((_public_ip(),)),
+        monotonic=lambda: clock[0],
+        sleeper=sleeper,
+        connection_factory=lambda address, selected_route, timeout: (
+            starts.append(clock[0])
+            or _Connection(
+                _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+                address,
+            )
+        ),
+    )
+    transport.fetch("https://shared-rate.example.org/a", route=route_a, config=config_a)
+    transport.fetch("https://shared-rate.example.org/b", route=route_b, config=config_b)
+    assert starts == [0.0, 1.0]
+    assert sleeps == [1.0]
+
+
+def test_different_hosts_keep_independent_rate_clocks() -> None:
+    route_a = ProviderRoute("route-a", "independent-a.example.org", "/data")
+    route_b = ProviderRoute("route-b", "independent-b.example.org", "/data")
+    config = ProviderConfig("independent-provider", ProviderClass.METADATA, (route_a, route_b))
+    clock = [0.0]
+    starts: list[float] = []
+    sleeps: list[float] = []
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        clock[0] += value
+
+    transport = SafeNetworkTransport(
+        resolver=_Resolver((_public_ip(),)),
+        monotonic=lambda: clock[0],
+        sleeper=sleeper,
+        connection_factory=lambda address, selected_route, timeout: (
+            starts.append(clock[0])
+            or _Connection(
+                _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+                address,
+            )
+        ),
+    )
+    transport.fetch("https://independent-a.example.org/data", route=route_a, config=config)
+    transport.fetch("https://independent-b.example.org/data", route=route_b, config=config)
+    assert starts == [0.0, 0.0]
+    assert sleeps == []
+
+
+def test_shared_host_uses_strictest_configured_rate() -> None:
+    route_a = ProviderRoute("route-a", "strict-rate.example.org", "/a")
+    route_b = ProviderRoute("route-b", "strict-rate.example.org", "/b")
+    config_a = ProviderConfig("provider-a", ProviderClass.METADATA, (route_a,), requests_per_second=1.0)
+    config_b = ProviderConfig("provider-b", ProviderClass.METADATA, (route_b,), requests_per_second=0.5)
+    clock = [0.0]
+    starts: list[float] = []
+    sleeps: list[float] = []
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        clock[0] += value
+
+    transport = SafeNetworkTransport(
+        resolver=_Resolver((_public_ip(),)),
+        monotonic=lambda: clock[0],
+        sleeper=sleeper,
+        connection_factory=lambda address, selected_route, timeout: (
+            starts.append(clock[0])
+            or _Connection(
+                _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+                address,
+            )
+        ),
+    )
+    transport.fetch("https://strict-rate.example.org/a", route=route_a, config=config_a)
+    transport.fetch("https://strict-rate.example.org/b", route=route_b, config=config_b)
+    assert starts == [0.0, 2.0]
+    assert sleeps == [2.0]
+
+
+def test_provider_slot_is_released_after_network_failure() -> None:
+    route = ProviderRoute("data", "release-after-failure.example.org", "/data")
+    config = ProviderConfig(
+        "release-provider",
+        ProviderClass.METADATA,
+        (route,),
+        max_concurrent_requests=1,
+        retry_policy=RetryPolicy(maximum_retries=0),
+    )
+    clock = [0.0]
+    sleeps: list[float] = []
+    calls = [0]
+
+    def sleeper(value: float) -> None:
+        sleeps.append(value)
+        clock[0] += value
+
+    def factory(address, selected_route, timeout):
+        calls[0] += 1
+        if calls[0] == 1:
+            raise OSError("synthetic connection failure")
+        return _Connection(
+            _http_payload(200, b"{}", headers=(("Content-Type", "application/json"),)),
+            address,
+        )
+
+    transport = SafeNetworkTransport(
+        resolver=_Resolver((_public_ip(),)),
+        monotonic=lambda: clock[0],
+        sleeper=sleeper,
+        connection_factory=factory,
+    )
+    with pytest.raises(AcquisitionTransportError, match="bounded HTTPS request failed"):
+        transport.fetch("https://release-after-failure.example.org/data", route=route, config=config)
+    response = transport.fetch(
+        "https://release-after-failure.example.org/data",
+        route=route,
+        config=config,
+    )
+    assert response.status_code == 200
+    assert calls == [2]
+    assert sleeps == [1.0]
 
 
 def test_safe_transport_retries_bounded_server_error_without_real_sleep() -> None:

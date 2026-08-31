@@ -23,7 +23,7 @@ from molly.core.ids import (
 )
 
 from .errors import AcquisitionCacheError, AcquisitionIntegrityError
-from .models import ACCEPTED_MEDIA_TYPES, MAX_RESPONSE_BYTES, ArtifactClass, ContentFamily
+from .models import ACCEPTED_MEDIA_TYPES, MAX_RESPONSE_BYTES, AccessStatus, ArtifactClass, ContentFamily
 from .policy import assert_no_secret_values, sanitize_url
 
 
@@ -65,11 +65,18 @@ class CacheEntry:
     resolved_url: str
     redirect_chain: tuple[str, ...]
     response_status: int
+    retrieved_at: str
+    access_status: str
+    license_status: str
+    access_basis: str
+    redistribution_basis: str
     content_type: str
     content_family: str
     body_sha256: str
     body_size: int
     artifact_class: str
+    access_profile_ref: str | None
+    cache_status: str
     stored_at: str = field(default_factory=utc_timestamp)
 
     def __post_init__(self) -> None:
@@ -94,6 +101,31 @@ class CacheEntry:
             raise AcquisitionCacheError("cache request shape is not canonical JSON") from exc
         if not isinstance(self.response_status, int) or not 100 <= self.response_status <= 599:
             raise AcquisitionCacheError("cache response status is invalid")
+        object.__setattr__(
+            self,
+            "retrieved_at",
+            normalize_timestamp(self.retrieved_at, field="retrieved_at"),
+        )
+        for value, field_name in (
+            (self.access_status, "access_status"),
+            (self.license_status, "license_status"),
+            (self.access_basis, "access_basis"),
+            (self.redistribution_basis, "redistribution_basis"),
+            (self.cache_status, "cache_status"),
+        ):
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 512
+                or any(char in value for char in "\x00\r\n")
+            ):
+                raise AcquisitionCacheError(f"cache {field_name} is malformed")
+        try:
+            AccessStatus(self.access_status)
+        except ValueError as exc:
+            raise AcquisitionCacheError("cache access status is outside the closed vocabulary") from exc
+        if self.access_profile_ref is not None:
+            validate_reference(self.access_profile_ref, field="access_profile_ref")
         validate_sha256(self.body_sha256, field="body_sha256")
         if (
             isinstance(self.body_size, bool)
@@ -109,12 +141,23 @@ class CacheEntry:
             raise AcquisitionCacheError("cache artifact class is outside the closed vocabulary") from exc
         if artifact_class in {ArtifactClass.RUNTIME_SECRET, ArtifactClass.CREDENTIAL_REFERENCE}:
             raise AcquisitionCacheError("runtime secrets and credential references cannot be cached")
-        if self.content_type.casefold().split(";", 1)[0].strip() not in ACCEPTED_MEDIA_TYPES:
+        content_type = self.content_type.casefold().split(";", 1)[0].strip()
+        if content_type not in ACCEPTED_MEDIA_TYPES:
             raise AcquisitionCacheError("cache content type is outside the acquisition families")
+        object.__setattr__(self, "content_type", content_type)
         try:
-            ContentFamily(self.content_family)
+            content_family = ContentFamily(self.content_family)
         except ValueError as exc:
             raise AcquisitionCacheError("cache content family is invalid") from exc
+        expected_family = {
+            "application/json": ContentFamily.JSON,
+            "application/xml": ContentFamily.XML,
+            "text/xml": ContentFamily.XML,
+            "text/html": ContentFamily.HTML,
+            "application/pdf": ContentFamily.PDF,
+        }[content_type]
+        if content_family is not expected_family:
+            raise AcquisitionCacheError("cache content family does not match content type")
         for value, field_name in (
             (self.source_url, "source_url"),
             (self.resolved_url, "resolved_url"),
@@ -140,11 +183,18 @@ class CacheEntry:
             "resolved_url": self.resolved_url,
             "redirect_chain": list(self.redirect_chain),
             "response_status": self.response_status,
+            "retrieved_at": self.retrieved_at,
+            "access_status": self.access_status,
+            "license_status": self.license_status,
+            "access_basis": self.access_basis,
+            "redistribution_basis": self.redistribution_basis,
             "content_type": self.content_type,
             "content_family": self.content_family,
             "body_sha256": self.body_sha256,
             "body_size": self.body_size,
             "artifact_class": self.artifact_class,
+            "access_profile_ref": self.access_profile_ref,
+            "cache_status": self.cache_status,
             "stored_at": self.stored_at,
         }
 
@@ -169,11 +219,22 @@ class CacheEntry:
                 resolved_url=str(value["resolved_url"]),
                 redirect_chain=tuple(value.get("redirect_chain", ())),
                 response_status=int(value["response_status"]),
+                retrieved_at=str(value["retrieved_at"]),
+                access_status=str(value["access_status"]),
+                license_status=str(value["license_status"]),
+                access_basis=str(value["access_basis"]),
+                redistribution_basis=str(value["redistribution_basis"]),
                 content_type=str(value["content_type"]),
                 content_family=str(value["content_family"]),
                 body_sha256=str(value["body_sha256"]),
                 body_size=int(value["body_size"]),
                 artifact_class=str(value["artifact_class"]),
+                access_profile_ref=(
+                    None
+                    if value.get("access_profile_ref") is None
+                    else str(value["access_profile_ref"])
+                ),
+                cache_status=str(value["cache_status"]),
                 stored_at=str(value["stored_at"]),
             )
         except (KeyError, TypeError, ValueError) as exc:

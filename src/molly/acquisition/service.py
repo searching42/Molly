@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 import re
 from typing import Any, Protocol
 from urllib.parse import parse_qsl, urlsplit
@@ -13,6 +14,7 @@ from molly.core.ids import (
     artifact_id_for_sha256,
     canonical_json_bytes,
     new_server_id,
+    normalize_timestamp,
     sha256_bytes,
     thaw_json,
     utc_timestamp,
@@ -106,6 +108,7 @@ class _FetchedResponse:
     cache_identity: str
     cache_status: str
     artifact_class: ArtifactClass
+    cache_entry: CacheEntry | None
 
     def __repr__(self) -> str:
         return (
@@ -194,6 +197,18 @@ class AcquisitionService:
     @property
     def config_digest(self) -> str:
         return self.config.config_digest
+
+    def _timestamp(self) -> str:
+        """Return a normalized host-owned timestamp for acquisition evidence."""
+
+        if callable(self._clock):
+            value = self._clock()
+            if isinstance(value, datetime):
+                return utc_timestamp(value)
+            if isinstance(value, str):
+                return normalize_timestamp(value, field="acquisition timestamp")
+            raise AcquisitionConfigurationError("acquisition clock returned an invalid timestamp")
+        return utc_timestamp()
 
     def _provider_config(self, provider_id: str) -> ProviderConfig:
         return self.config.provider(provider_id)
@@ -311,6 +326,7 @@ class AcquisitionService:
         source_url: str,
         access_profile_ref: str | None,
     ) -> tuple[str, dict[str, Any]]:
+        artifact_class = classify_route(request.route)
         binding: dict[str, Any] = {
             "provider": request.provider_id,
             "provider_config_digest": request.provider_config.config_digest,
@@ -323,6 +339,12 @@ class AcquisitionService:
                 "access_profile_ref": access_profile_ref,
             },
             "source_url": source_url,
+            "access_status": request.route.access_status,
+            "license_status": request.route.license_status,
+            "access_basis": request.route.access_basis,
+            "redistribution_basis": request.route.redistribution_basis,
+            "artifact_class": artifact_class.value,
+            "access_profile_ref": access_profile_ref,
         }
         return cache_digest(binding), binding
 
@@ -336,6 +358,23 @@ class AcquisitionService:
             resolved_url=cached.entry.resolved_url,
             redirect_chain=cached.entry.redirect_chain,
         )
+
+    @staticmethod
+    def _verified_cache_entry(fetched: _FetchedResponse, *, purpose: str) -> CacheEntry:
+        entry = fetched.cache_entry
+        if entry is None:
+            raise AcquisitionIntegrityError(
+                f"successful {purpose} response has no durable cache manifest"
+            )
+        if entry.response_status != fetched.response.status_code:
+            raise AcquisitionIntegrityError(
+                f"{purpose} cache manifest status does not match the response"
+            )
+        if entry.body_sha256 != sha256_bytes(fetched.response.body):
+            raise AcquisitionIntegrityError(
+                f"{purpose} cache manifest body digest does not match the response"
+            )
+        return entry
 
     def _fetch_request(self, request: ProviderRequest) -> _FetchedResponse:
         material = self._access_material(request.route, request.provider_config)
@@ -356,6 +395,12 @@ class AcquisitionService:
                 "route_id",
                 "request_shape",
                 "source_url",
+                "access_status",
+                "license_status",
+                "access_basis",
+                "redistribution_basis",
+                "artifact_class",
+                "access_profile_ref",
             }
         }
         cached = self.cache.get(
@@ -364,19 +409,27 @@ class AcquisitionService:
             secret_values=material.all_secret_values(),
         )
         if cached is not None:
+            cached_response = self._response_from_cache(cached)
+            self._validate_network_response_urls(
+                cached_response,
+                request=request,
+                requested_url=safe_source_url,
+            )
             content_type = normalize_content_type(
                 cached.entry.content_type, allowed=request.route.accepted_content_types
             )
             return _FetchedResponse(
-                response=self._response_from_cache(cached),
+                response=cached_response,
                 content_type=content_type,
                 content_family=content_family_for_media_type(content_type),
                 cache_identity=f"sha256:{cache_identity}",
                 cache_status=AcquisitionStatus.CACHE_HIT.value,
                 artifact_class=ArtifactClass(cached.entry.artifact_class),
+                cache_entry=cached.entry,
             )
 
         headers = self._request_headers(request.route, material)
+        retrieved_at = self._timestamp()
         response = self.transport.fetch(
             actual_url,
             route=request.route,
@@ -445,14 +498,23 @@ class AcquisitionService:
                 "body_sha256": sha256_bytes(response.body),
                 "body_size": len(response.body),
                 "artifact_class": artifact_class.value,
+                "retrieved_at": retrieved_at,
+                "access_status": request.route.access_status,
+                "license_status": request.route.license_status,
+                "access_basis": request.route.access_basis,
+                "redistribution_basis": request.route.redistribution_basis,
+                "access_profile_ref": access_ref,
+                "cache_status": "MISS",
                 "stored_at": utc_timestamp(),
             }
-            self.cache.put(
+            cache_entry = self.cache.put(
                 cache_identity,
                 response.body,
                 manifest=manifest,
                 secret_values=secret_values,
             )
+        else:
+            cache_entry = None
         return _FetchedResponse(
             response=NetworkResponse(
                 status_code=response.status_code,
@@ -467,6 +529,7 @@ class AcquisitionService:
             cache_identity=f"sha256:{cache_identity}",
             cache_status="MISS",
             artifact_class=artifact_class,
+            cache_entry=cache_entry,
         )
 
     @staticmethod
@@ -668,6 +731,7 @@ class AcquisitionService:
             return ToolResult(data)
         if not 200 <= resolution.response.status_code <= 299:
             raise AcquisitionTransportError("OA resolver returned a non-success status")
+        resolution_entry = self._verified_cache_entry(resolution, purpose="OA resolution")
         candidates = resolver.normalize_resolution(resolution.response.body)
         eligible = self._eligible_sources(candidates)
         if not eligible:
@@ -696,6 +760,7 @@ class AcquisitionService:
             )
         )
         assert_no_secret_values(fetched.response.body, secret_values)
+        full_text_entry = self._verified_cache_entry(fetched, purpose="full-text")
         content_sha = sha256_bytes(fetched.response.body)
         content_artifact_id = artifact_id_for_sha256(content_sha)
         provenance = AcquisitionProvenance(
@@ -713,9 +778,9 @@ class AcquisitionService:
                 for value in fetched.response.redirect_chain
             ),
             response_status=fetched.response.status_code,
-            retrieved_at=(self._clock() if callable(self._clock) else None) or utc_timestamp(),
-            access_status=selected.candidate.access_status or "configured-authorized",
-            license_status=selected.candidate.license_status or selected.route.license_status,
+            retrieved_at=full_text_entry.retrieved_at,
+            access_status=selected.route.access_status,
+            license_status=selected.route.license_status,
             access_basis=selected.route.access_basis,
             redistribution_basis=selected.route.redistribution_basis,
             artifact_class=selected.artifact_class,
@@ -730,6 +795,13 @@ class AcquisitionService:
                 self._safe_candidate_url(item.url, secret_values)
                 for item in candidates[:20]
             ),
+            resolution_provider=resolution_entry.provider,
+            resolution_provider_config_digest=resolution_entry.provider_config_digest,
+            resolution_request_identity=resolution_entry.request_identity,
+            resolution_cache_identity=resolution_entry.cache_identity,
+            resolution_body_sha256=resolution_entry.body_sha256,
+            resolution_route_policy_version=resolution_entry.route_policy_version,
+            resolution_retrieved_at=resolution_entry.retrieved_at,
         )
         provenance_bytes = provenance.canonical_bytes()
         assert_no_secret_values(provenance_bytes, secret_values)

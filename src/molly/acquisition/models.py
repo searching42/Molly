@@ -52,6 +52,13 @@ class ProviderClass(str, Enum):
     FULL_TEXT = "FULL_TEXT"
 
 
+class AccessStatus(str, Enum):
+    """Server-owned access state recorded for an acquisition occurrence."""
+
+    CONFIGURED_AUTHORIZED = "CONFIGURED_AUTHORIZED"
+    VERIFIED_OPEN_ACCESS = "VERIFIED_OPEN_ACCESS"
+
+
 class ArtifactClass(str, Enum):
     PUBLIC_ARTIFACT = "PUBLIC_ARTIFACT"
     PRIVATE_ARTIFACT = "PRIVATE_ARTIFACT"
@@ -177,6 +184,7 @@ class ProviderRoute:
     access_profile_ref: str | None = None
     route_policy_version: str = "v1"
     provider_id: str = ""
+    access_status: str | AccessStatus = AccessStatus.CONFIGURED_AUTHORIZED
 
     def __post_init__(self) -> None:
         validate_identifier(self.route_id, field="route_id")
@@ -229,6 +237,11 @@ class ProviderRoute:
             )
         if self.provider_id:
             validate_identifier(self.provider_id, field="provider_id")
+        object.__setattr__(
+            self,
+            "access_status",
+            _enum_value(self.access_status, AccessStatus, field="access_status"),
+        )
 
     def with_provider(self, provider_id: str) -> "ProviderRoute":
         if self.provider_id and self.provider_id != provider_id:
@@ -265,6 +278,7 @@ class ProviderRoute:
             "redistribution_basis": self.redistribution_basis,
             "access_profile_ref": self.access_profile_ref,
             "route_policy_version": self.route_policy_version,
+            "access_status": self.access_status,
         }
 
 
@@ -587,6 +601,13 @@ class AcquisitionProvenance:
     cache_status: str
     access_profile_ref: str | None = None
     evaluated_candidates: tuple[str, ...] = ()
+    resolution_provider: str | None = None
+    resolution_provider_config_digest: str | None = None
+    resolution_request_identity: str | None = None
+    resolution_cache_identity: str | None = None
+    resolution_body_sha256: str | None = None
+    resolution_route_policy_version: str | None = None
+    resolution_retrieved_at: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.schema_version, field="provenance schema_version")
@@ -645,6 +666,47 @@ class AcquisitionProvenance:
         object.__setattr__(self, "evaluated_candidates", tuple(_text(value, field="evaluated candidate", maximum=8_192) for value in self.evaluated_candidates))
         if self.access_profile_ref is not None:
             validate_reference(self.access_profile_ref, field="access_profile_ref")
+        resolution_values = (
+            self.resolution_provider,
+            self.resolution_provider_config_digest,
+            self.resolution_request_identity,
+            self.resolution_cache_identity,
+            self.resolution_body_sha256,
+        )
+        if any(value is not None for value in resolution_values):
+            if any(value is None for value in resolution_values):
+                raise AcquisitionIntegrityError(
+                    "OA resolution provenance binding must be complete"
+                )
+            validate_identifier(self.resolution_provider or "", field="resolution_provider")
+            validate_digest_reference(
+                self.resolution_provider_config_digest or "",
+                field="resolution_provider_config_digest",
+            )
+            validate_reference(
+                self.resolution_request_identity or "",
+                field="resolution_request_identity",
+            )
+            validate_digest_reference(
+                self.resolution_cache_identity or "",
+                field="resolution_cache_identity",
+            )
+            validate_sha256(self.resolution_body_sha256 or "", field="resolution_body_sha256")
+        if self.resolution_route_policy_version is not None:
+            _text(
+                self.resolution_route_policy_version,
+                field="resolution_route_policy_version",
+                maximum=128,
+            )
+        if self.resolution_retrieved_at is not None:
+            object.__setattr__(
+                self,
+                "resolution_retrieved_at",
+                normalize_timestamp(
+                    self.resolution_retrieved_at,
+                    field="resolution_retrieved_at",
+                ),
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -673,6 +735,27 @@ class AcquisitionProvenance:
             "cache_status": self.cache_status,
             "access_profile_ref": self.access_profile_ref,
             "evaluated_candidates": list(self.evaluated_candidates),
+            "resolution_provider": self.resolution_provider,
+            "resolution_provider_config_digest": (
+                None
+                if self.resolution_provider_config_digest is None
+                else validate_digest_reference(
+                    self.resolution_provider_config_digest,
+                    field="resolution_provider_config_digest",
+                )
+            ),
+            "resolution_request_identity": self.resolution_request_identity,
+            "resolution_cache_identity": (
+                None
+                if self.resolution_cache_identity is None
+                else validate_digest_reference(
+                    self.resolution_cache_identity,
+                    field="resolution_cache_identity",
+                )
+            ),
+            "resolution_body_sha256": self.resolution_body_sha256,
+            "resolution_route_policy_version": self.resolution_route_policy_version,
+            "resolution_retrieved_at": self.resolution_retrieved_at,
         }
 
     def canonical_bytes(self) -> bytes:
@@ -696,6 +779,7 @@ def _validate_recorded_url(value: str, *, field: str) -> None:
 
 __all__ = [
     "ACCEPTED_MEDIA_TYPES",
+    "AccessStatus",
     "AcquisitionConfig",
     "AcquisitionProvenance",
     "AcquisitionStatus",
