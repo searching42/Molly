@@ -254,3 +254,13 @@ BLOCKED/PENDING:
 
 CORE-05 has not started.  This report does not change readiness C0-C7 or
 authorize CORE-08 cutover.
+
+## Subsequent CORE-05 macro checkpoint note
+
+The statement above is historical evidence for the CORE-04 report commit.
+CORE-05 is a separate Goal/checkpoint under the same accelerated scientific
+intake macro PR #69, with the branch name retained for continuity. The
+CORE-05 checkpoint consumes the accepted `CanonicalDocument` and
+`SourceLocator` contracts recorded here; it does not rewrite or extend the
+CORE-04 parser authority. Its separate evidence is recorded in
+`docs/v2/reports/CORE-05.md`.

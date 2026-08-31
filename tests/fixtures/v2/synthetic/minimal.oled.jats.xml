@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article article-type="research-article" xml:lang="en">
+  <front>
+    <article-meta>
+      <article-id pub-id-type="synthetic">molly-v2-oled-minimal-001</article-id>
+      <title-group><article-title>Synthetic OLED evidence fixture</article-title></title-group>
+      <abstract><p>Synthetic contract text only; no experimental or computational claim.</p></abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec id="results">
+      <title>Results</title>
+      <table-wrap id="table_oled_001">
+        <label>Table 1</label>
+        <caption><p>Synthetic OLED PLQY</p></caption>
+        <table>
+          <thead>
+            <tr><th>Molecule</th><th>Property</th><th>Value</th><th>Unit</th><th>Condition</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>CCO</td><td>PLQY</td><td>0.65</td><td>fraction</td><td>synthetic-fixture-condition</td></tr>
+            <tr><td>CCO</td><td>PLQY</td><td>0.66</td><td>fraction</td><td>synthetic-fixture-condition</td></tr>
+            <tr><td>CCN</td><td>PLQY</td><td>0.58</td><td>fraction</td><td>synthetic-fixture-condition</td></tr>
+            <tr><td>CCN</td><td>PLQY</td><td>0.91</td><td>fraction</td><td>synthetic-fixture-condition</td></tr>
+          </tbody>
+        </table>
+      </table-wrap>
+    </sec>
+  </body>
+</article>
