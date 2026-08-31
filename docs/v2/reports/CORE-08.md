@@ -116,10 +116,10 @@ current Core v2 package does not provide a v1 compatibility alias.
 | isolated `pip install -e .` | PASS | imports and six installed CLI help commands |
 | optional heavy modules in clean install | absent | MinerU and RDKit not installed |
 | offline runtime/inspection/observation smoke | PASS | `tests/molly/test_core08_cutover.py` |
-| PR Fast local selector | 217 passed, 4 deselected | exact selector on `16d1c90`; GitHub rerun also passed on `312023d6` |
-| PR Fast GitHub | PASS | run `33392912090`, tested HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb` |
-| CodeQL | pending final rerun | Default Setup is now reduced to Actions/Python; the final analysis is triggered by this report-only push |
-| Full CI | PASS | run `33393433265`, tested HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb`; compile policy and weighted shards 0–3 passed |
+| PR Fast local selector | 217 passed, 4 deselected | local selector run; GitHub final run passed on the executable-equivalent tree |
+| PR Fast GitHub | PASS | run `33393634708`, report-only HEAD `b5394fb870fb5fb37a8f052fff52a62e8001ecd5`; executable/test HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb` |
+| CodeQL | PASS | run `33393631568` on report-only HEAD; Actions job `99492867358` and Python job `99492867733` passed after Default Setup was reduced to Actions/Python |
+| Full CI | PASS | run `33393433265`, tested executable/test HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb`; compile policy and weighted shards 0–3 passed |
 
 ## Final-state claims
 
