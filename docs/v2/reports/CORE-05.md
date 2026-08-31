@@ -1,12 +1,13 @@
 # Molly Core v2 CORE-05 OLED scientific evidence and reviewed dataset
 
-Status: `IMPLEMENTED — final macro CI evidence pending`
+Status: `PASS — CORE-05 macro checkpoint complete`
 
 ```text
 repository: searching42/Molly
 base: origin/main@925fb97b909f2090899493e8c495ecff43c860c0
 branch: codex/molly-core-v2-core-04-canonical-document
 pre-CORE-05 HEAD: c4d4ce20cbf97378ffa911bbd72d8893bb547fbf
+implementation/test HEAD: f328af3811eb44b102f5e7c38964c194e722dea9
 Draft PR: #69 (https://github.com/searching42/Molly/pull/69), remains Draft
 ```
 
@@ -159,10 +160,44 @@ evidence/locator tamper rejection, exact mapping request binding,
 identity/unit/condition behavior, duplicate/conflict validation, exact
 ReviewRecord gating, deterministic JSON/CSV output, review artifact reload,
 an AgentLoop chain to review bundle, the full offline CORE-04-to-CORE-05
-path, injected-provider secret isolation, and import boundaries. `compileall`
-and `git diff --check` also pass. Final PR Fast, CodeQL, and one GitHub Full
-CI run are recorded only after the complete macro executable/test batch is
-pushed.
+path, injected-provider secret isolation, and import boundaries. `compileall`,
+`git diff --check`, and `uv lock --check` also pass.
+
+## Final macro validation
+
+The executable/test batch was validated at exact HEAD
+`f328af3811eb44b102f5e7c38964c194e722dea9`:
+
+```text
+CORE-05 focused: 13 passed
+CORE-00 + CORE-01 + CORE-02 + CORE-03 + CORE-04 + CORE-05/readiness/privacy/BR1 regression: 193 passed
+PR Fast local: 1653 passed, 5664 deselected
+compileall: PASS
+git diff --check: PASS
+uv lock --check: PASS (185 packages resolved)
+```
+
+The corresponding GitHub checks all passed on that exact HEAD:
+
+```text
+PR Fast CI run 33358713782: compile and diff PASS; pytest (PR fast) PASS
+CodeQL run 33358712068: Python, JavaScript/TypeScript, and Actions analyses PASS
+Full CI run 33358796156: compile and shard policy PASS; weighted shards 0, 1, 2, and 3 PASS
+```
+
+Run links: [PR Fast CI](https://github.com/searching42/Molly/actions/runs/33358713782),
+[CodeQL](https://github.com/searching42/Molly/actions/runs/33358712068), and
+[Full CI](https://github.com/searching42/Molly/actions/runs/33358796156).
+
+Full CI is bound to the executable/test HEAD above. This final report update
+is documentation-only and does not change the validated executable or test
+batch. Frozen v1 references remain unchanged: tag
+`molly-v1-pre-core-v2-20260829` and branch `legacy/molly-v1` both resolve to
+`ae7892dbf8a6bfe85dd909056eadc2afecc40d9d`.
+
+Final readiness remains `C0-C7=PASS`,
+`core_goal_mode_ready=true`, `B0=PASS`, `B1=PASS`, `B2=PENDING`,
+`B3=PENDING`, `B4=PENDING`, and `core_cutover_ready=false`.
 
 ## Evidence classification and limitations
 
@@ -188,6 +223,8 @@ NOT CLAIMED / PENDING:
   preflight, Uni-Mol, REINVENT4, Top-N, GPU, remote, BR1, and cutover.
 ```
 
-Final status changes to `PASS` only after the final coherent macro HEAD
-passes focused regressions, PR Fast, CodeQL, and Full CI. CORE-06 remains
-unopened.
+CORE-05 is complete at the evidence-backed macro checkpoint. No live
+LLM/provider mapping, live literature acquisition, experimental or
+computational OLED validity, RDKit canonical chemistry, CORE-06 applicability
+preflight, Uni-Mol, REINVENT4, Top-N, GPU, remote, BR1, or cutover is claimed.
+CORE-06 remains unopened and requires a separate Owner-reviewed Goal.
