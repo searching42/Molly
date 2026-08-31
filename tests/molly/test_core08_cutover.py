@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from io import StringIO
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import tarfile
 import zipfile
 
 import pytest
@@ -218,32 +220,42 @@ def test_offline_runtime_smoke_start_inspect_and_observe(tmp_path: Path) -> None
     assert restarted.inspect_run(result.run_id).canonical_bytes() == inspection.canonical_bytes()
 
 
-def test_built_artifact_contains_only_current_package() -> None:
+def _assert_current_package_names(names: list[str]) -> None:
+    assert any("molly" in name.split("/") for name in names)
+    assert not any("ai4s_agent" in name.split("/") for name in names)
+    assert not any("tests" in name.split("/") for name in names)
+
+
+def test_built_wheel_and_sdist_contain_only_current_package() -> None:
     with tempfile.TemporaryDirectory(prefix="molly-core08-wheel-") as directory:
+        if importlib.util.find_spec("build") is None:
+            pytest.skip("package build tool is not installed")
+        build_command = [
+            sys.executable,
+            "-m",
+            "build",
+            str(ROOT),
+            "--wheel",
+            "--sdist",
+            "--no-isolation",
+            "--outdir",
+            directory,
+        ]
         result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "wheel",
-                str(ROOT),
-                "--no-deps",
-                "--no-build-isolation",
-                "--wheel-dir",
-                directory,
-            ],
+            build_command,
             cwd=ROOT,
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0, result.stderr
         wheels = sorted(Path(directory).glob("*.whl"))
+        sdists = sorted(Path(directory).glob("*.tar.gz"))
         assert len(wheels) == 1
+        assert len(sdists) == 1
         with zipfile.ZipFile(wheels[0]) as archive:
-            names = archive.namelist()
-        assert any(name.startswith("molly/") for name in names)
-        assert not any(name.startswith("ai4s_agent/") for name in names)
-        assert not any(name.startswith("tests/") for name in names)
+            _assert_current_package_names(archive.namelist())
+        with tarfile.open(sdists[0], mode="r:gz") as archive:
+            _assert_current_package_names(archive.getnames())
 
 
 def test_current_docs_present_v2_as_default_and_legacy_as_rollback_only() -> None:

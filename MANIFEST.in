@@ -1,0 +1,13 @@
+include README.md
+include SECURITY.md
+include pyproject.toml
+include uv.lock
+recursive-include src/molly *.py
+recursive-include docs/v2 *.md *.json *.csv
+prune .github
+prune build
+prune dist
+prune prototypes
+prune tests
+global-exclude *.py[cod]
+global-exclude __pycache__
