@@ -843,12 +843,22 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
             handle = JobHandle.from_dict(runtime_metadata["job_handle"])
             status = reopened_backend.inspect(handle)
             bundle = reopened_backend.collect(handle)
-            if status.state != JobState.SUCCEEDED.value or set(item.artifact_id for item in bundle.outputs) != set(event.output_artifact_ids):
+            raw_output_ids = runtime_metadata.get("job_output_artifact_ids")
+            if not isinstance(raw_output_ids, Mapping):
+                raise RealAcceptanceError(f"remote restart canary lacks raw output binding for {tool_name}")
+            expected_raw_ids = {str(value) for value in raw_output_ids.values()}
+            collected_ids = {item.artifact_id for item in bundle.outputs}
+            if (
+                status.state != JobState.SUCCEEDED.value
+                or collected_ids != expected_raw_ids
+                or event.output_artifact_ids[0] not in expected_raw_ids
+            ):
                 raise RealAcceptanceError(f"remote restart canary failed for {tool_name}")
             canary[tool_name] = {
                 "handle": _public_handle(handle),
                 "inspect_state": status.state,
-                "collected_output_artifact_ids": [item.artifact_id for item in bundle.outputs],
+                "collected_output_artifact_ids": sorted(collected_ids),
+                "final_event_artifact_ids": list(event.output_artifact_ids),
                 "duplicate_dispatches_after_restart": 0,
             }
 

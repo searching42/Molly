@@ -298,6 +298,9 @@ class ComputeBackedBr1Runtime:
                 "idempotency_key": handle.idempotency_key,
                 "config_digest": config_digest,
                 "job_handle": handle.to_dict(),
+                "job_output_artifact_ids": {
+                    item.name: item.artifact_id for item in bundle.outputs
+                },
             },
             job_handle=handle,
         )
