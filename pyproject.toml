@@ -3,43 +3,28 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai4s-agent"
+name = "molly"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-  "flask>=3.0",
-  "httpx>=0.27",
   "jsonschema>=4.23",
-  "keyring>=25.0",
-  "pillow>=10.0",
-  "platformdirs>=4.0",
-  "pydantic>=2.7",
-  "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.scripts]
-molly-worker = "ai4s_agent.molly_worker:main"
 molly = "molly.cli:main"
 
 [project.optional-dependencies]
-quickstart = [
+pdf = [
+  "pdfplumber>=0.11",
+]
+mineru = [
   "mineru[core]==3.4.0",
 ]
 dev = [
-  "langsmith>=0.4,<1",
-  "opentelemetry-api>=1.44,<2",
-  "opentelemetry-exporter-otlp-proto-grpc>=1.44,<2",
-  "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
-  "opentelemetry-sdk>=1.44,<2",
-  "pdfplumber>=0.11",
+  "build>=1.2",
   "pytest>=8.0",
-  "rdkit>=2023.9.1",
   "reportlab>=4.0",
-]
-tracing = [
-  "opentelemetry-api>=1.44,<2",
-  "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
-  "opentelemetry-sdk>=1.44,<2",
+  "wheel>=0.45",
 ]
 observability = [
   "langsmith>=0.4,<1",

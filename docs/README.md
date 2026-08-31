@@ -1,66 +1,48 @@
 # Molly documentation map
 
-This directory contains durable technical contracts, operator guidance,
-machine-readable schemas, examples, and reviewed evidence summaries.
+`docs/v2/` is the current documentation authority for Molly Core v2. The
+repository roadmap records active scope and status; contracts and reports
+provide the inspectable evidence for each milestone.
 
-[`roadmap.md`](roadmap.md) is the only normative source for public roadmap scope,
-milestone status, priorities, execution order, and decisions. Documents here
-may describe how a capability works or how it is accepted; they do not supersede
-the current state recorded in `roadmap.md`. Local `todo.md` and `CLAUDE.md` are
-Git-ignored working-context files and are not public documentation authority.
+## Current Core v2 documents
 
-## Core technical guides
+- [Core v2 roadmap](roadmap.md)
+- [Readiness manifest](v2/readiness/core_refactor_readiness.json)
+- [Execution contract](v2/CODEX_GOAL_EXECUTION_CONTRACT.md)
+- [Core v2 simplification specification](v2/MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md)
+- [CORE-08 cutover report](v2/reports/CORE-08.md)
+- [B4 cutover approval](v2/decisions/CORE_V2_CUTOVER_APPROVAL.md)
+- [Package/dependency boundary](v2/contracts/PACKAGE_DEPENDENCY_AND_CI_BOUNDARY.md)
+- [Acquisition security boundary](v2/contracts/ACQUISITION_SECURITY_AND_PROVENANCE.md)
 
-| Area | Entry points |
-|---|---|
-| Repository development | [Development guidance](development-guidance.md), [public roadmap](roadmap.md) |
-| Execution and human gates | [Resume-intent validation](resume-intent-validation-semantics.md), [user-confirmed replan application](user-confirmed-replan-application-semantics.md), [generic confirmation acceptance](generic-run-plan-confirmation-success-acceptance.md) |
-| Session, recovery, publication, and replay | [Bounded discovery session](oled-bounded-discovery-session.md), [bounded controller](oled-bounded-discovery-controller.md), [remote execution lifecycle](stage6b-remote-execution-lifecycle.md), [EvidenceGrant v1](scientific-agent-evidence-grant-v1.md), [Autonomy Lease v1](scientific-agent-autonomy-lease-v1.md) |
-| Literature intake and parsing | [Literature intake](literature-intake.md), [document parsing providers](document-parsing-providers.md), [real PDF ingestion](real-pdf-ingestion.md) |
-| Remote resources | [Local deployment](local_deployment.md), [remote worker setup](remote_worker_setup.md), [resource profiles](stage6a-resource-profiles.md) |
-| Observation and trajectory integrity | [Unified Scientific Agent run inspection](scientific_agent_run_inspection_v1.md), [privacy-safe Harness observability](scientific_agent_observability_v1.md), [Control-plane event projection and SSE](control-plane-event-projection.md), [deterministic trajectory audit metrics](oled-scientific-agent-trajectory-audit-metrics.md), [failure attribution](oled-scientific-agent-failure-attribution.md), and [read-only trajectory inspection](oled-scientific-agent-trajectory-inspection.md); current status remains in `roadmap.md` under M3/M3.5 |
-| Scientific workflow | [Structured Dataset Canary v1](structured_dataset_canary_v1.md), [Phase 3 to Phase 1 pipeline](phase-3-to-phase-1-pipeline.md), [OLED bounded discovery session](oled-bounded-discovery-session.md), [OLED inverse design](oled-inverse-design.md) |
-| Acceptance and operations | [Private Structured Dataset Canary runbook](private_structured_dataset_canary_runbook.md), [OLED MVP quickstart](oled-mvp-demo-quickstart.md), [queued-canary rollback runbook](queued-canary-operational-rollback-runbook.md), [Uni-Mol compatibility acceptance](manual-real-unimol-acceptance.md) |
+The `v2` source and tests define the current contracts for the AgentLoop,
+immutable artifacts, append-only run records, acquisition, documents,
+scientific evidence, optional BR1 plugins, runtime inspection, and observer-
+only telemetry.
 
-Focused documents beside these entry points define individual adapters,
-schemas, preflights, publication writers, and acceptance fixtures. Their scope
-is intentionally narrow so they can be checked against the corresponding source
-module and test.
+## Current operator guidance
 
-## Supporting material
+Use the root [README](../README.md) for installation and safe offline
+inspection. Host-specific runtime, provider, credential, and compute profiles
+must remain outside the repository. The [security policy](../SECURITY.md)
+defines the public repository boundary.
 
-- `schemas/` contains generated or maintained public JSON contracts.
-- `examples/` contains synthetic or public-safe example inputs.
-- `evidence/` contains reviewed, sanitized summaries only. Raw papers, runtime
-  bundles, concrete infrastructure locators, and user data stay outside Git.
-- `evidence/templates/` contains purpose-specific evidence templates. Similar
-  templates are retained when their schemas and gate positions differ.
+## Historical material
 
-## Historical context
+Files outside `docs/v2/` that describe the earlier Harness, Controller,
+Autonomy, queued workflows, or pre-Core-v2 acceptance are retained as
+historical evidence and are not current architecture authority. This includes
+the older literature, remote-worker, session, and milestone guides and the
+historical material under `docs/evidence/`.
 
-The following migrated documents remain because tests or current contracts
-refer to their stable identifiers. They are historical implementation evidence,
-not active roadmaps:
-
-- [OPEN issue register](open-issues.md)
-- [Phase 1–4 milestone snapshot](phase-1-4-milestone-status.md)
-- [Post-OPEN hardening record](post-open-hardening.md)
-- [Bounded closed-loop delivery record](oled-bounded-closed-loop-roadmap.md)
-- [Custom-corpus governance stage snapshot](custom-corpus-governance-stage-summary-20260628.md)
-
-Pre-migration PR numbers in those records refer to the private audit archive
-unless an explicit public GitHub URL is present. Public PR numbering restarted
-after the 2026-07-27 migration.
-
-Dated task-by-task implementation plans and tool-specific Agent instructions
-are not retained here after implementation. The private audit archive preserves
-their original history for authorized review.
+Historical evidence must not be rewritten to look like Core v2 evidence. Use
+the v2 reports and manifests when making current readiness or cutover claims.
 
 ## Documentation rules
 
-- Prefer relative Markdown links and keep referenced repository paths valid.
-- Use logical resource IDs and synthetic examples; never publish resolved
-  machine paths, credentials, private source material, or raw runtime bundles.
-- Mark historical snapshots as non-normative.
-- Update `roadmap.md`, not a topic document or ignored local working file, when
-  public roadmap status or execution order changes.
+- Prefer repository-relative links and keep referenced paths valid.
+- Use logical resource IDs and synthetic/public-safe examples.
+- Never publish credentials, private source material, user-home paths,
+  concrete host identities, or raw runtime bundles.
+- Mark snapshots and old implementation contracts as historical/non-normative.
+- Update `roadmap.md` when current scope or execution order changes.

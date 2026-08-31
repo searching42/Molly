@@ -10,52 +10,20 @@ from typing import Iterable, Sequence
 
 DEFAULT_FILE_SECONDS = 1.0
 
-# Local baseline hotspot measurements from 2026-07-29. Only material outliers
-# are pinned; new and ordinary files receive DEFAULT_FILE_SECONDS. The LPT
-# scheduler is deterministic, so every file is assigned exactly once while the
-# long replay suites are spread across runners.
+# Current Core v2 hotspot measurements. Only material outliers are pinned; new
+# and ordinary files receive DEFAULT_FILE_SECONDS. The LPT scheduler is
+# deterministic, so every retained current-v2 file is assigned exactly once.
 HISTORICAL_FILE_SECONDS = {
-    "tests/test_oled_bounded_discovery_session.py": 80.0,
-    "tests/test_oled_gold_successor_writer.py": 62.0,
-    "tests/test_oled_gold_successor_postwrite_verifier.py": 57.0,
-    "tests/test_oled_bounded_discovery_session_api.py": 54.0,
-    "tests/test_oled_gold_successor_preflight.py": 53.0,
-    "tests/test_oled_categorical_gold_dataset_admission.py": 51.0,
-    "tests/test_oled_scientific_agent_trajectory_failure_attribution.py": 49.0,
-    "tests/test_oled_scientific_agent_trajectory_audit_metrics.py": 40.0,
-    "tests/test_oled_categorical_dataset_execution.py": 40.0,
-    "tests/test_oled_scientific_agent_trajectory_verifier.py": 37.0,
-    "tests/test_oled_material_registry_successor_writer.py": 32.0,
-    "tests/test_oled_scientific_agent_trajectory_projection.py": 30.0,
-    "tests/test_oled_material_registry_adjudication.py": 28.0,
-    "tests/test_oled_material_registry_successor_postwrite_verifier.py": 25.0,
-    "tests/test_oled_reviewed_evidence_facet_adjudication.py": 24.0,
-    "tests/test_oled_supplementary_material_identity_review.py": 22.0,
-    "tests/test_oled_material_registry_entry_proposal_request.py": 22.0,
-    "tests/test_oled_gold_candidate_postwrite_verifier.py": 21.0,
-    "tests/test_oled_gold_candidate_writer.py": 19.0,
-    "tests/test_oled_gold_admission_preflight.py": 19.0,
-    "tests/test_oled_material_registry_successor_preflight.py": 17.0,
-    "tests/test_oled_supplementary_material_identity_evidence_response.py": 17.0,
-    "tests/test_oled_reviewed_evidence_staging_preflight.py": 16.0,
-    "tests/test_oled_supplementary_source_transcription_review.py": 16.0,
-    "tests/test_oled_reviewed_evidence_ledger_writer.py": 15.0,
-    "tests/test_oled_material_registry_entry_adjudication.py": 14.0,
-    "tests/test_oled_reviewed_evidence_facet_review_request.py": 14.0,
-    "tests/test_oled_real_paper_vertical_run.py": 14.0,
-    "tests/test_run_plan_executor.py": 13.0,
-    "tests/test_oled_inverse_design_runplan.py": 11.0,
-    "tests/test_control_plane_event_projector.py": 10.0,
-    "tests/test_oled_reviewed_evidence_ledger_postwrite_verifier.py": 10.0,
-    "tests/test_oled_material_registry_resolution_request.py": 10.0,
-    "tests/test_oled_observation_staging_preflight.py": 10.0,
-    "tests/test_oled_observation_materialization_candidate.py": 9.0,
-    "tests/test_oled_supplementary_material_identity_candidate_request.py": 7.0,
-    "tests/test_custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_precheck.py": 7.0,
-    "tests/test_oled_bounded_discovery_controller.py": 6.0,
-    "tests/test_custom_corpus_property_training_dataset_writer_value_source_manifest_preflight.py": 5.0,
-    "tests/test_queued_execute_canary_repeated_run_stability.py": 5.0,
-    "tests/test_custom_corpus_property_training_dataset_writer_input_binding_plan_preflight.py": 5.0,
+    "tests/molly/test_core02_agent_loop.py": 8.0,
+    "tests/molly/test_core03_acquisition.py": 8.0,
+    "tests/molly/test_core04_documents.py": 8.0,
+    "tests/molly/test_core05_oled_evidence.py": 8.0,
+    "tests/molly/test_core06_br1_plugin.py": 5.0,
+    "tests/molly/test_core06_remote_compute.py": 5.0,
+    "tests/molly/test_core07_cli.py": 4.0,
+    "tests/molly/test_core07_inspection.py": 4.0,
+    "tests/molly/test_core07_observability.py": 4.0,
+    "tests/molly/test_core08_cutover.py": 4.0,
 }
 
 

@@ -1,59 +1,64 @@
-# Security Policy
+# Security policy
 
 ## Reporting a vulnerability or privacy issue
 
-Do not open a public issue for suspected credentials, personal data, private
-infrastructure details, or an exploitable security defect. Use GitHub's private
-vulnerability reporting for this repository.
+Do not open a public issue for credentials, personal data, private
+infrastructure details, or an exploitable security defect. Use GitHub's
+private vulnerability reporting for this repository and include only the
+minimum reproduction detail. Do not paste live credentials, private datasets,
+private papers, or machine-specific configuration into a report.
 
-Include only the minimum information needed to reproduce the problem. Do not
-paste live credentials, private datasets, user content, or machine-specific
-configuration into a report.
+## Current Core v2 boundaries
+
+- `ToolRegistry` and `ToolPolicy` are closed, server-owned execution
+  boundaries. Model proposals cannot select shells, arbitrary paths,
+  credentials, hosts, or worker commands.
+- An approval is exact and digest-bound to the immutable materialized call.
+  Conversation text, UI state, caches, and telemetry are not authority.
+- Runtime, provider, and compute profiles are server-owned. Secret values do
+  not enter prompts, materialized calls, artifacts, ledger events, or tool
+  observations.
+- Acquisition uses configured providers/routes, HTTPS and address validation,
+  redirect and response limits, licensing/access metadata, and cache
+  provenance. It does not provide arbitrary model URL fetching or access
+  control bypass.
+- `ArtifactStore` verifies immutable content digests and uses safe publication;
+  `RunLedger` is append-only; `ArtifactLineage` is bounded provenance rather
+  than a causal or recovery authority.
+- OpenTelemetry and LangSmith, when installed, are observer-only. Exporter
+  failure or missing telemetry cannot alter authoritative scientific state.
+- The legacy v1 implementation is available only through the immutable
+  rollback refs documented in the Core v2 cutover evidence.
 
 ## Repository privacy boundary
 
-This public repository must contain only source code, public documentation,
-synthetic fixtures, and sanitized evidence. Runtime state, real user/project
-data, private papers, secrets, hostnames, usernames, absolute infrastructure
-paths, and machine-specific profiles must remain in user-scoped private storage.
+The public repository may contain source code, public documentation, synthetic
+fixtures, machine-readable contracts, and sanitized evidence. Keep runtime
+state, real user/project data, private papers, secrets, concrete hostnames,
+usernames, absolute infrastructure paths, and machine-specific profiles in
+private server-owned storage.
 
-Local `CLAUDE.md` and `todo.md` are intentionally Git-ignored working-context
-files. Public tests, runtime code, packaging, and documentation must not depend
-on their presence or contents. Durable public guidance lives in
-`docs/development-guidance.md` and `docs/roadmap.md`.
-
-The supported development line is `main`.
+Local working-context files are not public documentation authority. Public
+tests, runtime code, packaging, and documentation must not depend on their
+presence or contents.
 
 ## Optional exact-value audit
 
-Public tests use generic rules for credential formats, private configuration
-files, non-example user directories and network identities, and
-infrastructure-shaped hostnames. They intentionally do not contain a literal,
-encoded, publicly salted, or unkeyed-digest list of retired private values.
-
-Authorized maintainers may perform an additional exact-value scan with a
+Authorized maintainers may run an additional exact-value scan with a
 newline-delimited denylist stored outside the checkout or under an explicitly
-Git-ignored path. Blank lines and lines beginning with `#` are ignored. Never
-commit the denylist or paste its contents into an issue, PR, test fixture, or
-CI variable visible to untrusted jobs.
+ignored path:
 
 ```bash
 MOLLY_PRIVATE_DENYLIST_PATH=/path/outside/checkout/private-denylist.txt \
   python scripts/audit_private_denylist.py
 ```
 
-The scanner compares those private literals with current `git ls-files`
-content and paths. Reports identify only the denylist entry number and matched
-tracked file; they do not echo or hash the private value. If the environment
-variable is unset, the optional command exits successfully without running an
-exact-value scan. Public CI does not depend on a private denylist.
+The optional scan reports only denylist entry numbers and matching tracked
+paths. Never commit the denylist or expose its contents to untrusted CI jobs.
 
-## Public Git history limitation
+## Rollback and public history
 
-Working-tree cleanup affects only the current tracked tree. Deleting a file or
-string in a new commit does not remove it from existing public Git objects,
-clones, caches, or mirrors. Any public-history cleanup requires a separately
-coordinated repository rewrite or rebuild and explicit downstream remediation.
-Until that work is reviewed and completed, repository privacy risk must not be
-described as closed; the current public risk and acceptance state is recorded
-in `docs/roadmap.md`.
+Deleting an old file from the current tree does not erase existing Git objects,
+clones, caches, or mirrors. Core v2 rollback depends on the immutable v1 tag
+and branch, not on a compatibility package in the default install. Any public
+history rewrite requires separate owner approval and downstream remediation.
