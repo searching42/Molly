@@ -747,8 +747,20 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
             if failures:
                 failed = failures[-1]
                 error_type = str(failed.metadata.get("error_type") or "unknown")
+                compute_errors: list[str] = []
+                jobs_root = temp_root / "compute" / "jobs"
+                if jobs_root.is_dir():
+                    for state_path in sorted(jobs_root.glob("*.json")):
+                        try:
+                            state = _json_read(state_path)
+                        except RealAcceptanceError:
+                            continue
+                        if state.get("state") == "FAILED":
+                            compute_errors.append(str(state.get("error_type") or "unknown"))
+                detail = ", ".join(compute_errors) if compute_errors else "none"
                 raise RealAcceptanceError(
-                    f"BR1 AgentLoop failed at {failed.tool_name or 'unknown'}: {error_type}"
+                    f"BR1 AgentLoop failed at {failed.tool_name or 'unknown'}: {error_type}; "
+                    f"compute_state_errors={detail}"
                 ) from exc
             raise
         if result.status != RunStatus.STOPPED.value or provider.calls != 6:
