@@ -154,6 +154,13 @@ def _scp(config: HostConfig, source: Path | str, target: str) -> None:
     _run_checked(("scp", str(source), f"{config.ssh_target}:{target}"), operation="artifact transfer")
 
 
+def _scp_from_remote(config: HostConfig, source: str, target: Path) -> None:
+    _run_checked(
+        ("scp", f"{config.ssh_target}:{source}", str(target)),
+        operation="artifact download",
+    )
+
+
 def _remote_child(root: str, name: str) -> str:
     return root.rstrip("/") + "/" + name
 
@@ -476,7 +483,7 @@ class ServerOwnedRemoteRunner:
         return remote
 
     def _fetch(self, remote: str, local: Path) -> bytes:
-        _scp(self.config, remote, str(local))
+        _scp_from_remote(self.config, remote, local)
         return local.read_bytes()
 
     def __call__(self, task: Mapping[str, Any], profile: ComputeProfile, workdir: Path) -> Sequence[ComputeOutput]:
