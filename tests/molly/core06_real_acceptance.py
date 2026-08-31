@@ -598,10 +598,12 @@ class RealChainProvider:
     def next_action(self, context: Any, _model_visible_tools: Any) -> Any:
         index = self.calls
         self.calls += 1
-        previous = context.previous_tool_outcome
-        data = {} if previous is None else previous["data"]
         if index == 0:
             return ToolCallProposal("br1_applicability_preflight", input_artifact_ids=(self.dataset_id,))
+        previous = context.previous_tool_outcome
+        if previous is None or previous.get("status") != "SUCCEEDED" or "data" not in previous:
+            raise RealAcceptanceError("BR1 chain received no successful durable outcome for the next stage")
+        data = previous["data"]
         if index == 1:
             return ToolCallProposal(
                 "br1_train_unimol",
@@ -734,7 +736,21 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
             input_artifact_ids=(dataset_record.artifact_id,),
             metadata={"acceptance_id": "core06-br1-v2-real-20260831"},
         )
-        result = loop.run(request)
+        try:
+            result = loop.run(request)
+        except Exception as exc:
+            failures = [
+                event
+                for event in ledger.for_run(request.run_id)
+                if event.event_type == "TOOL_EXECUTION_FAILED"
+            ]
+            if failures:
+                failed = failures[-1]
+                error_type = str(failed.metadata.get("error_type") or "unknown")
+                raise RealAcceptanceError(
+                    f"BR1 AgentLoop failed at {failed.tool_name or 'unknown'}: {error_type}"
+                ) from exc
+            raise
         if result.status != RunStatus.STOPPED.value or provider.calls != 6:
             raise RealAcceptanceError("fresh-real BR1 AgentLoop chain did not stop successfully")
 
