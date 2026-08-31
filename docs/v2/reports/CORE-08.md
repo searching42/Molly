@@ -15,6 +15,10 @@ The explicit Owner decision supplied for this Goal is recorded in
 
 ```text
 base_commit: d0182fea0fd33c0b716fd39d89f08cdee4c7791c
+b4_decision_commit: cd156d8
+cutover_commit: 3b743fe
+package_evidence_commit: 16d1c90
+current_executable_test_head: 16d1c90
 b4_decision: APPROVED
 b4_status: PASS
 readiness_transition: core_cutover_ready false → true
@@ -49,6 +53,10 @@ mainline. No compatibility shadow package or replacement worker command was
 added. The v1 implementation remains recoverable through the immutable refs
 below.
 
+The removal is limited to the current mainline. It does not delete or move
+the frozen v1 branch/tag, and it does not change the accepted Core v2 BR1 or
+remote-compute modules.
+
 ## Documentation and CI cutover
 
 The root README, documentation map, roadmap, and security policy now describe
@@ -69,9 +77,9 @@ removed package records are legacy-only dependencies; retained package source
 URLs and versions did not change. The lock check is recorded below after the
 final tree is verified.
 
-The final verification records the editable clean-install/import smoke, wheel
-and sdist contents, CLI help commands, and one offline server-owned runtime
-profile smoke. These checks must not install or invoke real GPU, network, LLM,
+The verification records the editable clean-install/import smoke, wheel and
+sdist contents, CLI help commands, and one offline server-owned runtime
+profile smoke. These checks did not install or invoke real GPU, network, LLM,
 BR1, or remote-compute work.
 
 ## Rollback verification
@@ -93,12 +101,16 @@ current Core v2 package does not provide a v1 compatibility alias.
 
 | Check | Result | Evidence |
 |---|---|---|
-| `git diff --check` | pending final HEAD | final verification below |
-| `python -m compileall -q src tests prototypes` | pending final HEAD | final verification below |
+| `git diff --check` | PASS | current executable/test head |
+| `python -m compileall -q src tests prototypes` | PASS | current executable/test head |
 | `uv lock --check` | PASS on current lock | regenerated `uv.lock` |
-| CORE-08 focused tests | pending final HEAD | `tests/molly/test_core08_cutover.py` |
-| retained v2 regression tests | pending final HEAD | final verification below |
-| PR Fast | pending | exact workflow/run to be recorded |
+| CORE-08 focused tests | 7 passed | `tests/molly/test_core08_cutover.py` |
+| retained v2 regression tests | 221 passed | CORE-01 through CORE-07, readiness, privacy |
+| isolated `pip install -e .` | PASS | imports and six installed CLI help commands |
+| optional heavy modules in clean install | absent | MinerU and RDKit not installed |
+| offline runtime/inspection/observation smoke | PASS | `tests/molly/test_core08_cutover.py` |
+| PR Fast local selector | 217 passed, 4 deselected | exact selector on `16d1c90` |
+| PR Fast GitHub | pending | exact workflow/run to be recorded |
 | CodeQL | pending | exact workflow/run to be recorded |
 | Full CI | pending | exact workflow/run to be recorded |
 
