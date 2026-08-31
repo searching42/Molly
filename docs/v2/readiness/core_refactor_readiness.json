@@ -34,14 +34,14 @@
     "B1": "PASS",
     "B2": "PASS",
     "B3": "PASS",
-    "B4": "PENDING"
+    "B4": "PASS"
   },
   "br1_condition_notes": {
     "B0": "PASS: immutable v1 reference and rollback/evidence inventory are recorded in docs/v2/V1_ROLLBACK_AND_EVIDENCE_INVENTORY.md.",
     "B1": "PASS_CONTRACT_ONLY: docs/v2/fixtures/br1_parity_manifest.json freezes the required v2 BR1 stages, invariants, current-run binding, stale-artifact rejection, and deterministic terminal replay contract; it makes no fresh-real parity claim.",
     "B2": "PASS: docs/v2/evidence/core-06/CORE06C_BR1_ACCEPTANCE.json (SHA-256 63868bbdd0a4499139208e0732f21fc62ab340623a3d743524e04c032ce97d8e) records acceptance core06-br1-v2-real-20260831 at executable commit 6f2340e91ae45224a3a19b6e6c9dcd19343c07a2, with a migrated accepted-real dataset, fresh Uni-Mol training, fresh REINVENT4 generation, current-run prediction, and deterministic Computational Top-N.",
     "B3": "PASS: docs/v2/evidence/core-06/CORE06C_BR1_ACCEPTANCE.json (SHA-256 63868bbdd0a4499139208e0732f21fc62ab340623a3d743524e04c032ce97d8e) records restart inspect/collect for all three remote BR1 jobs, exact JobHandle/task/profile bindings, verified output manifests, and zero duplicate dispatches after restart.",
-    "B4": "PENDING: default cutover is not authorized by this Goal."
+    "B4": "PASS: explicit Owner approval is recorded in docs/v2/decisions/CORE_V2_CUTOVER_APPROVAL.md; it authorizes default Core v2 cutover but does not move the immutable v1 references."
   },
   "br1_reference_evidence": {
     "acceptance_readme": "docs/evidence/br1-conversation-real-acceptance-v1/README.md",
@@ -50,10 +50,10 @@
     "known_v1_control_plane_commit": "15a4365fb6597a231cbff5b083af23ad8b783c32"
   },
   "core_goal_mode_ready": true,
-  "core_cutover_ready": false,
+  "core_cutover_ready": true,
   "error_propagation_extension_required": false,
   "error_propagation_extension_implementation_authorized": false,
-  "owner_decision": "APPROVED_FOR_CORE_IMPLEMENTATION_NOT_CUTOVER",
+  "owner_decision": "APPROVED_FOR_DEFAULT_CUTOVER",
   "readiness_rule": "core_goal_mode_ready is true iff C0-C7 are all PASS; core_cutover_ready is true iff C0-C7 and B0-B4 are all PASS and Owner explicitly approves cutover.",
   "last_updated": "2026-08-31"
 }
