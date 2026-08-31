@@ -100,8 +100,8 @@ def test_readiness_manifest_has_safe_boolean_and_cutover_invariants() -> None:
     assert set(statuses) == {f"C{i}" for i in range(8)}
     assert readiness["core_goal_mode_ready"] is (set(statuses.values()) == {"PASS"})
     assert readiness["core_cutover_ready"] is False
-    assert readiness["br1_cutover_conditions"]["B2"] != "PASS"
-    assert readiness["br1_cutover_conditions"]["B3"] != "PASS"
+    assert readiness["br1_cutover_conditions"]["B2"] == "PASS"
+    assert readiness["br1_cutover_conditions"]["B3"] == "PASS"
     assert readiness["br1_cutover_conditions"]["B4"] != "PASS"
 
 
