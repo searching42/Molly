@@ -111,8 +111,9 @@ current Core v2 package does not provide a v1 compatibility alias.
 | `git diff --check` | PASS | current executable/test head |
 | `python -m compileall -q src tests prototypes` | PASS | current executable/test head |
 | `uv lock --check` | PASS on current lock | regenerated `uv.lock` |
-| CORE-08 focused tests | 7 passed | `tests/molly/test_core08_cutover.py` |
-| retained v2 regression tests | 221 passed | CORE-01 through CORE-07, readiness, privacy |
+| CORE-08 cutover test module | 7 passed | `tests/molly/test_core08_cutover.py` |
+| broader focused cutover selection | 46 passed | CORE-08 module plus readiness and repository-privacy tests |
+| retained v2 regression | 221 passed | CORE-01 through CORE-07, readiness, privacy |
 | isolated `pip install -e .` | PASS | imports and six installed CLI help commands |
 | optional heavy modules in clean install | absent | MinerU and RDKit not installed |
 | offline runtime/inspection/observation smoke | PASS | `tests/molly/test_core08_cutover.py` |
