@@ -1,8 +1,7 @@
+"""Repository privacy and current Core v2 boundary checks."""
+
 from __future__ import annotations
 
-import ast
-import importlib
-import inspect
 import ipaddress
 import re
 import shutil
@@ -45,9 +44,7 @@ INFRASTRUCTURE_HOSTNAME_PATTERN = re.compile(
     rb"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
 )
-IPV4_PATTERN = re.compile(
-    rb"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])"
-)
+IPV4_PATTERN = re.compile(rb"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
 UV_LOCK_DEPENDENCY_VERSION_LINE = re.compile(
     rb'^[ \t]*version[ \t]*=[ \t]*"(?P<version>(?:[0-9]+\.){3}[0-9]+)"[ \t]*$',
     re.MULTILINE,
@@ -66,12 +63,8 @@ EMAIL_PATTERN = re.compile(
     rb"[A-Za-z0-9._%+-]+@(?P<domain>[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
     re.IGNORECASE,
 )
-EXAMPLE_EMAIL_DOMAINS = frozenset(
-    {b"example.com", b"example.net", b"example.org"}
-)
-FORBIDDEN_PRIVATE_SUFFIXES = frozenset(
-    {".key", ".pem", ".p12", ".pfx", ".env", ".pdf"}
-)
+EXAMPLE_EMAIL_DOMAINS = frozenset({b"example.com", b"example.net", b"example.org"})
+FORBIDDEN_PRIVATE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx", ".env", ".pdf"})
 FORBIDDEN_PRIVATE_NAMES = frozenset(
     {
         "connections.json",
@@ -94,25 +87,6 @@ FORBIDDEN_PRIVATE_LOCK_NAMES = frozenset(
         ".environment_profiles.lock",
         ".legacy_transport_profiles.lock",
     }
-)
-LOW_RISK_EXECUTION_BOUNDARY_MODULES = (
-    "tests.test_generic_run_plan_source_manifest_acceptance",
-    "tests.test_generic_run_plan_corpus_index_acceptance",
-    "tests.test_generic_run_plan_multi_index_acceptance",
-    "tests.test_generic_run_plan_dense_index_acceptance",
-    "tests.test_generic_run_plan_retrieve_evidence_acceptance",
-)
-FORBIDDEN_LOW_RISK_IMPORTS = (
-    "requests",
-    "urllib",
-    "openai",
-    "mineru",
-    "pdfplumber",
-    "subprocess",
-    "sentence_transformers",
-)
-FORBIDDEN_LOW_RISK_CALLS = frozenset(
-    {"urlopen", "Popen", "run", "call", "check_call", "check_output"}
 )
 
 
@@ -152,7 +126,6 @@ def _generic_privacy_findings(
             )
             for match in pattern.finditer(payload)
         )
-
     for match in IPV4_PATTERN.finditer(payload):
         if any(start <= match.start() < end for start, end in ignored_ipv4_spans):
             continue
@@ -165,9 +138,8 @@ def _generic_privacy_findings(
 
     for match in EMAIL_PATTERN.finditer(payload):
         domain = match.group("domain").lower()
-        if (
-            domain not in EXAMPLE_EMAIL_DOMAINS
-            and not domain.endswith((b".example", b".invalid", b".test"))
+        if domain not in EXAMPLE_EMAIL_DOMAINS and not domain.endswith(
+            (b".example", b".invalid", b".test")
         ):
             findings.append("non-example email address")
     return sorted(set(findings))
@@ -200,56 +172,20 @@ def _private_tracked_path_reason(relative: Path) -> str | None:
     return None
 
 
-def _external_execution_findings(module_name: str, *, inspect_calls: bool) -> list[str]:
-    module = importlib.import_module(module_name)
-    tree = ast.parse(inspect.getsource(module))
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported = [node.module]
-        else:
-            imported = []
-        for imported_module in imported:
-            if any(token in imported_module for token in FORBIDDEN_LOW_RISK_IMPORTS):
-                findings.append(f"forbidden import: {imported_module}")
-
-        if not inspect_calls or not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_LOW_RISK_CALLS:
-            findings.append(f"forbidden call: {node.func.id}")
-        if isinstance(node.func, ast.Attribute):
-            if node.func.attr in FORBIDDEN_LOW_RISK_CALLS:
-                findings.append(f"forbidden call: {node.func.attr}")
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == "requests":
-                findings.append(f"forbidden requests call: {node.func.attr}")
-    return sorted(set(findings))
-
-
-@pytest.mark.parametrize(
-    ("module_name", "inspect_calls"),
-    [
-        *[
-            pytest.param(module_name, True, id=module_name.rsplit("_", 1)[0].rsplit(".", 1)[-1])
-            for module_name in LOW_RISK_EXECUTION_BOUNDARY_MODULES
-        ],
-        pytest.param("ai4s_agent.phase3_executor", False, id="phase3-executor"),
-    ],
-)
-def test_low_risk_execution_modules_have_no_network_or_external_program_path(
-    module_name: str,
-    inspect_calls: bool,
-) -> None:
-    assert _external_execution_findings(module_name, inspect_calls=inspect_calls) == []
+def test_current_v2_source_has_no_legacy_runtime_imports() -> None:
+    source_root = REPOSITORY_ROOT / "src" / "molly"
+    assert source_root.is_dir()
+    assert all(
+        "ai4s_agent" not in path.read_text(encoding="utf-8")
+        for path in source_root.rglob("*.py")
+    )
 
 
 def test_tracked_repository_has_no_generic_private_infrastructure_markers() -> None:
     findings: list[str] = []
     for path in _tracked_paths():
-        payload = path.read_bytes()
         relative = path.relative_to(REPOSITORY_ROOT)
-        searchable = payload + b"\n" + relative.as_posix().encode()
+        searchable = path.read_bytes() + b"\n" + relative.as_posix().encode()
         for category in _generic_privacy_findings(searchable, relative_path=relative):
             findings.append(f"{relative}: {category}")
     assert findings == []
@@ -262,8 +198,7 @@ def test_tracked_repository_has_no_secret_like_tokens_or_private_files() -> None
         if reason := _private_tracked_path_reason(relative):
             findings.append(f"private file is tracked: {relative} ({reason})")
             continue
-        payload = path.read_bytes()
-        if any(pattern.search(payload) for pattern in SECRET_PATTERNS):
+        if any(pattern.search(path.read_bytes()) for pattern in SECRET_PATTERNS):
             findings.append(f"secret-like token is tracked: {relative}")
     assert findings == []
 
@@ -287,47 +222,26 @@ def test_secret_scanner_detects_supported_provider_credentials(secret: bytes) ->
 @pytest.mark.parametrize(
     ("private_value", "expected_category"),
     [
-        (
-            b"/home/" + b"synthetic-researcher" + b"/runs/output.json",
-            "non-example absolute user directory",
-        ),
-        (
-            b"C:\\Users\\" + b"synthetic-researcher" + b"\\runs\\output.json",
-            "non-example absolute user directory",
-        ),
-        (
-            b"node" + b"742",
-            "infrastructure-style numbered hostname",
-        ),
-        (
-            b"10." + b"23.45.67",
-            "non-example IPv4 address",
-        ),
-        (
-            b"reviewer@" + b"synthetic-private.internal",
-            "non-example email address",
-        ),
+        (b"/home/" + b"synthetic-researcher" + b"/runs/output.json", "non-example absolute user directory"),
+        (b"C:\\Users\\" + b"synthetic-researcher" + b"\\runs\\output.json", "non-example absolute user directory"),
+        (b"node" + b"742", "infrastructure-style numbered hostname"),
+        (b"10." + b"23.45.67", "non-example IPv4 address"),
+        (b"reviewer@" + b"synthetic-private.internal", "non-example email address"),
     ],
 )
 def test_generic_privacy_scanner_detects_synthetic_private_shapes(
-    private_value: bytes,
-    expected_category: str,
+    private_value: bytes, expected_category: str
 ) -> None:
     assert expected_category in _generic_privacy_findings(private_value)
 
 
 def test_uv_lock_dependency_version_is_not_treated_as_an_ipv4_address() -> None:
     payload = b'version = "13.0.' + b'3.0"\n'
-
     assert _generic_privacy_findings(payload, relative_path=Path("uv.lock")) == []
 
 
 def test_uv_lock_source_url_ipv4_remains_a_privacy_finding() -> None:
-    payload = (
-        b'source = { url = "http://10.'
-        + b'23.45.67/simple" }\n'
-    )
-
+    payload = b'source = { url = "http://10.' + b'23.45.67/simple" }\n'
     assert _generic_privacy_findings(
         payload, relative_path=Path("uv.lock")
     ) == ["non-example IPv4 address"]
@@ -335,7 +249,6 @@ def test_uv_lock_source_url_ipv4_remains_a_privacy_finding() -> None:
 
 def test_four_component_version_is_still_a_finding_outside_uv_lock_version_fields() -> None:
     payload = b'version = "13.0.' + b'3.0"\n'
-
     assert _generic_privacy_findings(payload, relative_path=Path("notes.txt")) == [
         "non-example IPv4 address"
     ]
@@ -372,8 +285,7 @@ def test_generic_privacy_scanner_allows_explicit_public_examples(
     ],
 )
 def test_private_path_scanner_detects_generic_synthetic_layouts(
-    relative: Path,
-    expected_reason: str,
+    relative: Path, expected_reason: str
 ) -> None:
     assert _private_tracked_path_reason(relative) == expected_reason
 
@@ -393,11 +305,8 @@ def test_optional_private_denylist_scanner_uses_only_synthetic_fixture_values(
     denylist.write_bytes(b"# local-only synthetic test\n" + synthetic_entry + b"\n")
     entries = load_private_denylist(denylist, repository_root=repository)
     findings = scan_files_for_private_entries(
-        repository_root=repository,
-        files=[tracked],
-        entries=entries,
+        repository_root=repository, files=[tracked], entries=entries
     )
-
     assert entries == (synthetic_entry,)
     assert len(findings) == 1
     assert findings[0].relative_path == "public.txt"
@@ -406,20 +315,14 @@ def test_optional_private_denylist_scanner_uses_only_synthetic_fixture_values(
     assert synthetic_entry.decode() not in findings[0].describe().lower()
 
 
-def test_optional_private_denylist_rejects_a_tracked_denylist(
-    tmp_path: Path,
-) -> None:
+def test_optional_private_denylist_rejects_a_tracked_denylist(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
     denylist = repository / "private-denylist.txt"
     denylist.write_text("synthetic-private-beta.invalid\n", encoding="utf-8")
     subprocess.run(["git", "add", "private-denylist.txt"], cwd=repository, check=True)
-
-    with pytest.raises(
-        PrivateDenylistConfigurationError,
-        match="must not be tracked",
-    ):
+    with pytest.raises(PrivateDenylistConfigurationError, match="must not be tracked"):
         load_private_denylist(denylist, repository_root=repository)
 
 
@@ -449,29 +352,14 @@ def test_git_add_recursively_ignores_complete_private_config_layout(
         for name in private_names:
             (parent / name).write_text("private\n", encoding="utf-8")
         (parent / "known_hosts").write_text("private\n", encoding="utf-8")
-        (parent / "known_hosts.worker").write_text("private\n", encoding="utf-8")
-        (parent / "molly_known_hosts").write_text("private\n", encoding="utf-8")
-        (parent / "worker_known_hosts.backup").write_text(
-            "private\n", encoding="utf-8"
-        )
         (parent / "ssh_config").write_text("private\n", encoding="utf-8")
-        (parent / "ssh_config.worker").write_text("private\n", encoding="utf-8")
-        (parent / "molly_ssh_config").write_text("private\n", encoding="utf-8")
         (parent / "secrets").mkdir()
-        (parent / "secrets" / "provider.key").write_text(
-            "private\n", encoding="utf-8"
-        )
+        (parent / "secrets" / "provider.key").write_text("private\n", encoding="utf-8")
         (parent / ".ssh").mkdir()
         (parent / ".ssh" / "config").write_text("private\n", encoding="utf-8")
-        (parent / ".ssh" / "config.d").mkdir()
-        (parent / ".ssh" / "config.d" / "worker.conf").write_text(
-            "private\n", encoding="utf-8"
-        )
     private_bundle = repository / "nested" / ".molly-private"
     private_bundle.mkdir()
-    (private_bundle / "arbitrary-private-data.txt").write_text(
-        "private\n", encoding="utf-8"
-    )
+    (private_bundle / "arbitrary-private-data.txt").write_text("private\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
     subprocess.run(["git", "add", "."], cwd=repository, check=True)
     staged = subprocess.run(

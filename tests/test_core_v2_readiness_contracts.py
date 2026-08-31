@@ -99,10 +99,12 @@ def test_readiness_manifest_has_safe_boolean_and_cutover_invariants() -> None:
     statuses = readiness["conditions"]
     assert set(statuses) == {f"C{i}" for i in range(8)}
     assert readiness["core_goal_mode_ready"] is (set(statuses.values()) == {"PASS"})
-    assert readiness["core_cutover_ready"] is False
+    assert readiness["core_cutover_ready"] is True
     assert readiness["br1_cutover_conditions"]["B2"] == "PASS"
     assert readiness["br1_cutover_conditions"]["B3"] == "PASS"
-    assert readiness["br1_cutover_conditions"]["B4"] != "PASS"
+    assert readiness["br1_cutover_conditions"]["B4"] == "PASS"
+    assert readiness["owner_decision"] == "APPROVED_FOR_DEFAULT_CUTOVER"
+    assert "CORE_V2_CUTOVER_APPROVAL.md" in readiness["br1_condition_notes"]["B4"]
 
 
 def test_core00_public_docs_have_no_absolute_home_paths() -> None:
