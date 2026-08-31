@@ -18,11 +18,13 @@ base_commit: d0182fea0fd33c0b716fd39d89f08cdee4c7791c
 b4_decision_commit: cd156d8
 cutover_commit: 3b743fe
 package_evidence_commit: 16d1c90
-current_executable_test_head: 16d1c90
+ci_repair_commit: 312023d6c0fd3c53d8a14091946e4cea2d7a76bb
+current_executable_test_head: 312023d6c0fd3c53d8a14091946e4cea2d7a76bb
 b4_decision: APPROVED
 b4_status: PASS
 readiness_transition: core_cutover_ready false → true
 owner_decision: APPROVED_FOR_DEFAULT_CUTOVER
+pull_request: #72 (Draft)
 ```
 
 The decision applies to the accepted CORE-06 BR1 parity and CORE-07 runtime
@@ -70,6 +72,11 @@ deterministic shard selector. Legacy queued-canary CI was removed. CI installs
 the current development/PDF test boundary rather than the old legacy runtime,
 and cache keys include both `pyproject.toml` and `uv.lock`.
 
+The repository CodeQL Default Setup was reconciled after the v1 source removal:
+it now analyzes the current `actions` and `python` languages only. The removed
+JavaScript/TypeScript lane had no source left to analyze and was producing a
+configuration failure; no placeholder JavaScript was added.
+
 ## Lockfile and clean package checks
 
 The existing lock was regenerated after the package metadata change. The
@@ -109,10 +116,10 @@ current Core v2 package does not provide a v1 compatibility alias.
 | isolated `pip install -e .` | PASS | imports and six installed CLI help commands |
 | optional heavy modules in clean install | absent | MinerU and RDKit not installed |
 | offline runtime/inspection/observation smoke | PASS | `tests/molly/test_core08_cutover.py` |
-| PR Fast local selector | 217 passed, 4 deselected | exact selector on `16d1c90` |
-| PR Fast GitHub | pending | exact workflow/run to be recorded |
-| CodeQL | pending | exact workflow/run to be recorded |
-| Full CI | pending | exact workflow/run to be recorded |
+| PR Fast local selector | 217 passed, 4 deselected | exact selector on `16d1c90`; GitHub rerun also passed on `312023d6` |
+| PR Fast GitHub | PASS | run `33392912090`, tested HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb` |
+| CodeQL | pending final rerun | Default Setup is now reduced to Actions/Python; the final analysis is triggered by this report-only push |
+| Full CI | PASS | run `33393433265`, tested HEAD `312023d6c0fd3c53d8a14091946e4cea2d7a76bb`; compile policy and weighted shards 0–3 passed |
 
 ## Final-state claims
 
