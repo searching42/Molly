@@ -1,8 +1,8 @@
 # CORE-06 — BR1 parity macro
 
-Status: implementation and real acceptance checkpoints PASS; final CI gates
-are recorded separately as they complete. This single macro branch contains
-CORE-06A, CORE-06B, and CORE-06C. CORE-07 has not started.
+Status: CORE-06A, CORE-06B, CORE-06C, B2, B3, PR Fast, CodeQL, and Full CI
+PASS. B4 remains an explicit Owner gate; CORE-07 has not started. This single
+macro branch contains CORE-06A, CORE-06B, and CORE-06C.
 
 ## Base and checkpoints
 
@@ -34,13 +34,24 @@ digests, lineage checks, and remote JobHandle evidence are in the public-safe
 CORE-06C evidence manifest. The scientific claim boundary remains
 `COMPUTATIONAL_ONLY`.
 
-## Verification status
+## Final verification status
 
-The development checkpoint suites and compile/path checks passed throughout
-the implementation loop. Final macro PR Fast, CodeQL, and Full CI are pending
-or in progress until the final pushed merge candidate completes those checks;
-their exact workflow IDs and tested HEAD will be appended without changing the
-CORE-06 executable semantics.
+The final executable/test HEAD is
+`74bb3cfad82c4dc5d65faf7d76ce45b3e0d9e3c0`.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| PR Fast CI | PASS | workflow `33375489761`; compile/diff `99435924446`, pytest `99435969468` |
+| CodeQL | PASS | workflow `33375487331`; analyses `99435919198`, `99435919069`, `99435919174`; check `99436052699` |
+| Full CI compile/shard policy | PASS | run `33375992342`; job `99437484872` |
+| Full CI weighted shard 0 | PASS | job `99437526721` |
+| Full CI weighted shard 1 | PASS | job `99437526742` |
+| Full CI weighted shard 2 | PASS | job `99437526826` |
+| Full CI weighted shard 3 | PASS | job `99437526768` |
+
+The report-only update after this tested HEAD contains no executable, test, or
+acceptance-evidence changes. The CI evidence remains bound to the exact
+executable/test HEAD above.
 
 ## Safety boundary
 

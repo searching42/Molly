@@ -77,5 +77,19 @@ the historical source. The acceptance proves the computational BR1 contract
 and current-run provenance, not experimental validation, numerical identity
 with the historical v1 run, or general scientific performance.
 
-Final PR Fast, CodeQL, and Full CI remain macro merge-candidate checks to be
-recorded after the final executable/test HEAD is pushed.
+## Final macro verification
+
+The final executable/test HEAD was
+`74bb3cfad82c4dc5d65faf7d76ce45b3e0d9e3c0`.
+
+- PR Fast CI: run `33375489761`, `success` (compile/diff job
+  `99435924446`; pytest job `99435969468`).
+- CodeQL: workflow run `33375487331`, all language analyses `success`, with
+  CodeQL check `99436052699` successful.
+- Full CI: run `33375992342`, `success`; compile/shard policy job
+  `99437484872` and weighted shard jobs 0/1/2/3
+  (`99437526721`, `99437526742`, `99437526826`, `99437526768`) all passed.
+
+The final report update is documentation-only; it does not change executable
+code, tests, or the acceptance evidence identity. The CI results above remain
+bound to the exact executable/test HEAD stated above.
