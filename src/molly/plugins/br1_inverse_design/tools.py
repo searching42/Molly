@@ -22,7 +22,13 @@ from .dataset import DatasetGate
 from .evaluation import TopNEvaluationService
 from .reinvent import ReinventGenerationService
 from .runtime import Br1Runtime, DeterministicBr1Runtime
-from .schema import Br1PluginConfig
+from .schema import (
+    Br1PluginConfig,
+    EvaluationConfig,
+    GenerationConfig,
+    PredictionConfig,
+    TrainingConfig,
+)
 from .prediction import UniMolPredictionService
 from .unimol import ApplicabilityService, UniMolTrainingService, draft_id
 
@@ -41,7 +47,30 @@ def _artifact_id_schema() -> dict[str, Any]:
 
 
 def _stage_config_digest(config: Br1PluginConfig, stage: str) -> str:
-    return sha256_bytes(canonical_json_bytes({"plugin_config_digest": config.digest, "stage": stage}))
+    stage_configs = {
+        "applicability_preflight": {"plugin_config_digest": config.digest},
+        "train_unimol": TrainingConfig(
+            unimol_version=config.unimol_version,
+            resource_profile_ref=config.training_profile_ref,
+            environment_ref=config.environment_ref,
+        ).to_dict(),
+        "generate_reinvent4": GenerationConfig(
+            reinvent4_version=config.reinvent4_version,
+            resource_profile_ref=config.generation_profile_ref,
+            environment_ref=config.environment_ref,
+        ).to_dict(),
+        "predict_unimol": PredictionConfig(
+            unimol_version=config.unimol_version,
+            resource_profile_ref=config.prediction_profile_ref,
+            environment_ref=config.environment_ref,
+        ).to_dict(),
+        "evaluate_top_n": EvaluationConfig().to_dict(),
+    }
+    try:
+        stage_config = stage_configs[stage]
+    except KeyError as exc:
+        raise CoreContractError(f"unknown BR1 stage: {stage}") from exc
+    return sha256_bytes(canonical_json_bytes({"plugin_config_digest": config.digest, "stage": stage, "stage_config": stage_config}))
 
 
 @dataclass(slots=True)

@@ -132,10 +132,23 @@ class TrainingConfig:
     parameters: Mapping[str, Any] = field(default_factory=lambda: {
         "task": "regression",
         "epochs": 1,
-        "batch_size": 8,
         "learning_rate": 0.0001,
+        "batch_size": 16,
         "early_stopping": 1,
-        "split": "scaffold",
+        "metrics": "none",
+        "split": "random",
+        "kfold": 1,
+        "smiles_col": "SMILES",
+        "target_cols": ["target_value"],
+        "target_normalize": "auto",
+        "smiles_check": "filter",
+        "use_cuda": True,
+        "use_amp": False,
+        "use_ddp": False,
+        "use_gpu": "0",
+        "model_name": "unimolv1",
+        "model_size": "84m",
+        "conf_cache_level": 0,
     })
 
     def __post_init__(self) -> None:
@@ -182,7 +195,10 @@ class GenerationConfig:
     environment_ref: str = "environment:br1"
     parameters: Mapping[str, Any] = field(default_factory=lambda: {
         "unique_molecules": True,
-        "randomize_smiles": True,
+        "randomize_smiles": False,
+        "temperature": 1.0,
+        "device": "cpu",
+        "prior_model_ref": "reinvent.prior",
     })
 
     def __post_init__(self) -> None:
@@ -222,7 +238,12 @@ class PredictionConfig:
     unimol_version: str = "unimol_tools"
     resource_profile_ref: str = "profile:br1-prediction"
     environment_ref: str = "environment:br1"
-    parameters: Mapping[str, Any] = field(default_factory=lambda: {"task": "regression"})
+    parameters: Mapping[str, Any] = field(default_factory=lambda: {
+        "task": "regression",
+        "smiles_col": "SMILES",
+        "target_col": "target_value",
+        "target_normalize": "auto",
+    })
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target_property", _nonempty_identifier(self.target_property, field="target_property"))
