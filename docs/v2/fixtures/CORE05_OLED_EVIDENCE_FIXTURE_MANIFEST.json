@@ -1,0 +1,33 @@
+{
+  "schema_name": "molly.core_v2.core05_oled_evidence_fixture_manifest",
+  "schema_version": "1",
+  "status": "FROZEN_PUBLIC_SAFE_SYNTHETIC_CONTRACT",
+  "scientific_claims": false,
+  "derived_canonical_document_fixture": {
+    "source_path": "tests/fixtures/v2/synthetic/minimal.oled.jats.xml",
+    "source_sha256": "54517557dc88991a40c7d73f95422dbcbe47a82da7ba77f7296955bde6b4e9e8",
+    "source_artifact_id": "sha256:54517557dc88991a40c7d73f95422dbcbe47a82da7ba77f7296955bde6b4e9e8",
+    "parser": "molly.documents.DocumentParserRouter:jats@1",
+    "canonical_document_artifact_id": "sha256:567fd2d70499b6aef4d07b7afe50a249e5948ae57c45f084bcd39213ff32e7ac",
+    "canonical_document_sha256": "567fd2d70499b6aef4d07b7afe50a249e5948ae57c45f084bcd39213ff32e7ac"
+  },
+  "reviewed_gold_fixture": {
+    "path": "docs/v2/fixtures/oled_gold_fixture.json",
+    "sha256": "265c01225893a95e9eca034fb9fa6fb7a09ea28a281e4602a58de952006e8512",
+    "use": "reviewed/public-safe synthetic contract evidence; not an experimental claim"
+  },
+  "expected_records": [
+    {"record_id": "synthetic-cco-065", "molecule": "CCO", "property": "PLQY", "value": 0.65, "unit": "fraction", "condition": "synthetic-fixture-condition"},
+    {"record_id": "synthetic-cco-066", "molecule": "CCO", "property": "PLQY", "value": 0.66, "unit": "fraction", "condition": "synthetic-fixture-condition"},
+    {"record_id": "synthetic-ccn-058", "molecule": "CCN", "property": "PLQY", "value": 0.58, "unit": "fraction", "condition": "synthetic-fixture-condition"},
+    {"record_id": "synthetic-ccn-091", "molecule": "CCN", "property": "PLQY", "value": 0.91, "unit": "fraction", "condition": "synthetic-fixture-condition"}
+  ],
+  "required_invariants": [
+    "candidate IDs and packets are deterministic",
+    "all non-null mapped fields bind to candidate evidence and SourceLocator",
+    "SYNTHETIC_CONTRACT_ONLY is never promoted to SOURCE_REPORTED",
+    "CCO 0.65 and 0.66 are consistent duplicate candidates",
+    "CCN 0.58 and 0.91 remain a review-blocking conflict",
+    "condition changes produce a different comparison key"
+  ]
+}
