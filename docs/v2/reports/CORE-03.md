@@ -1,6 +1,6 @@
 # Molly Core v2 CORE-03 compliant literature acquisition
 
-Status: `IMPLEMENTED — offline network-mock acceptance; final CI PASS`
+Status: `IMPLEMENTED — CORE-03A rate/provenance closure; final CI PASS`
 
 This report records the CORE-03 acquisition milestone only.  CORE-04 and all
 later milestones have not started.
@@ -176,7 +176,7 @@ synthetic credential reflection and durable URL/cache/provenance redaction
 public/private occurrence classification without ArtifactRecord mutation
 ```
 
-The current focused local evidence is:
+The original CORE-03 validation record (before CORE-03A) was:
 
 ```text
 CORE-03 suite: 38 passed
@@ -200,6 +200,121 @@ bounded network primitives only under `molly.acquisition`.  All v2 production
 files remain free of `ai4s_agent`, the C4 prototype, and subprocess/shell
 authority.  The frozen synthetic fixture bytes were reused; no copyrighted
 full text or live credentials were added.
+
+## CORE-03A — rate-scope and provenance closure
+
+CORE-03A corrected two contract gaps found during review of the accepted
+CORE-03 implementation.  It did not start CORE-04 and did not change the
+CORE-01 content-identity/occurrence-provenance separation.
+
+### Rate-limit scope
+
+The previous combined `(provider_id, host)` gate was replaced with two
+independent server-side gates:
+
+```text
+provider concurrency: provider_id -> one semaphore
+host rate: canonical (host, port) -> one shared time gate
+```
+
+Provider concurrency therefore counts all configured routes and hosts for a
+provider against the same `max_concurrent_requests` bound.  Host rate clocks
+aggregate traffic across provider IDs sharing a host and use the minimum
+configured `requests_per_second` observed for that host.  An incompatible
+`max_concurrent_requests` for one provider in a single transport instance
+fails closed.  Gate waits consume the existing total acquisition deadline;
+provider slots are released exactly once on success and all failure paths,
+while a host reservation is not rolled back after an attempted request.
+
+The adversarial regressions cover two in-flight routes for one provider,
+blocked third-route admission, shared-host traffic from different providers,
+independent host clocks, strictest shared-host configuration, provider-config
+inconsistency, and release after network failure.  They use deterministic
+clocks/sleepers and do not perform real network acquisition.
+
+### Cache provenance completeness
+
+Verified cache manifests now bind the complete minimum acquisition occurrence:
+
+```text
+provider
+provider_config_digest
+route_id
+route_policy_version
+request_identity
+canonical_identifier
+source_url
+resolved_url
+redirect_chain
+response_status
+retrieved_at
+stored_at
+access_status
+license_status
+access_basis
+redistribution_basis
+artifact_class
+content_type
+content_family
+body_sha256
+body_size
+cache_identity
+cache_status
+access_profile_ref
+```
+
+`retrieved_at` is the network occurrence time and remains unchanged on a
+cache hit; `stored_at` is cache-publication bookkeeping.  All fields are part
+of canonical manifest/no-replace comparison and cache-entry revalidation.
+Route access state is explicit (`CONFIGURED_AUTHORIZED` or
+`VERIFIED_OPEN_ACCESS`); it is never inferred from HTTP 200 or a candidate's
+untrusted label.  Secret values remain excluded from cache identities,
+manifests, provenance, observations, URLs, errors, and logs.
+
+Metadata and OA-resolution responses receive the same verified cache
+provenance even though they are not forced into ArtifactStore.  When a
+configured full-text route is selected, `AcquisitionProvenance` records the
+exact OA evidence binding:
+
+```text
+resolution_provider
+resolution_provider_config_digest
+resolution_request_identity
+resolution_cache_identity
+resolution_body_sha256
+```
+
+with the available route-policy and retrieval-time fields.  Thus the
+recorded chain is DOI -> exact resolver request -> verified resolver response
+identity/digest -> evaluated candidates -> configured source -> full-text
+bytes.  Tampered resolver bodies and manifests fail before candidate
+selection or full-text fetch; cache-hit resolution preserves the original
+resolver identity and `retrieved_at`.
+
+### CORE-03A evidence
+
+```text
+implementation/test commit: ac6026afe2b6265930314498e4efcbb7d4722e4d
+base: origin/main@f67ed5441b075c0259b088f20690424c1a799aae
+CORE-03 suite after CORE-03A: 48 passed
+combined CORE-00/CORE-01/CORE-02/CORE-03/privacy regression: 148 passed
+legacy literature/phase3 smoke: 57 passed
+PR Fast: PASS (workflow 33346055547)
+CodeQL: PASS (workflow 33346053193; actions, JavaScript/TypeScript,
+Python, and aggregate checks PASS)
+Full CI: PASS (workflow 33346070107)
+```
+
+The CORE-03A Full CI run tested the exact implementation/test commit above:
+compile/shard policy job `99350324877` and weighted pytest jobs
+`99350351025` (shard 0), `99350350996` (shard 1), `99350350989`
+(shard 2), and `99350351014` (shard 3) all passed.  The PR Fast workflow
+passed its compile/diff job `99350278140` and pytest job `99350303023`.
+
+The remediation preserves the existing TLS, DNS/IP pinning, redirect,
+streaming-size, content-type, timeout, retry, credential-isolation, and
+PUBLIC/PRIVATE occurrence-context invariants.  It makes no live-provider,
+credential, GPU, remote, or fresh-real BR1 claim.
 
 ## Explicit non-goals and remaining gates
 
