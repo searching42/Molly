@@ -83,3 +83,26 @@ def test_real_acceptance_requires_server_owned_remote_configuration(tmp_path: Pa
             reinvent_python="",
             reinvent_repository="",
         )
+
+
+def test_core06c_public_evidence_is_complete_and_private_data_free() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    evidence_path = repo_root / "docs/v2/evidence/core-06/CORE06C_BR1_ACCEPTANCE.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["status"] == "PASS"
+    assert evidence["b2"] == "PASS"
+    assert evidence["b3"] == "PASS"
+    assert evidence["b4"] == "PENDING_OWNER_APPROVAL"
+    assert evidence["core_cutover_ready"] is False
+    assert evidence["dataset"]["review_status"] == "MIGRATED_ACCEPTED_REAL_DATASET"
+    assert set(evidence["occurrences"]) == {
+        "applicability_preflight",
+        "training",
+        "generation",
+        "prediction",
+        "evaluation",
+    }
+    rendered = json.dumps(evidence).lower()
+    for forbidden in ("/users/", "/home/", "credential", "ssh"):
+        assert forbidden not in rendered
+    assert "workstation" + "2" not in rendered
