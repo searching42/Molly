@@ -297,6 +297,7 @@ class ComputeBackedBr1Runtime:
                 "job_id": handle.job_id,
                 "idempotency_key": handle.idempotency_key,
                 "config_digest": config_digest,
+                "job_handle": handle.to_dict(),
             },
             job_handle=handle,
         )
