@@ -57,6 +57,19 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _resolve_ref(*candidates: str) -> str:
+    for candidate in candidates:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return candidate
+    raise AssertionError(f"none of the immutable ref candidates resolved: {candidates!r}")
+
+
 def test_b4_decision_readiness_and_immutable_rollback_refs() -> None:
     readiness = json.loads(
         (ROOT / "docs/v2/readiness/core_refactor_readiness.json").read_text(
@@ -81,10 +94,15 @@ def test_b4_decision_readiness_and_immutable_rollback_refs() -> None:
     assert "B4: `PASS`" in decision
     assert "Default cutover: `AUTHORIZED`" in decision
 
-    assert _git("rev-parse", "legacy/molly-v1") == FREEZE_COMMIT
-    assert _git("rev-parse", "molly-v1-pre-core-v2-20260829^{}") == FREEZE_COMMIT
-    assert _git("cat-file", "-e", "legacy/molly-v1:src/ai4s_agent/__init__.py") == ""
-    assert _git("cat-file", "-e", "molly-v1-pre-core-v2-20260829:src/ai4s_agent/__init__.py") == ""
+    legacy_ref = _resolve_ref("legacy/molly-v1", "origin/legacy/molly-v1")
+    tag_ref = _resolve_ref(
+        "molly-v1-pre-core-v2-20260829^{}",
+        "refs/tags/molly-v1-pre-core-v2-20260829^{}",
+    )
+    assert _git("rev-parse", legacy_ref) == FREEZE_COMMIT
+    assert _git("rev-parse", tag_ref) == FREEZE_COMMIT
+    assert _git("cat-file", "-e", f"{legacy_ref}:src/ai4s_agent/__init__.py") == ""
+    assert _git("cat-file", "-e", f"{tag_ref}:src/ai4s_agent/__init__.py") == ""
 
 
 def test_project_is_molly_with_small_default_dependency_closure() -> None:

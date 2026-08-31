@@ -24,6 +24,7 @@ dev = [
   "build>=1.2",
   "pytest>=8.0",
   "reportlab>=4.0",
+  "wheel>=0.45",
 ]
 observability = [
   "langsmith>=0.4,<1",
