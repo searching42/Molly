@@ -111,7 +111,9 @@ def _json_read(path: Path) -> Mapping[str, Any]:
     return value
 
 
-def _run_checked(argv: Sequence[str], *, cwd: Path | None = None) -> None:
+def _run_checked(
+    argv: Sequence[str], *, cwd: Path | None = None, operation: str = "server-owned command"
+) -> None:
     try:
         subprocess.run(
             list(argv),
@@ -121,19 +123,21 @@ def _run_checked(argv: Sequence[str], *, cwd: Path | None = None) -> None:
             stderr=subprocess.PIPE,
             text=True,
         )
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except OSError as exc:
         # Do not persist command lines or remote stderr: either may contain a
         # host-specific path or other environment metadata.
-        raise RealAcceptanceError(f"server-owned command failed: {argv[0]}") from exc
+        raise RealAcceptanceError(f"{operation} could not start") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RealAcceptanceError(f"{operation} failed with exit status {exc.returncode}") from exc
 
 
 def _ssh(config: HostConfig, command: Sequence[str]) -> None:
     rendered = " ".join(shlex.quote(str(item)) for item in command)
-    _run_checked(("ssh", config.ssh_target, "--", rendered))
+    _run_checked(("ssh", config.ssh_target, "--", rendered), operation="remote command")
 
 
 def _scp(config: HostConfig, source: Path | str, target: str) -> None:
-    _run_checked(("scp", str(source), f"{config.ssh_target}:{target}"))
+    _run_checked(("scp", str(source), f"{config.ssh_target}:{target}"), operation="artifact transfer")
 
 
 def _remote_child(root: str, name: str) -> str:
@@ -758,9 +762,12 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
                         if state.get("state") == "FAILED":
                             compute_errors.append(str(state.get("error_type") or "unknown"))
                 detail = ", ".join(compute_errors) if compute_errors else "none"
+                cause: BaseException = exc
+                while cause.__cause__ is not None:
+                    cause = cause.__cause__
                 raise RealAcceptanceError(
                     f"BR1 AgentLoop failed at {failed.tool_name or 'unknown'}: {error_type}; "
-                    f"compute_state_errors={detail}"
+                    f"compute_state_errors={detail}; detail={cause}"
                 ) from exc
             raise
         if result.status != RunStatus.STOPPED.value or provider.calls != 6:
