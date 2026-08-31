@@ -668,7 +668,7 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
         ),
         max_rows=config.max_rows,
     )
-    temp_root = Path(tempfile.mkdtemp(prefix="molly-core06-real-"))
+    temp_root = Path(tempfile.mkdtemp(prefix="molly-core06-real-", dir="/private/tmp"))
     try:
         store = ArtifactStore(temp_root / "artifacts")
         ledger = RunLedger(temp_root / "events.jsonl")
