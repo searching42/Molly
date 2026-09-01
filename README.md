@@ -159,23 +159,6 @@ Molly keeps authority on the host side:
 See [SECURITY.md](SECURITY.md) for the repository security boundary and
 [the documentation map](docs/README.md) for current contracts and evidence.
 
-## Project status
-
-The defined Core v2 milestones `CORE-00` through `CORE-08` are complete for
-their accepted contracts. The current readiness state is recorded in the
-[readiness manifest](docs/v2/readiness/core_refactor_readiness.json) and the
-[CORE-08 cutover report](docs/v2/reports/CORE-08.md).
-
-The following are deliberately post-cutover work, not hidden promises of the
-current runtime:
-
-- validate new real-literature and data-mining pipelines;
-- evaluate structured acquisition paths that may replace or bypass MinerU;
-- expand scientific domains and acceptance datasets;
-- add a UI or general HTTP API only under a separately reviewed scope;
-- pursue research trajectory or error-propagation work only with separate
-  approval and evidence.
-
 ## Development
 
 Install the development extra and run the focused checks:
@@ -188,35 +171,11 @@ PYTHONPATH=src PYTHONHASHSEED=0 \
 ```
 
 Current package metadata and optional dependency boundaries are defined in
-[`pyproject.toml`](pyproject.toml). The project roadmap is in
-[`docs/roadmap.md`](docs/roadmap.md).
-
-## Legacy rollback boundary
-
-The pre-Core-v2 runtime is not the default package or entrypoint. It remains
-available as immutable Git history:
-
-```text
-tag:    molly-v1-pre-core-v2-20260829
-branch: legacy/molly-v1
-commit: ae7892dbf8a6bfe85dd909056eadc2afecc40d9
-```
-
-Never move or force-update these references. To inspect the frozen source
-without changing the current checkout:
-
-```bash
-git show molly-v1-pre-core-v2-20260829:pyproject.toml
-git ls-tree -r --name-only legacy/molly-v1 | sed -n '/^src\//p' | head
-```
-
-Historical v1 documents and acceptance records are retained for audit context;
-the current architecture authority is under `docs/v2/`.
+[`pyproject.toml`](pyproject.toml).
 
 ## Further reading
 
 - [Core v2 documentation map](docs/README.md)
-- [Core v2 roadmap](docs/roadmap.md)
 - [Core v2 execution contract](docs/v2/CODEX_GOAL_EXECUTION_CONTRACT.md)
 - [Core v2 simplification specification](docs/v2/MOLLY_CORE_SIMPLIFICATION_REFACTOR_SPEC_V1_1_BR1_HARDENED.md)
 - [Package and CI boundary](docs/v2/contracts/PACKAGE_DEPENDENCY_AND_CI_BOUNDARY.md)
