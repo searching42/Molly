@@ -137,7 +137,8 @@ def test_browser_br1_flow_resumes_background_turns_and_exposes_top_n(tmp_path: P
         assert status == 201
         assert started["status"] == "WAITING_APPROVAL"
 
-        for _ in range(24):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             _, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
             if detail["status"] in {"STOPPED", "FAILED", "BUDGET_EXHAUSTED"}:
                 break
