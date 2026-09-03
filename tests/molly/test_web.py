@@ -68,6 +68,55 @@ def test_provider_settings_are_non_secret_in_browser_and_secret_is_server_only(
     assert secret_file.stat().st_mode & 0o077 == 0
 
 
+def test_provider_secret_is_bound_to_the_profile_endpoint_digest(tmp_path: Path) -> None:
+    store = ProviderConfigStore(tmp_path / "runtime")
+    payload = {
+        "profile_ref": "provider:test",
+        "display_name": "测试模型",
+        "endpoint": "https://models.example.test/v1",
+        "model_identifier": "test-model",
+        "model_version": "1",
+        "timeout_seconds": 20,
+        "max_response_bytes": 262144,
+    }
+
+    original = store.upsert_profile(payload)
+    store.set_secret("provider:test", "old-endpoint-secret")
+    assert store.get_profile("provider:test").credential_configured is True
+    persisted = json.loads((tmp_path / "runtime" / "provider_secrets.json").read_text())
+    assert persisted["version"] == 2
+    assert persisted["secrets"]["provider:test"]["profile_digest"] == original.profile.digest
+
+    changed = store.upsert_profile(
+        {**payload, "endpoint": "https://models.example.test/v2"}
+    )
+    assert changed.profile.digest != original.profile.digest
+    assert changed.credential_configured is False
+    assert store.resolve_secret(changed.profile) is None
+
+    store.set_secret("provider:test", "new-endpoint-secret")
+    assert store.get_profile("provider:test").credential_configured is True
+    assert store.resolve_secret(changed.profile) == "new-endpoint-secret"
+
+
+def test_legacy_unbound_provider_secret_is_not_used_for_a_profile(tmp_path: Path) -> None:
+    store = ProviderConfigStore(tmp_path / "runtime")
+    profile = store.upsert_profile(
+        {
+            "profile_ref": "provider:test",
+            "display_name": "测试模型",
+            "endpoint": "https://models.example.test/v1",
+            "model_identifier": "test-model",
+        }
+    )
+    store.secrets_path.write_text(
+        json.dumps({"version": 1, "secrets": {"provider:test": "legacy-secret"}})
+    )
+
+    assert store.get_profile("provider:test").credential_configured is False
+    assert store.resolve_secret(profile.profile) is None
+
+
 def test_upload_publishes_verified_local_file_without_path_input(tmp_path: Path) -> None:
     app = create_application(tmp_path / "runtime")
     status, uploaded = app.dispatch(

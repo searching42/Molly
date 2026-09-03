@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from molly.core import RunContext
+from molly.core.agent_loop import INTENT_FROZEN
 from molly.core.artifacts import ArtifactStore
 from molly.core.ids import canonical_json_bytes
 from molly.core.ledger import RunLedger
@@ -24,6 +26,7 @@ from molly.plugins.br1_inverse_design import (
 from molly.runtime import RuntimeProfileRegistry, RuntimeService
 from molly.web import MollyWebApplication, ProviderConfigStore
 from molly.web.runtime_profiles import configured_br1_profiles
+from molly.plugins.br1_inverse_design.workflow import Br1WorkflowProvider
 
 
 pytestmark = pytest.mark.acceptance
@@ -137,6 +140,105 @@ def test_zero_values_are_not_replaced_by_defaults() -> None:
 def test_br1_intent_requires_a_structured_provider() -> None:
     with pytest.raises(Br1Error, match="structured LLM"):
         parse_br1_request("HOMO-LUMO gap")
+
+
+def test_br1_workflow_freezes_intent_and_does_not_reparse_on_later_stages(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    raw = store.put(
+        _raw_oe62(),
+        media_type="application/json",
+        schema_name="molly.br1.raw-dataset",
+        schema_version="1",
+    )
+    ledger = RunLedger(tmp_path / "events.jsonl")
+    provider_profile = StructuredProviderProfile(
+        profile_ref="provider_test",
+        endpoint="https://models.example.test/v1/chat/completions",
+        model_identifier="structured-test",
+    )
+
+    class ChangingProvider(FakeIntentProvider):
+        def __init__(self) -> None:
+            super().__init__(_intent_payload(), provider_profile)
+            self.calls = 0
+
+        def parse_br1_intent(self, goal: str, *, allowed_target_properties):
+            self.calls += 1
+            return _intent_payload(candidate_count=8 + self.calls, seed=40 + self.calls)
+
+    provider = ChangingProvider()
+    resolver_calls = 0
+
+    def resolve(_profile_ref: str):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls > 1:
+            raise AssertionError("a frozen BR1 run must not resolve its LLM provider again")
+        return provider
+
+    workflow = Br1WorkflowProvider(
+        store,
+        ledger,
+        config=Br1PluginConfig(),
+        intent_provider_resolver=resolve,
+    )
+    context = RunContext(
+        run_id="run_br1_freeze_test",
+        goal="用户的 BR1 目标描述",
+        visible_artifact_ids=(raw.artifact_id,),
+        initial_artifact_ids=(raw.artifact_id,),
+        request_metadata={
+            "llm_profile_ref": provider_profile.profile_ref,
+            "llm_profile_digest": provider_profile.digest,
+        },
+    )
+
+    first = workflow.next_action(context, ())
+    second = workflow.next_action(context, ())
+
+    assert provider.calls == 1
+    assert resolver_calls == 1
+    assert first.arguments == second.arguments
+    frozen = [event for event in ledger.events if event.event_type == INTENT_FROZEN]
+    assert len(frozen) == 1
+    assert frozen[0].metadata["intent"]["spec"]["candidate_count"] == 9
+    assert frozen[0].metadata["spec_digest"] == frozen[0].metadata["intent"]["spec_digest"]
+    assert frozen[0].metadata["intent_digest"] == frozen[0].metadata["intent"]["intent_digest"]
+
+
+def test_br1_workflow_requires_provider_digest_before_calling_the_llm(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    raw = store.put(
+        _raw_oe62(),
+        media_type="application/json",
+        schema_name="molly.br1.raw-dataset",
+        schema_version="1",
+    )
+    provider_profile = StructuredProviderProfile(
+        profile_ref="provider_test",
+        endpoint="https://models.example.test/v1/chat/completions",
+        model_identifier="structured-test",
+    )
+    provider = FakeIntentProvider(_intent_payload(), provider_profile)
+    workflow = Br1WorkflowProvider(
+        store,
+        RunLedger(tmp_path / "events.jsonl"),
+        config=Br1PluginConfig(),
+        intent_provider_resolver=lambda _profile_ref: provider,
+    )
+    context = RunContext(
+        run_id="run_br1_digest_test",
+        goal="用户的 BR1 目标描述",
+        visible_artifact_ids=(raw.artifact_id,),
+        initial_artifact_ids=(raw.artifact_id,),
+        request_metadata={"llm_profile_ref": provider_profile.profile_ref},
+    )
+
+    with pytest.raises(Br1Error, match="provider profile digest"):
+        workflow.next_action(context, ())
+    assert provider.goals == []
 
 
 def test_openai_compatible_provider_returns_structured_br1_intent_without_secret_echo() -> None:

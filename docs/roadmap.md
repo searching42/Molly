@@ -38,7 +38,9 @@ document parsing, reviewed OLED evidence, optional BR1 inverse design,
 runtime/CLI inspection, observer-only observability, and a loopback-only
 operator UI. BR1 request parameters are extracted through a selected,
 server-configured structured LLM; there is no rule-based parsing fallback or
-per-run budget control.
+user-configurable per-run limit. The server still enforces a fixed safety
+ceiling, and legacy Core v2 request/terminal records remain readable without
+changing their persisted request digest.
 
 MinerU is an optional PDF fallback. BR1 and remote compute are optional plugin
 surfaces. Telemetry is observer-only and cannot advance scientific state.

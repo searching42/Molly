@@ -22,6 +22,7 @@ from molly.core import (
     MaterializedToolCall,
     RelationType,
     RequestReviewAction,
+    RunInspector,
     RunBindingError,
     RunLedger,
     RunRequest,
@@ -42,6 +43,7 @@ from molly.core import (
 from molly.core.agent_loop import (
     APPROVAL_RECORDED,
     APPROVAL_REQUIRED,
+    BUDGET_EXHAUSTED,
     DECISION_RECORDED,
     TOOL_CALL_MATERIALIZED,
     TOOL_CALL_REJECTED,
@@ -49,7 +51,7 @@ from molly.core.agent_loop import (
     TOOL_EXECUTION_STARTED,
     TOOL_EXECUTION_SUCCEEDED,
 )
-from molly.core.ids import canonical_json_bytes, sha256_bytes
+from molly.core.ids import canonical_json_bytes, sha256_bytes, utc_timestamp
 
 
 pytestmark = pytest.mark.unit
@@ -69,6 +71,15 @@ class ScriptedProvider:
         if not self.actions:
             raise StopIteration
         return self.actions.pop(0)
+
+
+class EndlessProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def next_action(self, context, model_visible_tools):
+        self.calls += 1
+        return ToolCallProposal("emit", {"value": self.calls})
 
 
 def _spec(*, name: str = "emit", version: str = "1", approval: bool = False) -> ToolSpec:
@@ -259,6 +270,65 @@ def test_invalid_tool_output_is_not_a_success_or_publication(tmp_path: Path) -> 
     assert not _events(ledger, TOOL_EXECUTION_SUCCEEDED)
     assert lineage.relations == ()
     assert tuple((tmp_path / "artifacts" / "objects").rglob("*")) == ()
+
+
+def test_server_hard_limit_stops_an_endless_provider(tmp_path: Path) -> None:
+    provider = EndlessProvider()
+    loop, request, _, ledger, _, _, _, _ = _environment(tmp_path, provider=provider)
+
+    result = loop.run(request)
+
+    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
+    assert provider.calls == 8
+    assert len(_events(ledger, TOOL_CALL_MATERIALIZED)) == 8
+    assert len(_events(ledger, BUDGET_EXHAUSTED)) == 1
+    assert _events(ledger, BUDGET_EXHAUSTED)[0].metadata["server_limits"] == {
+        "max_decisions": 12,
+        "max_tool_calls": 8,
+        "max_steps": 8,
+    }
+
+
+def test_legacy_v2_request_and_terminal_are_read_without_digest_drift(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    ledger = RunLedger(tmp_path / "events.jsonl")
+    lineage = ArtifactLineage(tmp_path / "lineage.jsonl")
+    policy = ToolPolicy(allowed_tools=(), allowed_side_effect_classes=())
+    raw_request = {
+        "run_id": "run_legacy_v2",
+        "goal": "legacy request",
+        "input_artifact_ids": [],
+        "tool_policy_digest": policy.digest,
+        "budget": {"max_decisions": 12, "max_tool_calls": 8, "max_steps": 8},
+        "created_at": utc_timestamp(),
+        "metadata": {},
+    }
+    request_digest = sha256_bytes(canonical_json_bytes(raw_request))
+    ledger.append(
+        event_id="evt_legacy_start",
+        run_id=raw_request["run_id"],
+        event_type="RUN_STARTED",
+        status="STARTED",
+        timestamp=raw_request["created_at"],
+        metadata={
+            "request": raw_request,
+            "request_digest": request_digest,
+            "policy_digest": policy.digest,
+            "initial_artifact_ids": [],
+        },
+    )
+    ledger.append(
+        event_id="evt_legacy_exhausted",
+        run_id=raw_request["run_id"],
+        event_type=BUDGET_EXHAUSTED,
+        status="EXHAUSTED",
+        timestamp=utc_timestamp(),
+    )
+
+    reconstructed = RunRequest.from_dict(raw_request)
+    assert reconstructed.request_sha256 == request_digest
+    inspector = RunInspector(store=store, ledger=ledger, lineage=lineage)
+    assert inspector.inspect_run(raw_request["run_id"]).status == RunStatus.BUDGET_EXHAUSTED.value
 
 
 def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: Path) -> None:

@@ -29,6 +29,32 @@ def _bare_digest(value: str, *, field: str) -> str:
         raise RunBindingError(str(exc)) from exc
 
 
+_LEGACY_BUDGET_FIELDS = frozenset(
+    {"max_decisions", "max_tool_calls", "max_steps"}
+)
+
+
+def _legacy_budget_binding(value: Any) -> dict[str, int]:
+    """Normalize the removed v2 request budget for digest-preserving reads.
+
+    New requests never accept a caller-owned budget.  Older v2 ledgers did
+    include one in the canonical request object, however, so silently
+    dropping it would change the request digest and make those ledgers
+    unreadable.  This private compatibility value is only retained when a
+    legacy request is reconstructed from persisted JSON.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != _LEGACY_BUDGET_FIELDS:
+        raise RunBindingError("legacy run request budget is malformed")
+    normalized: dict[str, int] = {}
+    for name in sorted(_LEGACY_BUDGET_FIELDS):
+        item = value[name]
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            raise RunBindingError(f"legacy run request {name} is malformed")
+        normalized[name] = item
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class RunRequest:
     """An immutable, canonical request bound to one server-owned run ID."""
@@ -39,6 +65,9 @@ class RunRequest:
     tool_policy_digest: str = ""
     created_at: str = field(default_factory=utc_timestamp)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    _legacy_budget: Mapping[str, int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         validate_identifier(self.run_id, field="run_id")
@@ -88,7 +117,7 @@ class RunRequest:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "run_id": self.run_id,
             "goal": self.goal,
             "input_artifact_ids": list(self.input_artifact_ids),
@@ -96,6 +125,9 @@ class RunRequest:
             "created_at": self.created_at,
             "metadata": thaw_json(self.metadata),
         }
+        if self._legacy_budget is not None:
+            value["budget"] = dict(self._legacy_budget)
+        return value
 
     @property
     def request_sha256(self) -> str:
@@ -120,6 +152,11 @@ class RunRequest:
     def from_dict(cls, value: Mapping[str, Any]) -> "RunRequest":
         if not isinstance(value, Mapping):
             raise RunBindingError("run request must be a JSON object")
+        legacy_budget = (
+            _legacy_budget_binding(value["budget"])
+            if "budget" in value
+            else None
+        )
         try:
             request = cls(
                 run_id=str(value["run_id"]),
@@ -131,6 +168,8 @@ class RunRequest:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise RunBindingError("run request is malformed") from exc
+        if legacy_budget is not None:
+            object.__setattr__(request, "_legacy_budget", legacy_budget)
         return request
 
 
@@ -142,10 +181,15 @@ class RunStatus(str, Enum):
     INTERRUPTED = "INTERRUPTED"
     STOPPED = "STOPPED"
     FAILED = "FAILED"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 
 
 TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.STOPPED.value, RunStatus.FAILED.value}
+    {
+        RunStatus.STOPPED.value,
+        RunStatus.FAILED.value,
+        RunStatus.BUDGET_EXHAUSTED.value,
+    }
 )
 
 

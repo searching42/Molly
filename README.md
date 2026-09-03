@@ -155,6 +155,8 @@ Molly keeps authority on the host side:
   content limits, caching, and access/licensing provenance;
 - credentials are never placed in prompts, artifacts, ledger events, tool
   observations, or public evidence;
+- provider credentials are bound to the exact configured provider-profile
+  digest, so changing an endpoint invalidates the previous credential binding;
 - UI, API, and telemetry surfaces are observers or operators, not scientific
   authority.
 

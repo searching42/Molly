@@ -43,7 +43,14 @@ from .schema import (
     TrainingConfig,
     Br1PluginConfig,
 )
-from .intent import Br1Intent, Br1IntentProvider, parse_br1_request, with_source_format
+from .intent import (
+    BR1_INTENT_SCHEMA_NAME,
+    BR1_INTENT_SCHEMA_VERSION,
+    Br1Intent,
+    Br1IntentProvider,
+    parse_br1_request,
+    with_source_format,
+)
 from .tools import Br1Services, br1_tool_specs, register_br1_tools
 from .unimol import ApplicabilityService, TrainingOutcome, UniMolTrainingService
 
@@ -51,6 +58,8 @@ __all__ = [
     "ApplicabilityPreflight",
     "ApplicabilityService",
     "BR1_PLUGIN_VERSION",
+    "BR1_INTENT_SCHEMA_NAME",
+    "BR1_INTENT_SCHEMA_VERSION",
     "Br1BindingError",
     "Br1Error",
     "Br1IntegrityError",

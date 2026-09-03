@@ -66,6 +66,7 @@ STATUS_LABELS = {
     "INTERRUPTED": "已中断",
     "STOPPED": "已完成",
     "FAILED": "执行失败",
+    "BUDGET_EXHAUSTED": "已达到服务器安全上限",
 }
 
 

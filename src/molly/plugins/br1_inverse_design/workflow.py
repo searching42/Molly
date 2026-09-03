@@ -7,7 +7,20 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from molly.core.artifacts import ArtifactStore
-from molly.core.agent_loop import TOOL_CALL_REJECTED, TOOL_EXECUTION_FAILED, TOOL_EXECUTION_SUCCEEDED
+from molly.core.agent_loop import (
+    INTENT_FROZEN,
+    TOOL_CALL_REJECTED,
+    TOOL_EXECUTION_FAILED,
+    TOOL_EXECUTION_SUCCEEDED,
+)
+from molly.core.errors import LedgerError
+from molly.core.ids import (
+    canonical_json_bytes,
+    sha256_bytes,
+    utc_timestamp,
+    validate_digest_reference,
+    validate_identifier,
+)
 from molly.core.ledger import RunLedger
 from molly.core.tools import (
     DecisionProvider,
@@ -37,11 +50,12 @@ from .tools import Br1Services, br1_tool_specs, register_br1_tools
 class Br1WorkflowProvider(DecisionProvider):
     """Derive the next exact BR1 call from durable current-run artifacts.
 
-    The provider never trusts an in-memory call counter.  On every turn it
-    reads the current run ledger and artifact metadata, which makes a resumed
-    web process select the same next stage without replaying training or
-    generation.  Its goal is sent to a server-owned structured LLM intent
-    provider; all execution identity and host authority remain in Core and
+    The provider never trusts an in-memory call counter.  On the first turn it
+    compiles the goal through the server-owned structured LLM provider and
+    persists one complete intent freeze. Every later turn reads that immutable
+    intent from the run ledger, which makes a resumed web process select the
+    same scientific parameters without replaying parsing, training, or
+    generation. All execution identity and host authority remain in Core and
     the profile.
     """
 
@@ -64,29 +78,162 @@ class Br1WorkflowProvider(DecisionProvider):
         ):
             raise TypeError("Br1WorkflowProvider intent provider resolver must be callable")
 
-    def _intent(self, context: Any) -> Br1Intent:
+    @staticmethod
+    def _profile_binding(context: Any) -> tuple[str, str]:
         metadata = getattr(context, "request_metadata", {})
-        profile_ref = metadata.get("llm_profile_ref") if isinstance(metadata, Mapping) else None
-        profile_digest = metadata.get("llm_profile_digest") if isinstance(metadata, Mapping) else None
-        if not isinstance(profile_ref, str) or not profile_ref:
+        if not isinstance(metadata, Mapping):
+            raise Br1Error("BR1 requires a complete structured LLM provider binding")
+        profile_ref = metadata.get("llm_profile_ref")
+        profile_digest = metadata.get("llm_profile_digest")
+        if not isinstance(profile_ref, str) or not profile_ref.strip():
             raise Br1Error("BR1 requires a selected structured LLM intent profile")
+        if not isinstance(profile_digest, str) or not profile_digest.strip():
+            raise Br1Error("BR1 requires the selected provider profile digest")
+        try:
+            validate_identifier(profile_ref.strip(), field="llm_profile_ref")
+            normalized_digest = validate_digest_reference(
+                profile_digest.strip(), field="llm_profile_digest"
+            )
+        except Exception as exc:
+            raise Br1Error("BR1 provider profile digest is malformed") from exc
+        return profile_ref.strip(), normalized_digest
+
+    def _frozen_event(self, run_id: str):
+        frozen = [
+            event
+            for event in self.ledger.for_run(run_id)
+            if event.event_type == INTENT_FROZEN
+            and event.metadata.get("workflow") == "br1"
+        ]
+        if len(frozen) > 1:
+            raise Br1Error("BR1 run contains multiple frozen intents")
+        return frozen[0] if frozen else None
+
+    @staticmethod
+    def _load_frozen_intent(
+        context: Any,
+        event: Any,
+        *,
+        profile_ref: str,
+        profile_digest: str,
+    ) -> Br1Intent:
+        metadata = event.metadata
+        if event.run_id != context.run_id:
+            raise Br1Error("BR1 frozen intent is bound to another run")
+        if metadata.get("llm_profile_ref") != profile_ref:
+            raise Br1Error("BR1 frozen intent provider reference changed")
+        try:
+            recorded_profile_digest = validate_digest_reference(
+                str(metadata.get("llm_profile_digest", "")),
+                field="frozen llm_profile_digest",
+            )
+        except Exception as exc:
+            raise Br1Error("BR1 frozen intent provider digest is malformed") from exc
+        if recorded_profile_digest != profile_digest:
+            raise Br1Error("BR1 frozen intent provider digest changed")
+        try:
+            intent = Br1Intent.from_dict(metadata["intent"])
+            recorded_spec_digest = validate_digest_reference(
+                str(metadata.get("spec_digest", "")), field="frozen BR1 spec digest"
+            )
+            recorded_intent_digest = validate_digest_reference(
+                str(metadata.get("intent_digest", "")), field="frozen BR1 intent digest"
+            )
+        except Exception as exc:
+            raise Br1Error("BR1 frozen intent is malformed") from exc
+        if intent.spec.digest != recorded_spec_digest:
+            raise Br1Error("BR1 frozen spec digest does not match the intent")
+        if intent.digest != recorded_intent_digest:
+            raise Br1Error("BR1 frozen intent digest does not match the intent")
+        if intent.spec.llm_profile_ref != profile_ref:
+            raise Br1Error("BR1 frozen intent is not bound to the selected provider")
+        return intent
+
+    def _provider_for_binding(self, profile_ref: str, profile_digest: str) -> Any:
         if self.intent_provider_resolver is None:
             raise Br1Error("BR1 structured LLM intent provider is not configured")
         try:
             provider = self.intent_provider_resolver(profile_ref)
         except Exception as exc:
             raise Br1Error("BR1 structured LLM intent provider is unavailable") from exc
-        if profile_digest is not None:
-            provider_profile = getattr(provider, "profile", None)
-            actual_digest = getattr(provider_profile, "digest", None)
-            if actual_digest != profile_digest:
-                raise Br1Error("BR1 structured LLM intent profile changed during the run")
-        return parse_br1_request(
+        provider_profile = getattr(provider, "profile", None)
+        actual_ref = getattr(provider_profile, "profile_ref", None)
+        actual_digest = getattr(provider_profile, "digest", None)
+        if actual_ref != profile_ref:
+            raise Br1Error("BR1 structured LLM intent provider reference changed")
+        try:
+            normalized_actual_digest = validate_digest_reference(
+                str(actual_digest or ""), field="provider profile digest"
+            )
+        except Exception as exc:
+            raise Br1Error("BR1 structured LLM intent provider has no valid digest") from exc
+        if normalized_actual_digest != profile_digest:
+            raise Br1Error("BR1 structured LLM intent profile changed during the run")
+        return provider
+
+    def _persist_intent(
+        self,
+        context: Any,
+        intent: Br1Intent,
+        *,
+        profile_ref: str,
+        profile_digest: str,
+    ) -> Br1Intent:
+        metadata = {
+            "workflow": "br1",
+            "llm_profile_ref": profile_ref,
+            "llm_profile_digest": profile_digest,
+            "spec_digest": intent.spec.digest,
+            "intent_digest": intent.digest,
+            "intent": intent.to_dict(),
+        }
+        event_id = "evt_" + sha256_bytes(
+            canonical_json_bytes({"event_type": INTENT_FROZEN, "run_id": context.run_id})
+        )
+        try:
+            self.ledger.append(
+                event_id=event_id,
+                run_id=context.run_id,
+                event_type=INTENT_FROZEN,
+                status="FROZEN",
+                timestamp=utc_timestamp(),
+                metadata=metadata,
+            )
+        except LedgerError:
+            existing = self._frozen_event(context.run_id)
+            if existing is None:
+                raise Br1Error("BR1 intent freeze could not be persisted") from None
+            return self._load_frozen_intent(
+                context,
+                existing,
+                profile_ref=profile_ref,
+                profile_digest=profile_digest,
+            )
+        return intent
+
+    def _intent(self, context: Any) -> Br1Intent:
+        profile_ref, profile_digest = self._profile_binding(context)
+        frozen = self._frozen_event(context.run_id)
+        if frozen is not None:
+            return self._load_frozen_intent(
+                context,
+                frozen,
+                profile_ref=profile_ref,
+                profile_digest=profile_digest,
+            )
+        provider = self._provider_for_binding(profile_ref, profile_digest)
+        intent = parse_br1_request(
             context.goal,
             provider=provider,
             allowed_target_properties=self.config.supported_target_properties,
             llm_profile_ref=profile_ref,
             overrides=self.default_overrides,
+        )
+        return self._persist_intent(
+            context,
+            intent,
+            profile_ref=profile_ref,
+            profile_digest=profile_digest,
         )
 
     def _success_artifact(self, run_id: str, tool_name: str, schema_name: str) -> str | None:

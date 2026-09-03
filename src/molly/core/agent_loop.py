@@ -69,6 +69,8 @@ TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"
 REVIEW_REQUESTED = "REVIEW_REQUESTED"
 RUN_STOPPED = "RUN_STOPPED"
 RUN_FAILED = "RUN_FAILED"
+BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+INTENT_FROZEN = "INTENT_FROZEN"
 
 EVENT_TYPES = frozenset(
     {
@@ -84,6 +86,8 @@ EVENT_TYPES = frozenset(
         REVIEW_REQUESTED,
         RUN_STOPPED,
         RUN_FAILED,
+        BUDGET_EXHAUSTED,
+        INTENT_FROZEN,
     }
 )
 
@@ -108,6 +112,18 @@ class _RunProjection:
     interrupted: bool
     waiting_review: bool
     terminal_event: LedgerEvent | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ServerRunHardLimits:
+    """Non-configurable server safety limits for one AgentLoop run."""
+
+    max_decisions: int = 12
+    max_tool_calls: int = 8
+    max_steps: int = 8
+
+
+SERVER_RUN_HARD_LIMITS = _ServerRunHardLimits()
 
 
 class AgentLoop:
@@ -354,7 +370,7 @@ class AgentLoop:
         terminal_run_events = [
             event
             for event in events
-            if event.event_type in {RUN_STOPPED, RUN_FAILED}
+            if event.event_type in {RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED}
         ]
         terminal_run = terminal_run_events[-1] if terminal_run_events else None
         if terminal_run is not None and events[-1].event_id != terminal_run.event_id:
@@ -402,6 +418,82 @@ class AgentLoop:
             terminal_event=terminal_run,
         )
 
+    @staticmethod
+    def _counts(events: tuple[LedgerEvent, ...]) -> tuple[int, int, int]:
+        decisions = sum(event.event_type == DECISION_RECORDED for event in events)
+        tool_calls = sum(event.event_type == TOOL_CALL_MATERIALIZED for event in events)
+        steps = len(
+            {
+                event.step_id
+                for event in events
+                if event.event_type == TOOL_CALL_MATERIALIZED and event.step_id is not None
+            }
+        )
+        return decisions, tool_calls, steps
+
+    @classmethod
+    def _hard_limit_reason(
+        cls,
+        events: tuple[LedgerEvent, ...],
+        *,
+        pending_execution: bool = False,
+    ) -> tuple[str, tuple[int, int, int]] | None:
+        """Return a server-limit reason without consulting request metadata.
+
+        A materialized call already admitted before the cap is allowed to
+        finish, including after approval.  The strict pre-provider check
+        prevents another model decision or tool materialization; the relaxed
+        pending-execution check only rejects legacy/corrupt states that are
+        already over the server ceiling.
+        """
+
+        counts = cls._counts(events)
+        decisions, tool_calls, steps = counts
+        limits = SERVER_RUN_HARD_LIMITS
+        if pending_execution:
+            if decisions > limits.max_decisions:
+                return "server decision safety limit exceeded", counts
+            if tool_calls > limits.max_tool_calls:
+                return "server tool-call safety limit exceeded", counts
+            if steps > limits.max_steps:
+                return "server step safety limit exceeded", counts
+            return None
+        if decisions >= limits.max_decisions:
+            return "server decision safety limit reached", counts
+        if tool_calls >= limits.max_tool_calls:
+            return "server tool-call safety limit reached", counts
+        if steps >= limits.max_steps:
+            return "server step safety limit reached", counts
+        return None
+
+    def _append_hard_limit(
+        self,
+        request: RunRequest,
+        reason: str,
+        counts: tuple[int, int, int],
+    ) -> None:
+        events = self.ledger.for_run(request.run_id)
+        if any(event.event_type == BUDGET_EXHAUSTED for event in events):
+            return
+        self._append(
+            request,
+            BUDGET_EXHAUSTED,
+            status="EXHAUSTED",
+            metadata={
+                "reason": reason,
+                "counts": {
+                    "decisions": counts[0],
+                    "tool_calls": counts[1],
+                    "steps": counts[2],
+                },
+                "server_limits": {
+                    "max_decisions": SERVER_RUN_HARD_LIMITS.max_decisions,
+                    "max_tool_calls": SERVER_RUN_HARD_LIMITS.max_tool_calls,
+                    "max_steps": SERVER_RUN_HARD_LIMITS.max_steps,
+                },
+            },
+        )
+
     def _visible_artifacts(
         self, request: RunRequest, events: tuple[LedgerEvent, ...]
     ) -> tuple[str, ...]:
@@ -442,6 +534,7 @@ class AgentLoop:
             status = {
                 RUN_STOPPED: RunStatus.STOPPED,
                 RUN_FAILED: RunStatus.FAILED,
+                BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED,
             }[projection.terminal_event.event_type]
         elif projection.interrupted:
             status = RunStatus.INTERRUPTED
@@ -905,6 +998,11 @@ class AgentLoop:
                 return self._result(request, projection=projection)
 
             if projection.pending_execution is not None:
+                hard_limit = self._hard_limit_reason(events, pending_execution=True)
+                if hard_limit is not None:
+                    reason, counts = hard_limit
+                    self._append_hard_limit(request, reason, counts)
+                    return self._result(request)
                 approval_resume = approval_resume or (
                     projection.pending_execution.approval is not None
                     and projection.pending_execution.approval.decision
@@ -914,6 +1012,12 @@ class AgentLoop:
                 if approval_resume:
                     return self._result(request)
                 continue
+
+            hard_limit = self._hard_limit_reason(events)
+            if hard_limit is not None:
+                reason, counts = hard_limit
+                self._append_hard_limit(request, reason, counts)
+                return self._result(request)
 
             context = self._context(request, events)
             try:
@@ -973,12 +1077,15 @@ __all__ = [
     "APPROVAL_RECORDED",
     "APPROVAL_REQUIRED",
     "AgentLoop",
+    "BUDGET_EXHAUSTED",
     "DECISION_RECORDED",
     "EVENT_TYPES",
+    "INTENT_FROZEN",
     "REVIEW_REQUESTED",
     "RUN_FAILED",
     "RUN_STARTED",
     "RUN_STOPPED",
+    "SERVER_RUN_HARD_LIMITS",
     "RunEngine",
     "TOOL_CALL_MATERIALIZED",
     "TOOL_CALL_REJECTED",

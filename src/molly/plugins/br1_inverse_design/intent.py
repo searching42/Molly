@@ -11,10 +11,18 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from molly.core.ids import canonical_json_bytes, sha256_bytes, validate_digest_reference
+
 from .errors import Br1Error
-from .schema import Br1RunSpec
+from .schema import (
+    RUN_SPEC_SCHEMA_NAME,
+    RUN_SPEC_SCHEMA_VERSION,
+    Br1RunSpec,
+)
 
 
+BR1_INTENT_SCHEMA_NAME = "molly.br1.intent"
+BR1_INTENT_SCHEMA_VERSION = "1"
 BR1_INTENT_FIELDS = frozenset(
     {
         "target_property",
@@ -55,18 +63,80 @@ class Br1Intent:
     def __post_init__(self) -> None:
         if not isinstance(self.spec, Br1RunSpec):
             raise Br1Error("BR1 intent requires a validated Br1RunSpec")
-        object.__setattr__(self, "matched_fields", tuple(self.matched_fields))
-        object.__setattr__(self, "warnings", tuple(self.warnings))
+        for field_name in ("matched_fields", "warnings"):
+            values = tuple(getattr(self, field_name))
+            if any(not isinstance(value, str) or not value for value in values):
+                raise Br1Error(f"BR1 intent {field_name} must contain text values")
+            object.__setattr__(self, field_name, values)
 
-    def to_dict(self) -> dict[str, Any]:
+    def _digest_payload(self) -> dict[str, Any]:
         return {
-            "schema_name": "molly.br1.intent",
-            "schema_version": "1",
+            "schema_name": BR1_INTENT_SCHEMA_NAME,
+            "schema_version": BR1_INTENT_SCHEMA_VERSION,
             "spec": self.spec.to_dict(),
             "spec_digest": self.spec.digest,
             "matched_fields": list(self.matched_fields),
             "warnings": list(self.warnings),
         }
+
+    @property
+    def digest(self) -> str:
+        """Digest of the complete immutable intent, including its spec."""
+
+        return sha256_bytes(canonical_json_bytes(self._digest_payload()))
+
+    def to_dict(self) -> dict[str, Any]:
+        value = self._digest_payload()
+        value["intent_digest"] = self.digest
+        return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "Br1Intent":
+        """Reconstruct and verify one persisted structured intent."""
+
+        if not isinstance(value, Mapping):
+            raise Br1Error("persisted BR1 intent must be an object")
+        if value.get("schema_name") != BR1_INTENT_SCHEMA_NAME:
+            raise Br1Error("persisted BR1 intent schema is unsupported")
+        if value.get("schema_version") != BR1_INTENT_SCHEMA_VERSION:
+            raise Br1Error("persisted BR1 intent version is unsupported")
+        raw_spec = value.get("spec")
+        if not isinstance(raw_spec, Mapping):
+            raise Br1Error("persisted BR1 intent is missing its spec")
+        try:
+            if raw_spec.get("schema_name") != RUN_SPEC_SCHEMA_NAME:
+                raise Br1Error("persisted BR1 intent spec schema is unsupported")
+            if raw_spec.get("schema_version") != RUN_SPEC_SCHEMA_VERSION:
+                raise Br1Error("persisted BR1 intent spec version is unsupported")
+            spec_values = dict(raw_spec)
+            spec_values.pop("schema_name", None)
+            spec_values.pop("schema_version", None)
+            spec = Br1RunSpec(**spec_values)
+            spec_digest = validate_digest_reference(
+                str(value.get("spec_digest", "")), field="BR1 intent spec digest"
+            )
+        except Exception as exc:
+            raise Br1Error("persisted BR1 intent spec is malformed") from exc
+        if spec.digest != spec_digest:
+            raise Br1Error("persisted BR1 intent spec digest does not match")
+        matched_fields = value.get("matched_fields", ())
+        warnings = value.get("warnings", ())
+        if not isinstance(matched_fields, (list, tuple)) or not isinstance(warnings, (list, tuple)):
+            raise Br1Error("persisted BR1 intent annotations are malformed")
+        try:
+            intent = cls(
+                spec=spec,
+                matched_fields=tuple(matched_fields),
+                warnings=tuple(warnings),
+            )
+            intent_digest = validate_digest_reference(
+                str(value.get("intent_digest", "")), field="BR1 intent digest"
+            )
+        except Exception as exc:
+            raise Br1Error("persisted BR1 intent is malformed") from exc
+        if intent.digest != intent_digest:
+            raise Br1Error("persisted BR1 intent digest does not match")
+        return intent
 
 
 def _provider_output(
@@ -158,6 +228,8 @@ def with_source_format(intent: Br1Intent, source_format: str) -> Br1Intent:
 
 __all__ = [
     "BR1_INTENT_FIELDS",
+    "BR1_INTENT_SCHEMA_NAME",
+    "BR1_INTENT_SCHEMA_VERSION",
     "Br1Intent",
     "Br1IntentProvider",
     "parse_br1_request",

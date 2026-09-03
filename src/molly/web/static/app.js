@@ -113,7 +113,7 @@ const stopRunPolling = () => {
   }
 };
 
-const terminalStatuses = new Set(["STOPPED", "FAILED"]);
+const terminalStatuses = new Set(["STOPPED", "FAILED", "BUDGET_EXHAUSTED"]);
 
 const pollSelectedRun = async () => {
   if (!state.selectedRunId || state.pollInFlight) return;
