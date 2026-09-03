@@ -111,6 +111,11 @@ const invalidatePlan = () => {
   state.plan = null;
   state.planConfirmed = false;
 };
+const clearModelSelectionForWorkflow = () => {
+  if (workflowNeedsModel()) return;
+  state.llmProfileRef = "";
+  invalidatePlan();
+};
 
 const loadBootstrap = async () => {
   state.bootstrap = await request("/api/bootstrap");
@@ -119,6 +124,7 @@ const loadBootstrap = async () => {
     state.profileId = profiles.find((profile) => profile.available)?.profile_id || "";
     invalidatePlan();
   }
+  clearModelSelectionForWorkflow();
   if (state.selectedRunId && !state.bootstrap.runs.some((run) => run.run_id === state.selectedRunId)) {
     state.selectedRunId = null;
     state.detail = null;
@@ -314,6 +320,7 @@ const renderNew = () => {
     }).join("")
     : '<option value="">暂无可用运行配置</option>';
   const noProfile = !profiles.length;
+  clearModelSelectionForWorkflow();
   const currentProfile = selectedProfile();
   const workflow = currentProfile?.workflow || "core";
   const needsFile = workflow === "br1";
@@ -338,6 +345,13 @@ const renderNew = () => {
     : (needsModel && state.llmProfileRef && !modelReady
       ? '<div class="notice"><div class="notice-icon" aria-hidden="true">ⓘ</div><div><strong>所选模型服务尚未就绪</strong>请先保存 API Key，再解析执行计划。<button class="text-button" data-view="providers" type="button">去配置模型服务</button></div></div>'
       : "");
+  const modelField = needsModel ? `
+          <div class="field">
+            <label class="field-label" for="llm-profile">自然语言解析模型服务</label>
+            <select id="llm-profile" ${!modelProfiles.length ? "disabled" : ""}>${modelOptions}</select>
+            <span class="field-hint">${html(modelHint)}</span>
+          </div>
+        ` : "";
   return `
     <div class="page-heading">
       <div>
@@ -372,11 +386,7 @@ const renderNew = () => {
           </div>
         </div>
         <div class="field-row">
-          <div class="field">
-            <label class="field-label" for="llm-profile">自然语言解析模型服务</label>
-            <select id="llm-profile" ${!modelProfiles.length ? "disabled" : ""}>${modelOptions}</select>
-            <span class="field-hint">${html(modelHint)}</span>
-          </div>
+          ${modelField}
           <div class="field">
             <label class="field-label">资源选择</label>
             <div class="notice mode-note">CPU/GPU、工作站和路径均来自运行配置，网页不能改写。</div>
@@ -388,7 +398,7 @@ const renderNew = () => {
               <div class="upload-title">数据文件 <span class="optional-label">${needsFile ? "（必填，单个）" : "（可选）"}</span></div>
               <div class="upload-subtitle">${needsFile ? "仅支持一个 .json 或 .csv 文件；选择后会先检查格式和必需字段。" : "文件会保存到本机的不可变数据区，单个文件不超过 128 MB。"}</div>
             </div>
-            <label class="file-button" for="file-input">选择或替换文件<input class="visually-hidden" id="file-input" type="file" accept="${needsFile ? ".json,.csv" : "*/*"}" ${needsFile ? "aria-required=\"true\"" : ""} /></label>
+            <label class="file-button" for="file-input">选择或替换文件<input class="visually-hidden" id="file-input" type="file" ${needsFile ? 'accept=".json,.csv" aria-required="true"' : ""} /></label>
           </div>
           <div class="file-list" id="file-list">${renderFiles()}</div>
         </div>
@@ -692,6 +702,7 @@ const bindPageEvents = () => {
   const profileInput = document.getElementById("profile-id");
   if (profileInput) profileInput.addEventListener("change", () => {
     state.profileId = profileInput.value;
+    clearModelSelectionForWorkflow();
     invalidatePlan();
     render({ force: true, preserveInteractive: true });
   });
@@ -712,14 +723,21 @@ const bindPageEvents = () => {
   if (previewButton) previewButton.addEventListener("click", async () => {
     const goal = document.getElementById("goal")?.value.trim() || state.goal;
     const profileId = document.getElementById("profile-id")?.value || state.profileId;
-    const llmProfileRef = document.getElementById("llm-profile")?.value || state.llmProfileRef;
-    state.goal = goal; state.profileId = profileId; state.llmProfileRef = llmProfileRef;
-    if (!goal || !profileId || !llmProfileRef || !state.files.length) return showToast("请先填写目标、选择模型服务并添加一个数据文件", true);
+    const selectedLlmProfileRef = document.getElementById("llm-profile")?.value || state.llmProfileRef;
+    state.goal = goal; state.profileId = profileId;
+    const workflow = selectedWorkflow();
+    const llmProfileRef = workflow === "br1" ? selectedLlmProfileRef : "";
+    state.llmProfileRef = llmProfileRef;
+    if (!goal || !profileId || (workflow === "br1" && !llmProfileRef) || !state.files.length) {
+      return showToast(workflow === "br1" ? "请先填写目标、选择模型服务并添加一个数据文件" : "请先填写目标并添加一个数据文件", true);
+    }
     try {
       setBusy(true);
+      const previewBody = { goal, profile_id: profileId, input_artifact_ids: state.files.map((file) => file.artifact_id) };
+      if (workflow === "br1") previewBody.llm_profile_ref = llmProfileRef;
       state.plan = await request("/api/workflows/preview", {
         method: "POST",
-        body: JSON.stringify({ goal, profile_id: profileId, input_artifact_ids: state.files.map((file) => file.artifact_id), llm_profile_ref: llmProfileRef }),
+        body: JSON.stringify(previewBody),
       });
       state.planConfirmed = false;
       render({ force: true, preserveInteractive: true });
@@ -732,24 +750,29 @@ const bindPageEvents = () => {
     event.preventDefault();
     const goal = document.getElementById("goal").value.trim();
     const profileId = document.getElementById("profile-id").value;
-    const llmProfileRef = document.getElementById("llm-profile")?.value || "";
-    state.goal = goal; state.profileId = profileId; state.llmProfileRef = llmProfileRef;
+    const selectedLlmProfileRef = document.getElementById("llm-profile")?.value || state.llmProfileRef;
+    state.goal = goal; state.profileId = profileId;
     const workflow = selectedProfile()?.workflow || "core";
-    if (!goal || !profileId || (workflow === "br1" && !llmProfileRef)) return showToast("请填写任务目标并选择运行配置和解析模型", true);
+    const llmProfileRef = workflow === "br1" ? selectedLlmProfileRef : "";
+    state.llmProfileRef = llmProfileRef;
+    if (!goal || !profileId || (workflow === "br1" && !llmProfileRef)) {
+      return showToast(workflow === "br1" ? "请填写任务目标并选择运行配置和解析模型" : "请填写任务目标并选择运行配置", true);
+    }
     if (workflow === "br1" && state.files.length !== 1) return showToast("该工作流必须上传且只能上传一个数据文件", true);
     if (workflow === "br1" && !state.plan?.preview_token) return showToast("请先解析并预览执行计划", true);
     if (workflow === "br1" && !state.planConfirmed) return showToast("请先确认执行计划", true);
     try {
       setBusy(true);
+      const runBody = {
+        goal,
+        profile_id: profileId,
+        input_artifact_ids: state.files.map((file) => file.artifact_id),
+        workflow_intent_preview_token: state.plan?.preview_token,
+      };
+      if (workflow === "br1") runBody.llm_profile_ref = llmProfileRef;
       const result = await request("/api/runs", {
         method: "POST",
-          body: JSON.stringify({
-          goal,
-          profile_id: profileId,
-          input_artifact_ids: state.files.map((file) => file.artifact_id),
-          llm_profile_ref: llmProfileRef || undefined,
-          workflow_intent_preview_token: state.plan?.preview_token,
-        }),
+        body: JSON.stringify(runBody),
       });
       state.selectedRunId = result.run_id;
       state.detail = result.inspection;

@@ -11,12 +11,13 @@ import threading
 
 import pytest
 
+from molly.core import StopAction, ToolPolicy, ToolRegistry
 from molly.core.artifacts import ArtifactStore
 from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
 from molly.plugins.br1_inverse_design.errors import Br1IntegrityError
 from molly.plugins.br1_inverse_design.workflow import br1_profile
-from molly.runtime import RuntimeProfileRegistry, RuntimeService
+from molly.runtime import RuntimeProfile, RuntimeProfileRegistry, RuntimeService
 
 
 pytestmark = pytest.mark.acceptance
@@ -219,6 +220,48 @@ def test_workflow_requires_one_valid_dataset_file(tmp_path: Path) -> None:
                 ).encode(),
                 target_property="homo_lumo_gap",
             )
+    finally:
+        app.close()
+
+
+def test_non_br1_run_ignores_residual_unconfigured_model_reference(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    provider_store = ProviderConfigStore(root)
+    provider_store.upsert_profile(
+        {
+            "profile_ref": "provider:unused",
+            "display_name": "未配置模型",
+            "endpoint": "https://models.example.test/v1/chat/completions",
+            "model_identifier": "unused-model",
+        }
+    )
+
+    class StopProvider:
+        def next_action(self, context: object, model_visible_tools: object) -> StopAction:
+            return StopAction("core workflow complete")
+
+    profile = RuntimeProfile(
+        profile_id="profile:core-web",
+        tool_registry_factory=ToolRegistry,
+        tool_policy_factory=ToolPolicy,
+        decision_provider_factory=StopProvider,
+        config={"display_name": "核心工作流", "workflow": "core"},
+    )
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service, provider_store=provider_store)
+    payload = {
+        "profile_id": profile.profile_id,
+        "goal": "run the core workflow",
+        "llm_profile_ref": "provider:unused",
+    }
+    try:
+        status, preview = app.dispatch("POST", "/api/workflows/preview", payload)
+        assert status == 200
+        assert preview["workflow"] == "core"
+
+        status, started = app.dispatch("POST", "/api/runs", payload)
+        assert status == 201
+        assert started["status"] == "STOPPED"
     finally:
         app.close()
 

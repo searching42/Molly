@@ -828,9 +828,6 @@ class MollyWebApplication:
         input_artifact_ids = self._artifact_ids(payload)
         runtime_profile, workflow = self._runtime_profile_for_id(profile_id)
         self._validate_workflow_inputs(workflow, input_artifact_ids)
-        llm_ref, llm_profile = self._provider_binding(
-            payload.get("llm_profile_ref"), required=workflow == _SCIENTIFIC_WORKFLOW
-        )
         if workflow != _SCIENTIFIC_WORKFLOW:
             return {
                 "workflow": workflow,
@@ -838,6 +835,9 @@ class MollyWebApplication:
                 "preview_token": None,
                 "message": "当前工作流不需要自然语言解析计划",
             }
+        llm_ref, llm_profile = self._provider_binding(
+            payload.get("llm_profile_ref"), required=True
+        )
         intent = self._compile_workflow_intent(
             runtime_profile,
             goal=goal.strip(),
@@ -930,16 +930,14 @@ class MollyWebApplication:
         input_artifact_ids = self._artifact_ids(payload)
         runtime_profile, workflow = self._runtime_profile_for_id(profile_id)
         self._validate_workflow_inputs(workflow, input_artifact_ids)
-        llm_profile_ref = payload.get("llm_profile_ref")
         metadata: dict[str, Any] = {}
-        bound_ref, llm_profile = self._provider_binding(
-            llm_profile_ref, required=workflow == _SCIENTIFIC_WORKFLOW
-        )
-        if bound_ref is not None and llm_profile is not None:
-            metadata["llm_profile_ref"] = bound_ref
-            metadata["llm_profile_digest"] = llm_profile.profile.digest
         preview_intent: Mapping[str, Any] | None = None
         if workflow == _SCIENTIFIC_WORKFLOW:
+            bound_ref, llm_profile = self._provider_binding(
+                payload.get("llm_profile_ref"), required=True
+            )
+            metadata["llm_profile_ref"] = bound_ref
+            metadata["llm_profile_digest"] = llm_profile.profile.digest
             preview_intent = self._preview_binding_for_start(
                 payload.get("workflow_intent_preview_token"),
                 profile_id=profile_id.strip(),
