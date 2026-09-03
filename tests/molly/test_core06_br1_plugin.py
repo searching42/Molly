@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -275,6 +278,8 @@ def test_br1_production_namespace_has_no_legacy_or_spike_imports() -> None:
 
 
 def test_remote_commands_are_noninteractive_and_walltime_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    if shutil.which("timeout") is None:
+        pytest.skip("GNU timeout is not available")
     host = Br1RemoteHost(
         ssh_target="compute-worker-main",
         remote_root="/srv/molly-br1",
@@ -291,7 +296,7 @@ def test_remote_commands_are_noninteractive_and_walltime_bounded(monkeypatch: py
         calls.append((argv, operation, timeout_sec))
 
     monkeypatch.setattr(remote_module, "_run_checked", fake_run)
-    remote_module._ssh(host, ("python", "-c", "print('ok')"))
+    remote_module._ssh(host, (sys.executable, "-c", "print('ok')"))
     remote_module._scp(host, "/tmp/input.json", "/srv/molly-br1/input.json")
 
     assert len(calls) == 2
@@ -301,7 +306,12 @@ def test_remote_commands_are_noninteractive_and_walltime_bounded(monkeypatch: py
     assert "BatchMode=yes" in ssh_argv
     assert "ConnectTimeout=3" in ssh_argv
     assert "ConnectionAttempts=1" in ssh_argv
-    assert "timeout --signal=TERM --kill-after=30s 120s --" in ssh_argv[-1]
+    assert "timeout --signal=TERM --kill-after=30s 120s " in ssh_argv[-1]
+    assert "120s --" not in ssh_argv[-1]
+    completed = subprocess.run(
+        ["sh", "-c", ssh_argv[-1]], capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stderr
     assert timeout_sec == 158
     scp_argv, operation, timeout_sec = calls[1]
     assert operation == "artifact transfer"
@@ -321,3 +331,22 @@ def test_remote_host_rejects_unbounded_timeouts() -> None:
             reinvent_repository="/opt/reinvent/repository",
             resource_constraints={"walltime_sec": 1},
         )
+
+
+def test_remote_scripts_bind_effective_scientific_parameters() -> None:
+    training = remote_module._training_script()
+    assert 'epochs=training_parameters["epochs"]' in training
+    assert 'batch_size=training_parameters["batch_size"]' in training
+    assert 'learning_rate=training_parameters["learning_rate"]' in training
+    assert 'model_name=model_name' in training
+    assert "epochs=1" not in training
+    assert "batch_size=16" not in training
+
+    generation = remote_module._generation_script()
+    assert 'f"temperature = {json.dumps(temperature)}"' in generation
+    assert 'f"unique_molecules = {json.dumps(generation_parameters[\'unique_molecules\'])}"' in generation
+    assert "temperature = 1.0" not in generation
+
+    prediction = remote_module._prediction_script()
+    assert 'fieldnames=(smiles_col, target_col)' in prediction
+    assert 'prediction_parameters = json.loads(sys.argv[12])' in prediction

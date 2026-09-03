@@ -188,17 +188,21 @@ def _run_checked(
         raise Br1RemoteError(f"server-owned {operation} failed") from exc
 
 
-def _ssh(config: Br1RemoteHost, command: Sequence[str]) -> None:
+def _render_remote_command(command: Sequence[str], *, walltime_sec: int) -> str:
     rendered = " ".join(shlex.quote(str(item)) for item in command)
-    walltime = _walltime_sec(config)
-    wrapped = (
+    return (
         "timeout --signal=TERM --kill-after="
         + str(REMOTE_KILL_GRACE_SEC)
         + "s "
-        + shlex.quote(str(walltime))
-        + "s -- "
+        + shlex.quote(str(walltime_sec))
+        + "s "
         + rendered
     )
+
+
+def _ssh(config: Br1RemoteHost, command: Sequence[str]) -> None:
+    walltime = _walltime_sec(config)
+    wrapped = _render_remote_command(command, walltime_sec=walltime)
     _run_checked(
         (
             "ssh",
@@ -270,8 +274,31 @@ def _training_script() -> str:
         step_id = sys.argv[8]
         target_property = sys.argv[9]
         seed = int(sys.argv[10])
-        use_cuda = sys.argv[11].casefold() == "true"
-        use_gpu = sys.argv[12]
+        model_name = sys.argv[11]
+        model_size = sys.argv[12]
+        training_parameters = json.loads(sys.argv[13])
+        expected_training_parameters = {
+            "task", "epochs", "learning_rate", "batch_size", "early_stopping",
+            "metrics", "split", "kfold", "smiles_col", "target_cols",
+            "target_normalize", "smiles_check", "use_cuda", "use_amp", "use_ddp",
+            "use_gpu", "model_name", "model_size", "conf_cache_level",
+        }
+        if not isinstance(training_parameters, dict) or set(training_parameters) != expected_training_parameters:
+            raise RuntimeError("training parameters are not the server-owned supported set")
+        if training_parameters["model_name"] != model_name or training_parameters["model_size"] != model_size:
+            raise RuntimeError("training model identity is inconsistent")
+        smiles_col = training_parameters["smiles_col"]
+        target_cols = training_parameters["target_cols"]
+        if (
+            not isinstance(smiles_col, str)
+            or not smiles_col.strip()
+            or not isinstance(target_cols, list)
+            or len(target_cols) != 1
+            or not isinstance(target_cols[0], str)
+            or not target_cols[0].strip()
+            or any(char in smiles_col + target_cols[0] for char in "\r\n")
+        ):
+            raise RuntimeError("training column parameters are malformed")
 
         random.seed(seed)
         np.random.seed(seed)
@@ -282,7 +309,7 @@ def _training_script() -> str:
         model_root.mkdir(parents=True, exist_ok=True)
         source_data = pd.read_csv(csv_path)
         source_row_count = len(source_data)
-        valid_mask = source_data["SMILES"].map(lambda smi: Chem.MolFromSmiles(str(smi)) is not None)
+        valid_mask = source_data[smiles_col].map(lambda smi: Chem.MolFromSmiles(str(smi)) is not None)
         training_data = source_data.loc[valid_mask].reset_index(drop=True)
         if training_data.empty:
             raise RuntimeError("RDKit filtering removed every training molecule")
@@ -291,27 +318,27 @@ def _training_script() -> str:
         invalid_smiles_filtered = source_row_count - len(training_data)
 
         trainer = MolTrain(
-            task="regression",
+            task=training_parameters["task"],
             data_type="molecule",
-            epochs=1,
-            learning_rate=0.0001,
-            batch_size=16,
-            early_stopping=1,
-            metrics="none",
-            split="random",
-            kfold=1,
+            epochs=training_parameters["epochs"],
+            learning_rate=training_parameters["learning_rate"],
+            batch_size=training_parameters["batch_size"],
+            early_stopping=training_parameters["early_stopping"],
+            metrics=training_parameters["metrics"],
+            split=training_parameters["split"],
+            kfold=training_parameters["kfold"],
             save_path=str(model_root),
-            smiles_col="SMILES",
-            target_cols=["target_value"],
-            target_normalize="auto",
-            smiles_check="filter",
-            use_cuda=use_cuda,
-            use_amp=False,
-            use_ddp=False,
-            use_gpu=use_gpu,
-            model_name="unimolv1",
-            model_size="84m",
-            conf_cache_level=0,
+            smiles_col=training_parameters["smiles_col"],
+            target_cols=training_parameters["target_cols"],
+            target_normalize=training_parameters["target_normalize"],
+            smiles_check=training_parameters["smiles_check"],
+            use_cuda=training_parameters["use_cuda"],
+            use_amp=training_parameters["use_amp"],
+            use_ddp=training_parameters["use_ddp"],
+            use_gpu=training_parameters["use_gpu"],
+            model_name=model_name,
+            model_size=model_size,
+            conf_cache_level=training_parameters["conf_cache_level"],
         )
         trainer.fit(str(filtered_csv))
 
@@ -327,10 +354,11 @@ def _training_script() -> str:
             "status": "SUCCEEDED",
             "runtime_kind": "unimol_tools",
             "unimol_version": importlib.metadata.version("unimol-tools"),
-            "model_name": "unimolv1",
-            "model_size": "84m",
-            "use_cuda": use_cuda,
-            "use_gpu": use_gpu,
+            "model_name": model_name,
+            "model_size": model_size,
+            "use_cuda": training_parameters["use_cuda"],
+            "use_gpu": training_parameters["use_gpu"],
+            "parameters": training_parameters,
             "dataset_artifact_id": dataset_artifact_id,
             "training_config_digest": config_digest,
             "target_property": target_property,
@@ -358,6 +386,7 @@ def _generation_script() -> str:
         import hashlib
         import importlib.metadata
         import json
+        import math
         from pathlib import Path
         import subprocess
         import sys
@@ -377,9 +406,25 @@ def _generation_script() -> str:
         candidate_count = int(sys.argv[11])
         seed = int(sys.argv[12])
         task_digest = sys.argv[13]
-        device = sys.argv[14]
+        generation_parameters = json.loads(sys.argv[14])
+        expected_generation_parameters = {
+            "unique_molecules", "randomize_smiles", "temperature", "device", "prior_model_ref",
+        }
+        if not isinstance(generation_parameters, dict) or set(generation_parameters) != expected_generation_parameters:
+            raise RuntimeError("generation parameters are not the server-owned supported set")
+        if not isinstance(generation_parameters["unique_molecules"], bool) or not isinstance(generation_parameters["randomize_smiles"], bool):
+            raise RuntimeError("generation boolean parameters are malformed")
+        temperature = generation_parameters["temperature"]
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(float(temperature)):
+            raise RuntimeError("generation temperature is malformed")
+        device = generation_parameters["device"]
+        if not isinstance(device, str) or not device.strip():
+            raise RuntimeError("generation device is malformed")
+        prior_model_ref = generation_parameters["prior_model_ref"]
+        if prior_model_ref != "reinvent.prior":
+            raise RuntimeError("generation prior reference is not server-owned")
 
-        prior = repository / "priors" / "reinvent.prior"
+        prior = repository / "priors" / prior_model_ref
         if not prior.is_file():
             raise RuntimeError("server-owned REINVENT4 prior is unavailable")
 
@@ -410,9 +455,9 @@ def _generation_script() -> str:
                     f"model_file = {json.dumps(str(prior))}",
                     f"output_file = {json.dumps(str(attempt_csv))}",
                     f"num_smiles = {batch_size}",
-                    "unique_molecules = true",
-                    "randomize_smiles = false",
-                    "temperature = 1.0",
+                    f"unique_molecules = {json.dumps(generation_parameters['unique_molecules'])}",
+                    f"randomize_smiles = {json.dumps(generation_parameters['randomize_smiles'])}",
+                    f"temperature = {json.dumps(temperature)}",
                     "",
                 )),
                 encoding="utf-8",
@@ -481,6 +526,7 @@ def _generation_script() -> str:
             "attempt_count": attempts,
             "attempted_sample_count": attempted_samples,
             "seed": seed,
+            "parameters": generation_parameters,
             "fresh_generation": True,
             "historical_reuse": False,
             "run_id": run_id,
@@ -516,6 +562,22 @@ def _prediction_script() -> str:
         target_property = sys.argv[9]
         run_id = sys.argv[10]
         step_id = sys.argv[11]
+        prediction_parameters = json.loads(sys.argv[12])
+        expected_prediction_parameters = {"task", "smiles_col", "target_col", "target_normalize"}
+        if not isinstance(prediction_parameters, dict) or set(prediction_parameters) != expected_prediction_parameters:
+            raise RuntimeError("prediction parameters are not the server-owned supported set")
+        if prediction_parameters["task"] != "regression" or prediction_parameters["target_normalize"] != "auto":
+            raise RuntimeError("prediction semantics are not supported by the remote adapter")
+        smiles_col = prediction_parameters["smiles_col"]
+        target_col = prediction_parameters["target_col"]
+        if (
+            not isinstance(smiles_col, str)
+            or not smiles_col.strip()
+            or not isinstance(target_col, str)
+            or not target_col.strip()
+            or any(char in smiles_col + target_col for char in "\r\n")
+        ):
+            raise RuntimeError("prediction column parameters are malformed")
 
         candidates = json.loads(candidate_path.read_text(encoding="utf-8"))
         rows = candidates.get("rows")
@@ -534,10 +596,10 @@ def _prediction_script() -> str:
 
         prediction_input = extract_root / "prediction-input.csv"
         with prediction_input.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=("SMILES", "target_value"))
+            writer = csv.DictWriter(handle, fieldnames=(smiles_col, target_col))
             writer.writeheader()
             for row in rows:
-                writer.writerow({"SMILES": str(row["smiles"]), "target_value": -1.0})
+                writer.writerow({smiles_col: str(row["smiles"]), target_col: -1.0})
         predictor = MolPredict(load_model=str(model_root))
         predicted = np.asarray(
             predictor.predict(str(prediction_input), save_path=str(extract_root / "prediction-output"), metrics="none")
@@ -576,6 +638,7 @@ def _prediction_script() -> str:
             "model_artifact_id": model_artifact_id,
             "candidate_artifact_id": candidate_artifact_id,
             "prediction_count": len(prediction_rows),
+            "parameters": prediction_parameters,
             "current_run_model_binding": True,
             "run_id": run_id,
             "step_id": step_id,
@@ -625,6 +688,12 @@ class ServerOwnedBr1RemoteRunner:
         stage_parameters = parameters.get("parameters", {})
         if not isinstance(stage_parameters, Mapping):
             raise Br1RemoteError("BR1 stage parameters are malformed")
+        try:
+            serialized_stage_parameters = json.dumps(
+                dict(stage_parameters), sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise Br1RemoteError("BR1 stage parameters are not JSON serializable") from exc
 
         if operation == "br1_train_unimol":
             if len(input_ids) != 1:
@@ -636,14 +705,37 @@ class ServerOwnedBr1RemoteRunner:
             rows = dataset.get("rows") if isinstance(dataset, Mapping) else None
             if not isinstance(rows, list) or not rows:
                 raise Br1RemoteError("training dataset has no rows")
+            training_smiles_col = stage_parameters.get("smiles_col")
+            training_target_cols = stage_parameters.get("target_cols")
+            if (
+                not isinstance(training_smiles_col, str)
+                or not training_smiles_col.strip()
+                or not isinstance(training_target_cols, list)
+                or len(training_target_cols) != 1
+                or not isinstance(training_target_cols[0], str)
+                or not training_target_cols[0].strip()
+                or any(
+                    char in training_smiles_col + training_target_cols[0]
+                    for char in "\r\n"
+                )
+            ):
+                raise Br1RemoteError("training column parameters are malformed")
             csv_path = workdir / "training-input.csv"
+            training_target_col = training_target_cols[0]
             with csv_path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=("SMILES", "target_value"))
+                writer = csv.DictWriter(
+                    handle, fieldnames=(training_smiles_col, training_target_col)
+                )
                 writer.writeheader()
                 for row in rows:
                     if not isinstance(row, Mapping):
                         raise Br1RemoteError("training dataset row is malformed")
-                    writer.writerow({"SMILES": row["smiles"], "target_value": row["target_value"]})
+                    writer.writerow(
+                        {
+                            training_smiles_col: row["smiles"],
+                            training_target_col: row["target_value"],
+                        }
+                    )
             script = self._upload_script(workdir, remote_dir, "train.py", _training_script())
             remote_csv = _remote_child(remote_dir, csv_path.name)
             _scp(self.config, csv_path, remote_csv)
@@ -663,8 +755,9 @@ class ServerOwnedBr1RemoteRunner:
                 str(task["step_id"]),
                 str(parameters["target_property"]),
                 str(parameters["seed"]),
-                str(stage_parameters.get("use_cuda", True)),
-                str(stage_parameters.get("use_gpu", "0")),
+                str(parameters["model_name"]),
+                str(parameters["model_size"]),
+                serialized_stage_parameters,
             ))
             return (
                 ComputeOutput("model_package", self._fetch(remote_package, workdir / "model-package.tar.gz"), "application/gzip", "molly.br1.model-package", "1"),
@@ -696,7 +789,7 @@ class ServerOwnedBr1RemoteRunner:
                 str(parameters["candidate_count"]),
                 str(parameters["seed"]),
                 task_digest,
-                str(stage_parameters.get("device", "cpu")),
+                serialized_stage_parameters,
             ))
             return (
                 ComputeOutput("candidate_package", self._fetch(remote_candidates, workdir / "candidate-package.json"), "application/json", "molly.br1.candidate-package", "1"),
@@ -731,6 +824,7 @@ class ServerOwnedBr1RemoteRunner:
             str(parameters["target_property"]),
             str(task["run_id"]),
             str(task["step_id"]),
+            serialized_stage_parameters,
         ))
         return (
             ComputeOutput("prediction_package", self._fetch(remote_prediction, workdir / "prediction-package.json"), "application/json", "molly.br1.prediction-package", "1"),

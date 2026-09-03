@@ -96,20 +96,22 @@ def parse_br1_request(
         raise Br1Error("BR1 ranking direction is ambiguous")
     direction = "MIN" if min_hit or target == "homo_lumo_gap" else "MAX"
 
-    candidate_count = _number_after(
+    parsed_candidate_count = _number_after(
         text,
         (
             rf"(?:采样空间|采样数量|候选(?:分子)?数量|sampling\s*space|candidate(?:s)?(?:\s+count)?|sample(?:d)?\s+molecules?)[^0-9]{{0,24}}{_INTEGER}",
             rf"{_INTEGER}[^0-9]{{0,8}}(?:个)?(?:候选分子|候选|分子)",
         ),
-    ) or 1000
-    top_n = _number_after(
+    )
+    candidate_count = 1000 if parsed_candidate_count is None else parsed_candidate_count
+    parsed_top_n = _number_after(
         text,
         (
             rf"\btop\s*[-_ ]?\s*{_INTEGER}",
             rf"前\s*{_INTEGER}\s*(?:个|名|分子)?",
         ),
-    ) or 5
+    )
+    top_n = 5 if parsed_top_n is None else parsed_top_n
 
     workstation_hits = []
     for number in (1, 2):
@@ -135,7 +137,8 @@ def parse_br1_request(
         gpu_count = 1
     if cpu_count is None:
         cpu_count = 8
-    seed = _number_after(text, (rf"(?:seed|随机种子)[^0-9]{{0,12}}{_INTEGER}",)) or 42
+    parsed_seed = _number_after(text, (rf"(?:seed|随机种子)[^0-9]{{0,12}}{_INTEGER}",))
+    seed = 42 if parsed_seed is None else parsed_seed
 
     values: dict[str, Any] = {
         "target_property": target,

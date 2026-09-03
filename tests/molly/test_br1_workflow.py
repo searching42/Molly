@@ -12,6 +12,7 @@ import pytest
 from molly.core.artifacts import ArtifactStore
 from molly.core.ledger import RunLedger
 from molly.plugins.br1_inverse_design import (
+    Br1Error,
     Br1PluginConfig,
     DatasetGate,
     br1_profile,
@@ -58,6 +59,18 @@ def test_natural_language_compiles_to_the_requested_br1_spec() -> None:
     assert intent.spec.scaffold_constraint == "NONE"
     assert intent.spec.seed == 7
     assert intent.spec.host_preference == _WORKSTATION_TWO
+
+
+def test_zero_values_are_not_replaced_by_defaults() -> None:
+    seed_intent = parse_br1_request(
+        "HOMO-LUMO gap，采样空间为8，top 3，随机种子为0"
+    )
+    assert seed_intent.spec.seed == 0
+
+    with pytest.raises(Br1Error):
+        parse_br1_request("HOMO-LUMO gap，采样空间为0，top 3")
+    with pytest.raises(Br1Error):
+        parse_br1_request("HOMO-LUMO gap，采样空间为8，top 0")
 
 
 def test_raw_oe62_cleaning_is_explicit_and_gateable(tmp_path: Path) -> None:
