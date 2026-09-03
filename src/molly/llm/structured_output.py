@@ -199,5 +199,22 @@ class OpenAICompatibleStructuredProvider:
         }
         return self._request(payload)
 
+    def test_connection(self) -> None:
+        """Send a minimal structured request to verify endpoint and model use."""
+
+        payload = {
+            "model": self.profile.model_identifier,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Return a JSON object with the boolean field ok set to true.",
+                },
+                {"role": "user", "content": "{}"},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+        self._request(payload)
+
 
 __all__ = ["LIVE_STRUCTURED_MAPPING_PROVIDER_DEFERRED", "OpenAICompatibleStructuredProvider", "StructuredProviderError"]

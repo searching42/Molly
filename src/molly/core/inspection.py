@@ -18,6 +18,7 @@ from .agent_loop import (
     DECISION_RECORDED,
     REVIEW_REQUESTED,
     RUN_FAILED,
+    RUN_REJECTED,
     RUN_STARTED,
     RUN_STOPPED,
     TOOL_CALL_MATERIALIZED,
@@ -45,7 +46,7 @@ from .runs import RunRequest, RunStatus
 from .tools import MAX_TOOL_RESULT_DATA_BYTES, MaterializedToolCall
 
 
-_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED})
+_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_REJECTED, RUN_FAILED, BUDGET_EXHAUSTED})
 _CALL_EVENT_TYPES = frozenset(
     {
         TOOL_CALL_MATERIALIZED,
@@ -131,6 +132,7 @@ class ToolCallInspection:
     approval_required: bool
     approval_status: str | None
     execution_status: str
+    reason_summary: str = ""
     result_data: Any = None
     result_data_sha256: str | None = None
     failure_type: str | None = None
@@ -162,6 +164,10 @@ class ToolCallInspection:
         if self.approval_status is not None:
             validate_identifier(self.approval_status, field="approval_status")
         validate_identifier(self.execution_status, field="execution_status")
+        if not isinstance(self.reason_summary, str) or len(self.reason_summary) > 2_000:
+            raise InspectionError("inspection reason_summary must be bounded text")
+        if "\x00" in self.reason_summary:
+            raise InspectionError("inspection reason_summary contains NUL")
         if self.result_data_sha256 is not None:
             validate_digest_reference(self.result_data_sha256, field="result_data_sha256")
             freeze_json_value(self.result_data, field="inspection result data")
@@ -187,6 +193,7 @@ class ToolCallInspection:
             "approval_required": self.approval_required,
             "approval_status": self.approval_status,
             "execution_status": self.execution_status,
+            "reason_summary": self.reason_summary,
             "event_ids": list(self.event_ids),
         }
         if self.result_data_sha256 is not None:
@@ -611,6 +618,7 @@ class RunInspector:
                     approval_required=required,
                     approval_status=approval_status,
                     execution_status=execution_status,
+                    reason_summary=call.reason_summary,
                     result_data=result_data,
                     result_data_sha256=result_digest,
                     failure_type=failure_type,
@@ -637,6 +645,7 @@ class RunInspector:
                 raise InspectionIntegrityError("events follow a terminal run event")
             return {
                 RUN_STOPPED: RunStatus.STOPPED.value,
+                RUN_REJECTED: RunStatus.REJECTED.value,
                 RUN_FAILED: RunStatus.FAILED.value,
                 BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED.value,
             }[terminal[-1].event_type]

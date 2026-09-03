@@ -425,6 +425,69 @@ def _source_records(source: bytes, source_format: str) -> tuple[list[Mapping[str
         raise Br1IntegrityError("CSV dataset source is not a UTF-8 CSV") from exc
 
 
+def validate_raw_dataset_source(
+    source_bytes: bytes,
+    *,
+    source_format: str = "auto",
+    target_property: str | None = None,
+) -> str:
+    """Validate the browser upload boundary without transforming the source.
+
+    The full cleaning operation remains a server-owned tool.  This small gate
+    is intentionally read-only and catches malformed files and missing
+    identity/target columns before a run can be created.
+    """
+
+    if not isinstance(source_bytes, (bytes, bytearray, memoryview)):
+        raise Br1Error("raw dataset source must be bytes-like")
+    records, detected_format = _source_records(bytes(source_bytes), source_format)
+    if not records:
+        raise Br1IntegrityError("dataset source contains no data rows")
+    columns = {
+        str(key).strip().casefold()
+        for record in records
+        if isinstance(record, Mapping)
+        for key in record
+        if isinstance(key, str) and key.strip()
+    }
+    identity_columns = {"canonical_smiles", "smiles", "chromophore"}
+    if not columns & identity_columns:
+        raise Br1IntegrityError("数据文件缺少必需的分子结构列（SMILES）")
+    normalized_target = target_property.strip().casefold() if isinstance(target_property, str) else ""
+    if normalized_target == "homo_lumo_gap":
+        target_columns = {
+            "homo_lumo_gap",
+            "target_value",
+            "target",
+            "energies_occ_pbe0_vac_tier2",
+        }
+        has_orbital_pair = {
+            "energies_occ_pbe0_vac_tier2",
+            "energies_unocc_pbe0_vac_tier2",
+        }.issubset(columns)
+        if not has_orbital_pair and not columns & target_columns:
+            raise Br1IntegrityError("数据文件缺少 HOMO-LUMO gap 所需的目标列")
+    elif normalized_target in {"quantum_yield", "quantum yield"}:
+        if not columns & {"quantum_yield", "quantum yield", "target_value", "target"}:
+            raise Br1IntegrityError("数据文件缺少 quantum yield 目标列")
+    elif normalized_target:
+        if normalized_target not in columns and not columns & {"target_value", "target"}:
+            raise Br1IntegrityError("数据文件缺少所选目标属性列")
+    elif not (
+        columns
+        & {
+            "quantum_yield",
+            "quantum yield",
+            "homo_lumo_gap",
+            "target_value",
+            "target",
+        }
+        or {"energies_occ_pbe0_vac_tier2", "energies_unocc_pbe0_vac_tier2"}.issubset(columns)
+    ):
+        raise Br1IntegrityError("数据文件缺少受支持的目标属性列")
+    return detected_format
+
+
 def _column(record: Mapping[str, Any], names: Sequence[str]) -> tuple[str | None, Any]:
     by_normalized = {
         str(key).strip().casefold(): (str(key), value)
@@ -749,4 +812,5 @@ __all__ = [
     "PreparedDataset",
     "migrate_real_csv",
     "prepare_raw_dataset",
+    "validate_raw_dataset_source",
 ]

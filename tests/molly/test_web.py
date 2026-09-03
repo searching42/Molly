@@ -12,6 +12,8 @@ import threading
 import pytest
 
 from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
+from molly.plugins.br1_inverse_design.workflow import br1_profile
+from molly.runtime import RuntimeProfileRegistry, RuntimeService
 
 
 pytestmark = pytest.mark.acceptance
@@ -141,8 +143,162 @@ def test_upload_publishes_verified_local_file_without_path_input(tmp_path: Path)
     assert status == 200
     assert content == b"local notes"
     assert media_type == "text/plain"
-    assert download_name.endswith(".bin")
+    assert download_name == "notes.txt"
     assert app.dispatch("GET", f"/api/artifacts/{uploaded['artifact_id']}/content")[0] == 200
+
+
+def test_workflow_requires_one_valid_dataset_file(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    profile = br1_profile(root, profile_id="profile:workflow-input")
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service)
+    valid = json.dumps(
+        {
+            "columns": ["canonical_smiles", "quantum_yield"],
+            "data": [["CCO", 0.4]],
+        }
+    ).encode()
+    try:
+        status, missing = app.dispatch(
+            "POST",
+            "/api/runs",
+            {"profile_id": profile.profile_id, "goal": "rank molecules"},
+        )
+        assert status == 400
+        assert missing["error_type"] == "WORKFLOW_FILE_REQUIRED"
+
+        uploaded_ids = []
+        for name, content in (("one.json", valid), ("two.json", valid + b" ")):
+            status, uploaded = app.dispatch(
+                "POST",
+                "/api/artifacts",
+                {
+                    "file_name": name,
+                    "media_type": "application/json",
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "workflow": "br1",
+                },
+            )
+            assert status == 201
+            uploaded_ids.append(uploaded["artifact_id"])
+        status, multiple = app.dispatch(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "rank molecules",
+                "input_artifact_ids": uploaded_ids,
+            },
+        )
+        assert status == 400
+        assert multiple["error_type"] == "WORKFLOW_SINGLE_FILE_REQUIRED"
+
+        status, invalid = app.dispatch(
+            "POST",
+            "/api/artifacts",
+            {
+                "file_name": "invalid.json",
+                "media_type": "application/json",
+                "content_base64": base64.b64encode(b'{"wrong": []}').decode("ascii"),
+                "workflow": "br1",
+            },
+        )
+        assert status == 400
+        assert invalid["error_type"] == "WORKFLOW_FILE_INVALID"
+    finally:
+        app.close()
+
+
+def test_workflow_preview_binds_the_frozen_plan_to_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "runtime"
+    provider_store = ProviderConfigStore(root)
+    provider_store.upsert_profile(
+        {
+            "profile_ref": "provider:test",
+            "display_name": "测试模型",
+            "endpoint": "https://models.example.test/v1/chat/completions",
+            "model_identifier": "structured-test",
+        }
+    )
+    provider_store.set_secret("provider:test", "test-api-key")
+    profile = br1_profile(root, profile_id="profile:workflow-preview")
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service, provider_store=provider_store)
+    intent_payload = {
+        "target_property": "quantum_yield",
+        "direction": "MAX",
+        "candidate_count": 8,
+        "top_n": 2,
+        "scaffold_constraint": "NONE",
+        "seed": 11,
+        "host_preference": "auto",
+        "cpu_threads": 8,
+        "gpu_count": 0,
+        "walltime_sec": 3600,
+    }
+    requests: list[dict[str, object]] = []
+
+    def fake_transport(profile):
+        def send(endpoint, *, headers, json_body, timeout_seconds):
+            requests.append({"endpoint": endpoint, "headers": dict(headers), "body": dict(json_body)})
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(intent_payload)}}]}
+            ).encode()
+
+        return send
+
+    monkeypatch.setattr(ProviderConfigStore, "_transport", staticmethod(fake_transport))
+    try:
+        _, uploaded = app.dispatch(
+            "POST",
+            "/api/artifacts",
+            {
+                "file_name": "dataset.json",
+                "media_type": "application/json",
+                "content_base64": base64.b64encode(
+                    json.dumps(
+                        {"columns": ["canonical_smiles", "quantum_yield"], "data": [["CCO", 0.4]]}
+                    ).encode()
+                ).decode("ascii"),
+            },
+        )
+        status, preview = app.dispatch(
+            "POST",
+            "/api/workflows/preview",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+            },
+        )
+        assert status == 200
+        assert preview["intent"]["spec"]["candidate_count"] == 8
+        assert preview["preview_token"]
+
+        status, started = app.dispatch(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+                "workflow_intent_preview_token": preview["preview_token"],
+            },
+        )
+        assert status == 201
+        assert started["status"] == "WAITING_APPROVAL"
+        assert started["inspection"]["frozen_intent"]["spec"]["seed"] == 11
+        assert len(requests) == 1
+
+        status, tested = app.dispatch(
+            "POST", "/api/model-profiles/provider:test/test", {}
+        )
+        assert status == 200
+        assert tested["ready"] is True
+    finally:
+        app.close()
 
 
 def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Path) -> None:

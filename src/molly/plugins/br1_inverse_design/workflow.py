@@ -221,6 +221,27 @@ class Br1WorkflowProvider(DecisionProvider):
                 profile_ref=profile_ref,
                 profile_digest=profile_digest,
             )
+        metadata = getattr(context, "request_metadata", {})
+        preview = metadata.get("workflow_intent_preview") if isinstance(metadata, Mapping) else None
+        if preview is not None:
+            try:
+                intent = Br1Intent.from_dict(preview)
+                preview_digest = validate_digest_reference(
+                    str(metadata.get("workflow_intent_preview_digest", "")),
+                    field="workflow intent preview digest",
+                )
+            except Exception as exc:
+                raise Br1Error("workflow intent preview is malformed") from exc
+            if intent.digest != preview_digest:
+                raise Br1Error("workflow intent preview digest does not match the intent")
+            if intent.spec.llm_profile_ref != profile_ref:
+                raise Br1Error("workflow intent preview is bound to another provider")
+            return self._persist_intent(
+                context,
+                intent,
+                profile_ref=profile_ref,
+                profile_digest=profile_digest,
+            )
         provider = self._provider_for_binding(profile_ref, profile_digest)
         intent = parse_br1_request(
             context.goal,

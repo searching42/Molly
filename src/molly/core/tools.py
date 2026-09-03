@@ -576,6 +576,9 @@ class MaterializedToolCall:
     input_artifact_ids: tuple[str, ...] = ()
     created_at: str = field(default_factory=utc_timestamp)
     tool_call_digest: str | None = None
+    # Explanatory context is persisted for the operator, but deliberately is
+    # not part of the execution digest: older v2 ledgers did not contain it.
+    reason_summary: str = ""
 
     def __post_init__(self) -> None:
         for value, field_name in (
@@ -624,6 +627,10 @@ class MaterializedToolCall:
             object.__setattr__(self, "tool_call_digest", self.computed_digest)
         elif self.tool_call_digest != self.computed_digest:
             raise ToolContractError("materialized tool call digest mismatch")
+        if not isinstance(self.reason_summary, str) or len(self.reason_summary) > 2_000:
+            raise ToolContractError("reason_summary must be bounded text")
+        if "\x00" in self.reason_summary:
+            raise ToolContractError("reason_summary contains NUL")
 
     def _body(self) -> dict[str, Any]:
         return {
@@ -654,6 +661,7 @@ class MaterializedToolCall:
     def to_dict(self) -> dict[str, Any]:
         value = self._body()
         value["tool_call_digest"] = self.computed_digest
+        value["reason_summary"] = self.reason_summary
         return value
 
     @classmethod
@@ -672,6 +680,7 @@ class MaterializedToolCall:
             "input_artifact_ids",
             "created_at",
             "tool_call_digest",
+            "reason_summary",
         }
         unknown = set(value) - allowed
         if unknown:
@@ -691,6 +700,7 @@ class MaterializedToolCall:
                 input_artifact_ids=tuple(value.get("input_artifact_ids", ())),
                 created_at=str(value["created_at"]),
                 tool_call_digest=str(value["tool_call_digest"]),
+                reason_summary=str(value.get("reason_summary", "")),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolContractError("materialized tool call is malformed") from exc

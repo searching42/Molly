@@ -15,10 +15,12 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import secrets
 import threading
+import tempfile
 from typing import Any, Callable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from molly.core import ApprovalDecision, ReviewDecision
+from molly.core.agent_loop import INTENT_FROZEN
 from molly.core.errors import (
     ArtifactError,
     ApprovalError,
@@ -28,7 +30,8 @@ from molly.core.errors import (
     RunError,
     ToolError,
 )
-from molly.core.ids import validate_identifier
+from molly.core.ids import validate_artifact_id, validate_identifier
+from molly.core.ledger import RunLedger
 from molly.observability import (
     ExporterUnavailableError,
     JsonTraceExporter,
@@ -45,6 +48,9 @@ from molly.runtime import (
 )
 
 from .providers import ProviderConfigError, ProviderConfigStore
+from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
+from molly.plugins.br1_inverse_design.intent import parse_br1_request
+from molly.plugins.br1_inverse_design.schema import Br1PluginConfig
 from .runtime_profiles import configured_br1_profiles
 
 
@@ -65,9 +71,40 @@ STATUS_LABELS = {
     "WAITING_REVIEW": "等待审阅",
     "INTERRUPTED": "已中断",
     "STOPPED": "已完成",
+    "REJECTED": "已拒绝/已取消",
     "FAILED": "执行失败",
     "BUDGET_EXHAUSTED": "已达到服务器安全上限",
 }
+
+_SCIENTIFIC_WORKFLOW = "br1"
+_TOP_N_SCHEMA = "molly.br1.computational-top-n"
+_EVALUATION_REPORT_SCHEMA = "molly.br1.evaluation-report"
+_WEB_ARTIFACT_NAMES_VERSION = 1
+
+
+def _safe_download_name(name: str, *, fallback: str) -> str:
+    candidate = name.strip() if isinstance(name, str) else ""
+    if (
+        not candidate
+        or len(candidate) > 200
+        or any(char in candidate for char in "\\/\r\n\x00")
+        or candidate in {".", ".."}
+    ):
+        return fallback
+    return candidate
+
+
+def _media_extension(media_type: str) -> str:
+    normalized = media_type.split(";", 1)[0].strip().casefold()
+    if normalized == "application/json":
+        return ".json"
+    if normalized in {"application/gzip", "application/x-gzip"}:
+        return ".tar.gz"
+    if normalized == "text/csv":
+        return ".csv"
+    if normalized == "text/plain":
+        return ".txt"
+    return mimetypes.guess_extension(normalized) or ".bin"
 
 
 class WebRequestError(Exception):
@@ -113,17 +150,21 @@ def _runtime_profile_view(profile: Any) -> dict[str, Any]:
     }
 
 
-def _run_summary(inspection: Any) -> dict[str, Any]:
+def _run_summary(inspection: Any, *, background_pending: bool = False) -> dict[str, Any]:
+    authoritative_status = inspection.status
+    effective_status = "ACTIVE" if background_pending else authoritative_status
     return {
         "run_id": inspection.run_id,
         "goal": inspection.goal,
-        "status": inspection.status,
-        "status_label": STATUS_LABELS.get(inspection.status, inspection.status),
+        "status": effective_status,
+        "status_label": STATUS_LABELS.get(effective_status, effective_status),
+        "authoritative_status": authoritative_status,
+        "effective_status": effective_status,
         "step_count": inspection.step_count,
         "tool_call_count": inspection.tool_call_count,
         "artifact_count": len(inspection.referenced_artifact_ids),
-        "needs_action": inspection.status
-        in {"WAITING_APPROVAL", "WAITING_REVIEW", "INTERRUPTED"},
+        "needs_action": not background_pending
+        and effective_status in {"WAITING_APPROVAL", "WAITING_REVIEW", "INTERRUPTED"},
     }
 
 
@@ -197,12 +238,107 @@ class MollyWebApplication:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="molly-run")
         self._futures: dict[str, Future[Any]] = {}
         self._future_lock = threading.Lock()
+        self._artifact_name_path = self.service.root / "web_artifact_names.json"
+        self._artifact_name_lock = threading.Lock()
+        self._artifact_names = self._load_artifact_names()
+        self._preview_lock = threading.Lock()
+        self._intent_previews: dict[str, dict[str, Any]] = {}
 
     @property
     def local_session_token(self) -> str:
         """Return the process-local token used by the browser write surface."""
 
         return self._local_session_token
+
+    def _load_artifact_names(self) -> dict[str, str]:
+        path = self._artifact_name_path
+        if path.is_symlink() or not path.exists():
+            return {}
+        if not path.is_file():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(value, Mapping) or value.get("version") != _WEB_ARTIFACT_NAMES_VERSION:
+            return {}
+        raw_names = value.get("names", {})
+        if not isinstance(raw_names, Mapping):
+            return {}
+        return {
+            str(artifact_id): name
+            for artifact_id, name in raw_names.items()
+            if isinstance(artifact_id, str)
+            and isinstance(name, str)
+            and _safe_download_name(name, fallback="") == name
+        }
+
+    def _remember_artifact_name(self, artifact_id: str, file_name: str) -> None:
+        name = _safe_download_name(file_name, fallback="uploaded-file.bin")
+        with self._artifact_name_lock:
+            self._artifact_names[artifact_id] = name
+            try:
+                self.service.root.mkdir(parents=True, exist_ok=True)
+                descriptor, temporary_name = tempfile.mkstemp(
+                    prefix=".web_artifact_names.",
+                    suffix=".tmp",
+                    dir=str(self.service.root),
+                )
+                temporary = Path(temporary_name)
+                try:
+                    os.fchmod(descriptor, 0o600)
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                        json.dump(
+                            {
+                                "version": _WEB_ARTIFACT_NAMES_VERSION,
+                                "names": self._artifact_names,
+                            },
+                            handle,
+                            ensure_ascii=True,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        handle.write("\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temporary, self._artifact_name_path)
+                finally:
+                    if temporary.exists():
+                        temporary.unlink()
+            except OSError:
+                # The immutable artifact remains usable even if the optional
+                # browser filename sidecar cannot be written.
+                return
+
+    def _download_name(self, artifact_id: str, record: Any) -> str:
+        with self._artifact_name_lock:
+            known = self._artifact_names.get(artifact_id)
+        if known:
+            return known
+        schema_name = record.schema_name or ""
+        if schema_name == _TOP_N_SCHEMA:
+            return "top-n-results.json"
+        if schema_name == _EVALUATION_REPORT_SCHEMA:
+            return "evaluation-report.json"
+        if schema_name:
+            stem = schema_name.rsplit(".", 1)[-1].replace("_", "-")
+            return f"{stem}{_media_extension(record.media_type)}"
+        return f"artifact-{record.sha256[:16]}{_media_extension(record.media_type)}"
+
+    def _artifact_view(self, artifact_id: str, *, role: str) -> dict[str, Any]:
+        record, _ = self.service.read_artifact(artifact_id)
+        download_name = self._download_name(artifact_id, record)
+        return {
+            "artifact_id": record.artifact_id,
+            "name": download_name,
+            "download_name": download_name,
+            "media_type": record.media_type,
+            "schema_name": record.schema_name,
+            "schema_version": record.schema_version,
+            "size_bytes": record.size_bytes,
+            "role": role,
+            "download_path": f"/api/artifacts/{record.artifact_id}/content",
+        }
 
     def dispatch(
         self,
@@ -265,6 +401,9 @@ class MollyWebApplication:
                 return 200, {"runs": self._run_summaries()}
             if method == "POST":
                 return 201, self._start_run(body)
+        if route in (["api", "workflows", "preview"], ["api", "runs", "preview"]):
+            if method == "POST":
+                return 200, self._preview_workflow(body)
         if len(route) == 3 and route[:2] == ["api", "runs"]:
             run_id = route[2]
             if method == "GET":
@@ -282,7 +421,12 @@ class MollyWebApplication:
         if len(route) == 3 and route[:2] == ["api", "artifacts"]:
             artifact_id = route[2]
             if method == "GET":
-                return 200, self.service.inspect_artifact(artifact_id).to_dict()
+                value = self.service.inspect_artifact(artifact_id).to_dict()
+                value["download_name"] = self._download_name(
+                    artifact_id, self.service.read_artifact(artifact_id)[0]
+                )
+                value["download_path"] = f"/api/artifacts/{artifact_id}/content"
+                return 200, value
         if len(route) == 4 and route[:2] == ["api", "artifacts"]:
             artifact_id, action = route[2], route[3]
             if method == "POST" and action == "review":
@@ -293,6 +437,7 @@ class MollyWebApplication:
                     "artifact_id": record.artifact_id,
                     "media_type": record.media_type,
                     "size_bytes": record.size_bytes,
+                    "download_name": self._download_name(record.artifact_id, record),
                     "download": True,
                 }
         if route == ["api", "model-profiles"]:
@@ -306,6 +451,8 @@ class MollyWebApplication:
                 return 200, self._save_provider_credential(profile_ref, body)
             if method == "POST" and action == "check":
                 return 200, self._check_provider_profile(profile_ref)
+            if method == "POST" and action == "test":
+                return 200, self._test_provider_profile(profile_ref)
         if route and route[0] == "api":
             raise WebRequestError(404, "NOT_FOUND", "页面或接口不存在")
         raise WebRequestError(404, "NOT_FOUND", "页面不存在")
@@ -318,7 +465,7 @@ class MollyWebApplication:
             ],
             "model_profiles": self._provider_profiles(),
             "runs": self._run_summaries(),
-            "compute_profiles": [
+            "workflow_profiles": [
                 {
                     "profile_id": item["profile_id"],
                     "name": item["name"],
@@ -328,7 +475,7 @@ class MollyWebApplication:
                     "resource_constraints": item["resource_constraints"],
                 }
                 for item in (_runtime_profile_view(profile) for profile in self.service.profiles.profiles)
-                if item["workflow"] == "br1"
+                if item["workflow"] == _SCIENTIFIC_WORKFLOW
             ],
             "observability": {
                 "json": {"available": True},
@@ -347,7 +494,113 @@ class MollyWebApplication:
             inspections = self.service.list_runs()
         except RuntimeStateError:
             return []
-        return [_run_summary(inspection) for inspection in reversed(inspections)]
+        with self._future_lock:
+            pending_ids = {
+                run_id for run_id, future in self._futures.items() if not future.done()
+            }
+        return [
+            _run_summary(inspection, background_pending=inspection.run_id in pending_ids)
+            for inspection in reversed(inspections)
+        ]
+
+    def _frozen_intent(self, run_id: str) -> dict[str, Any] | None:
+        try:
+            events = RunLedger(self.service.root / "events.jsonl").for_run(run_id)
+        except Exception:
+            return None
+        for event in events:
+            if event.event_type != INTENT_FROZEN:
+                continue
+            raw_intent = event.metadata.get("intent")
+            if not isinstance(raw_intent, Mapping):
+                continue
+            value: dict[str, Any] = {"intent": dict(raw_intent)}
+            for key in (
+                "intent_digest",
+                "spec_digest",
+                "llm_profile_ref",
+                "llm_profile_digest",
+            ):
+                item = event.metadata.get(key)
+                if isinstance(item, str):
+                    value[key] = item
+            return value
+        return None
+
+    def _artifact_groups(self, inspection: Any) -> dict[str, list[dict[str, Any]]]:
+        input_ids = set(inspection.initial_artifact_ids)
+        final_ids: list[str] = []
+        successful_calls = [
+            call for call in inspection.materialized_calls if call.execution_status == "SUCCEEDED"
+        ]
+        for call in successful_calls:
+            if call.tool_name == "br1_evaluate_top_n":
+                final_ids.extend(call.output_artifact_ids)
+        if not final_ids and successful_calls:
+            final_ids.extend(successful_calls[-1].output_artifact_ids)
+        all_ids = list(inspection.referenced_artifact_ids)
+        final_set = set(final_ids)
+        intermediate_ids = [
+            artifact_id
+            for artifact_id in all_ids
+            if artifact_id not in input_ids and artifact_id not in final_set
+        ]
+        return {
+            "inputs": [
+                self._artifact_view(artifact_id, role="input")
+                for artifact_id in all_ids
+                if artifact_id in input_ids
+            ],
+            "intermediate": [
+                self._artifact_view(artifact_id, role="intermediate")
+                for artifact_id in intermediate_ids
+            ],
+            "final": [
+                self._artifact_view(artifact_id, role="final")
+                for artifact_id in final_ids
+                if artifact_id in all_ids
+            ],
+        }
+
+    def _top_n_preview(self, artifacts: list[dict[str, Any]]) -> dict[str, Any] | None:
+        top_n = next(
+            (item for item in artifacts if item.get("schema_name") == _TOP_N_SCHEMA),
+            None,
+        )
+        if top_n is None:
+            return None
+        try:
+            _, content = self.service.read_artifact(top_n["artifact_id"])
+            value = json.loads(content.decode("utf-8"))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, Mapping) or not isinstance(value.get("rows"), list):
+            return None
+        rows: list[dict[str, Any]] = []
+        for raw in value["rows"][:100]:
+            if not isinstance(raw, Mapping):
+                continue
+            row = {
+                key: raw[key]
+                for key in (
+                    "rank",
+                    "candidate_id",
+                    "smiles",
+                    "predicted_property",
+                    "proxy_utility",
+                    "validity",
+                )
+                if key in raw
+            }
+            if row:
+                rows.append(row)
+        return {
+            "artifact_id": top_n["artifact_id"],
+            "download_name": top_n["download_name"],
+            "target_property": value.get("target_property"),
+            "claim_boundary": value.get("claim_boundary"),
+            "rows": rows,
+        }
 
     def _run_detail(self, run_id: str) -> dict[str, Any]:
         with self._future_lock:
@@ -366,7 +619,6 @@ class MollyWebApplication:
                 )
         inspection = self.service.inspect_run(run_id)
         value = inspection.to_dict()
-        value["status_label"] = STATUS_LABELS.get(inspection.status, inspection.status)
         value["step_count"] = inspection.step_count
         value["tool_call_count"] = inspection.tool_call_count
         value["artifact_count"] = len(inspection.referenced_artifact_ids)
@@ -388,20 +640,48 @@ class MollyWebApplication:
             value["workflow"] = "unknown"
             value["runtime_profile"] = None
         background_pending = future is not None and not future.done()
+        authoritative_status = inspection.status
+        effective_status = "ACTIVE" if background_pending else authoritative_status
+        value["authoritative_status"] = authoritative_status
+        value["effective_status"] = effective_status
+        value["ui_status"] = effective_status
+        value["status"] = effective_status
+        value["status_label"] = STATUS_LABELS.get(effective_status, effective_status)
         value["background_pending"] = background_pending
+        value["needs_action"] = not background_pending and effective_status in {
+            "WAITING_APPROVAL",
+            "WAITING_REVIEW",
+            "INTERRUPTED",
+        }
+        value["artifact_groups"] = self._artifact_groups(inspection)
+        final_artifacts = value["artifact_groups"]["final"]
+        value["top_n_result"] = self._top_n_preview(final_artifacts)
+        frozen = self._frozen_intent(run_id)
+        if frozen is not None:
+            value["frozen_intent"] = frozen["intent"]
+            for key in ("intent_digest", "spec_digest", "llm_profile_ref", "llm_profile_digest"):
+                if key in frozen:
+                    value[key] = frozen[key]
         if background_error_type is not None:
             value["background_error_type"] = background_error_type
         return value
 
-    def _is_br1_run(self, run_id: str) -> bool:
+    def _workflow_for_run(self, run_id: str) -> str:
         inspection = self.service.inspect_run(run_id)
         if not inspection.runtime_profile_ref or not inspection.runtime_profile_digest:
-            return False
+            return "unknown"
         profile = self.service.profiles.resolve(
             inspection.runtime_profile_ref,
             expected_digest=inspection.runtime_profile_digest,
         )
-        return isinstance(profile.config, Mapping) and profile.config.get("workflow") == "br1"
+        return (
+            profile.config.get("workflow", "core")
+            if isinstance(profile.config, Mapping)
+            else "core"
+        )
+
+    def _is_workflow_run(self, run_id: str, workflow: str = _SCIENTIFIC_WORKFLOW) -> bool:
+        return self._workflow_for_run(run_id) == workflow
 
     def _submit_background(self, run_id: str, operation: Callable[[], Any]) -> bool:
         with self._future_lock:
@@ -414,7 +694,6 @@ class MollyWebApplication:
     def _background_response(self, run_id: str, message: str) -> dict[str, Any]:
         value = self._run_detail(run_id)
         value["message"] = message
-        value["background_pending"] = True
         return {"run_id": run_id, "status": value["status"], "inspection": value, "message": message}
 
     @staticmethod
@@ -424,17 +703,183 @@ class MollyWebApplication:
             raise WebRequestError(400, "INVALID_FILES", "数据文件列表格式不正确")
         if len(value) > 32 or any(not isinstance(item, str) for item in value):
             raise WebRequestError(400, "INVALID_FILES", "数据文件列表格式不正确")
-        return tuple(value)
+        try:
+            return tuple(validate_artifact_id(item) for item in value)
+        except Exception:
+            raise WebRequestError(400, "INVALID_FILES", "数据文件列表格式不正确") from None
 
-    @staticmethod
-    def _result_payload(service: RuntimeService, result: Any) -> dict[str, Any]:
-        inspection = service.inspect_run(result.run_id)
-        value = result.to_dict()
-        value["status_label"] = STATUS_LABELS.get(result.status, result.status)
-        value["inspection"] = inspection.to_dict()
-        value["inspection"]["status_label"] = STATUS_LABELS.get(
-            inspection.status, inspection.status
+    def _validate_workflow_inputs(
+        self, workflow: str | None, input_artifact_ids: tuple[str, ...]
+    ) -> None:
+        if workflow != _SCIENTIFIC_WORKFLOW:
+            return
+        if not input_artifact_ids:
+            raise WebRequestError(400, "WORKFLOW_FILE_REQUIRED", "该工作流必须上传一个数据文件")
+        if len(input_artifact_ids) != 1:
+            raise WebRequestError(
+                400,
+                "WORKFLOW_SINGLE_FILE_REQUIRED",
+                "该工作流只能上传一个数据文件，请删除多余文件后再试",
+            )
+        try:
+            _, content = self.service.read_artifact(input_artifact_ids[0])
+            validate_raw_dataset_source(content)
+        except WebRequestError:
+            raise
+        except Exception as exc:
+            message = str(exc).strip() or "文件格式或必需字段不正确"
+            raise WebRequestError(
+                400,
+                "WORKFLOW_FILE_INVALID",
+                f"数据文件校验失败：{message}",
+            ) from None
+
+    def _runtime_profile_for_id(self, profile_id: str) -> tuple[Any, str]:
+        try:
+            profile = self.service.profiles.resolve(profile_id.strip())
+        except Exception as exc:
+            raise WebRequestError(409, "RUNTIME_PROFILE_UNAVAILABLE", "当前运行配置不可用") from exc
+        workflow = (
+            profile.config.get("workflow", "core")
+            if isinstance(profile.config, Mapping)
+            else "core"
         )
+        return profile, str(workflow)
+
+    def _provider_binding(
+        self, llm_profile_ref: Any, *, required: bool
+    ) -> tuple[str | None, Any | None]:
+        if llm_profile_ref is None or llm_profile_ref == "":
+            if required:
+                raise WebRequestError(
+                    400,
+                    "LLM_PROFILE_REQUIRED",
+                    "该工作流必须选择自然语言解析模型服务",
+                )
+            return None, None
+        if not isinstance(llm_profile_ref, str) or not llm_profile_ref.strip():
+            raise WebRequestError(400, "INVALID_LLM_PROFILE", "模型服务配置不正确")
+        validate_identifier(llm_profile_ref.strip(), field="llm_profile_ref")
+        try:
+            llm_profile = self.provider_store.get_profile(llm_profile_ref.strip())
+        except ProviderConfigError as exc:
+            raise WebRequestError(400, "INVALID_LLM_PROFILE", "模型服务配置不正确") from exc
+        if not llm_profile.credential_configured:
+            raise WebRequestError(
+                409,
+                "LLM_CREDENTIAL_REQUIRED",
+                "请先为所选模型服务保存 API Key",
+            )
+        return llm_profile_ref.strip(), llm_profile
+
+    def _preview_workflow(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        profile_id = payload.get("profile_id")
+        goal = payload.get("goal")
+        if not isinstance(profile_id, str) or not profile_id.strip():
+            raise WebRequestError(400, "PROFILE_REQUIRED", "请选择运行配置")
+        if not isinstance(goal, str) or not goal.strip():
+            raise WebRequestError(400, "GOAL_REQUIRED", "请先写下任务目标")
+        input_artifact_ids = self._artifact_ids(payload)
+        runtime_profile, workflow = self._runtime_profile_for_id(profile_id)
+        self._validate_workflow_inputs(workflow, input_artifact_ids)
+        llm_ref, llm_profile = self._provider_binding(
+            payload.get("llm_profile_ref"), required=True
+        )
+        if workflow != _SCIENTIFIC_WORKFLOW:
+            return {
+                "workflow": workflow,
+                "intent": None,
+                "preview_token": None,
+                "message": "当前工作流不需要自然语言解析计划",
+            }
+        try:
+            provider = self.provider_store.create_intent_provider(llm_ref or "")
+            intent = parse_br1_request(
+                goal.strip(),
+                provider=provider,
+                allowed_target_properties=Br1PluginConfig().supported_target_properties,
+                llm_profile_ref=llm_ref,
+                overrides=(
+                    runtime_profile.config.get("spec_overrides", {})
+                    if isinstance(runtime_profile.config, Mapping)
+                    else {}
+                ),
+            )
+        except Exception as exc:
+            raise WebRequestError(
+                502,
+                "WORKFLOW_PLAN_UNAVAILABLE",
+                "模型服务未能解析任务计划，请检查连接后重试",
+            ) from exc
+        token = secrets.token_urlsafe(32)
+        with self._preview_lock:
+            self._intent_previews[token] = {
+                "profile_id": profile_id.strip(),
+                "runtime_profile_digest": runtime_profile.digest,
+                "workflow": workflow,
+                "goal": goal.strip(),
+                "input_artifact_ids": list(input_artifact_ids),
+                "llm_profile_ref": llm_ref,
+                "llm_profile_digest": llm_profile.profile.digest if llm_profile is not None else None,
+                "intent": intent.to_dict(),
+                "intent_digest": intent.digest,
+            }
+        return {
+            "workflow": workflow,
+            "intent": intent.to_dict(),
+            "preview_token": token,
+            "intent_digest": intent.digest,
+            "spec_digest": intent.spec.digest,
+            "provider_profile_digest": llm_profile.profile.digest if llm_profile is not None else None,
+            "runtime_profile_digest": runtime_profile.digest,
+        }
+
+    def _preview_binding_for_start(
+        self,
+        token: Any,
+        *,
+        profile_id: str,
+        runtime_profile_digest: str,
+        workflow: str,
+        goal: str,
+        input_artifact_ids: tuple[str, ...],
+        llm_profile_ref: str | None,
+        llm_profile_digest: str | None,
+    ) -> Mapping[str, Any] | None:
+        if token in (None, ""):
+            return None
+        if not isinstance(token, str) or len(token) > 256:
+            raise WebRequestError(400, "INVALID_WORKFLOW_PLAN", "执行计划确认信息无效")
+        with self._preview_lock:
+            preview = self._intent_previews.get(token)
+        if not isinstance(preview, Mapping):
+            raise WebRequestError(409, "WORKFLOW_PLAN_EXPIRED", "执行计划已失效，请重新解析")
+        if (
+            preview.get("profile_id") != profile_id
+            or preview.get("runtime_profile_digest") != runtime_profile_digest
+            or preview.get("workflow") != workflow
+            or preview.get("goal") != goal
+            or tuple(preview.get("input_artifact_ids", ())) != input_artifact_ids
+            or preview.get("llm_profile_ref") != llm_profile_ref
+            or preview.get("llm_profile_digest") != llm_profile_digest
+        ):
+            raise WebRequestError(
+                409,
+                "WORKFLOW_PLAN_CHANGED",
+                "任务目标、文件或模型服务已改变，请重新解析计划",
+            )
+        intent = preview.get("intent")
+        if not isinstance(intent, Mapping):
+            raise WebRequestError(409, "WORKFLOW_PLAN_INVALID", "执行计划内容无效，请重新解析")
+        with self._preview_lock:
+            self._intent_previews.pop(token, None)
+        return intent
+
+    def _result_payload(self, result: Any) -> dict[str, Any]:
+        value = result.to_dict()
+        value["inspection"] = self._run_detail(result.run_id)
+        value["status"] = value["inspection"]["status"]
+        value["status_label"] = value["inspection"]["status_label"]
         return value
 
     def _start_run(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -444,50 +889,44 @@ class MollyWebApplication:
             raise WebRequestError(400, "PROFILE_REQUIRED", "请选择运行配置")
         if not isinstance(goal, str) or not goal.strip():
             raise WebRequestError(400, "GOAL_REQUIRED", "请先写下任务目标")
+        input_artifact_ids = self._artifact_ids(payload)
+        runtime_profile, workflow = self._runtime_profile_for_id(profile_id)
+        self._validate_workflow_inputs(workflow, input_artifact_ids)
         llm_profile_ref = payload.get("llm_profile_ref")
         metadata: dict[str, Any] = {}
-        if llm_profile_ref is not None:
-            if not isinstance(llm_profile_ref, str) or not llm_profile_ref.strip():
-                raise WebRequestError(400, "INVALID_LLM_PROFILE", "模型服务配置不正确")
-            validate_identifier(llm_profile_ref.strip(), field="llm_profile_ref")
-            llm_profile = self.provider_store.get_profile(llm_profile_ref.strip())
-            if not llm_profile.credential_configured:
-                raise WebRequestError(
-                    409,
-                    "LLM_CREDENTIAL_REQUIRED",
-                    "请先为所选模型服务保存 API Key",
-                )
-            metadata["llm_profile_ref"] = llm_profile_ref.strip()
-            metadata["llm_profile_digest"] = llm_profile.profile.digest
-        try:
-            runtime_profile = self.service.profiles.resolve(profile_id.strip())
-        except Exception:
-            runtime_profile = None
-        workflow = (
-            runtime_profile.config.get("workflow")
-            if runtime_profile is not None and isinstance(runtime_profile.config, Mapping)
-            else None
+        bound_ref, llm_profile = self._provider_binding(
+            llm_profile_ref, required=True
         )
-        if workflow == "br1" and "llm_profile_ref" not in metadata:
-            raise WebRequestError(
-                400,
-                "LLM_PROFILE_REQUIRED",
-                "BR1 任务必须选择自然语言解析模型服务",
-            )
+        if bound_ref is not None and llm_profile is not None:
+            metadata["llm_profile_ref"] = bound_ref
+            metadata["llm_profile_digest"] = llm_profile.profile.digest
+        preview_intent = self._preview_binding_for_start(
+            payload.get("workflow_intent_preview_token"),
+            profile_id=profile_id.strip(),
+            runtime_profile_digest=runtime_profile.digest,
+            workflow=workflow,
+            goal=goal.strip(),
+            input_artifact_ids=input_artifact_ids,
+            llm_profile_ref=bound_ref,
+            llm_profile_digest=(llm_profile.profile.digest if llm_profile is not None else None),
+        )
+        if preview_intent is not None:
+            metadata["workflow_intent_preview"] = preview_intent
+            metadata["workflow_intent_preview_digest"] = preview_intent.get("intent_digest")
         result = self.service.start_run(
             profile_id=profile_id.strip(),
             goal=goal.strip(),
-            input_artifact_ids=self._artifact_ids(payload),
+            input_artifact_ids=input_artifact_ids,
             metadata=metadata,
         )
-        return self._result_payload(self.service, result)
+        return self._result_payload(result)
 
     def _resume_run(self, run_id: str) -> dict[str, Any]:
-        if self._is_br1_run(run_id):
+        if self._is_workflow_run(run_id):
             if not self._submit_background(run_id, lambda: self.service.resume_run(run_id)):
                 return self._background_response(run_id, "任务正在后台执行")
             return self._background_response(run_id, "任务已提交后台执行")
-        return self._result_payload(self.service, self.service.resume_run(run_id))
+        return self._result_payload(self.service.resume_run(run_id))
 
     def _approve_run(self, run_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         decision = payload.get("decision")
@@ -499,7 +938,7 @@ class MollyWebApplication:
         call_id = payload.get("call_id")
         if call_id is not None and not isinstance(call_id, str):
             raise WebRequestError(400, "INVALID_CALL", "操作标识不正确")
-        if self._is_br1_run(run_id):
+        if self._is_workflow_run(run_id):
             if not self._submit_background(
                 run_id,
                 lambda: self.service.record_approval(
@@ -518,7 +957,7 @@ class MollyWebApplication:
             call_id=call_id,
         )
         value = outcome.to_dict()
-        value["result"] = self._result_payload(self.service, outcome.result)
+        value["result"] = self._result_payload(outcome.result)
         return value
 
     def _upload_artifact(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -537,7 +976,7 @@ class MollyWebApplication:
             raise WebRequestError(413, "FILE_TOO_LARGE", "数据文件不能超过 128 MB")
         file_name = payload.get("file_name", "")
         if not isinstance(file_name, str) or len(file_name) > 200 or any(
-            char in file_name for char in "\r\n\x00"
+            char in file_name for char in "\\/\r\n\x00"
         ):
             raise WebRequestError(400, "INVALID_FILE_NAME", "文件名不正确")
         media_type = payload.get("media_type")
@@ -547,10 +986,26 @@ class MollyWebApplication:
             char in media_type for char in "\r\n\x00"
         ):
             raise WebRequestError(400, "INVALID_MEDIA_TYPE", "文件类型不正确")
+        workflow = payload.get("workflow")
+        if workflow is not None and not isinstance(workflow, str):
+            raise WebRequestError(400, "INVALID_WORKFLOW", "工作流标识不正确")
+        if workflow == _SCIENTIFIC_WORKFLOW:
+            try:
+                validate_raw_dataset_source(content)
+            except Exception as exc:
+                message = str(exc).strip() or "文件格式或必需字段不正确"
+                raise WebRequestError(
+                    400,
+                    "WORKFLOW_FILE_INVALID",
+                    f"数据文件校验失败：{message}",
+                ) from None
         record = self.service.publish_artifact(content, media_type=media_type)
+        display_name = _safe_download_name(file_name, fallback="uploaded-file.bin")
+        self._remember_artifact_name(record.artifact_id, display_name)
         return {
             "artifact_id": record.artifact_id,
-            "name": file_name or "未命名文件",
+            "name": display_name,
+            "download_name": display_name,
             "media_type": record.media_type,
             "size_bytes": record.size_bytes,
             "download_path": f"/api/artifacts/{record.artifact_id}/content",
@@ -560,7 +1015,7 @@ class MollyWebApplication:
         """Return one verified artifact for the HTTP download adapter."""
 
         record, content = self.service.read_artifact(artifact_id)
-        return 200, content, record.media_type, f"artifact-{record.sha256}.bin"
+        return 200, content, record.media_type, self._download_name(record.artifact_id, record)
 
     def close(self) -> None:
         """Stop accepting new background work when the local server exits."""
@@ -615,12 +1070,31 @@ class MollyWebApplication:
             return {
                 "ready": True,
                 "credential_status": "已配置",
-                "message": "本机服务端已找到密钥；此次仅检查本地配置，没有向外部服务发起请求",
+                "message": "本机配置完整；此次没有测试 endpoint 或模型服务，请继续使用“测试连接”",
             }
         return {
             "ready": False,
             "credential_status": "未配置",
-            "message": "请在本页面输入 API Key，密钥只会保存到本机服务端",
+            "message": "本机尚未保存 API Key，请先保存后再测试连接",
+        }
+
+    def _test_provider_profile(self, profile_ref: str) -> dict[str, Any]:
+        validate_identifier(profile_ref, field="provider profile_ref")
+        view = self.provider_store.get_profile(profile_ref)
+        if not view.credential_configured:
+            raise WebRequestError(409, "LLM_CREDENTIAL_REQUIRED", "请先保存 API Key，再测试连接")
+        try:
+            self.provider_store.test_connection(profile_ref)
+        except Exception:
+            return {
+                "ready": False,
+                "credential_status": "已配置",
+                "message": "连接测试失败：endpoint 或模型服务没有返回有效响应",
+            }
+        return {
+            "ready": True,
+            "credential_status": "已配置",
+            "message": "连接测试成功，endpoint 和模型服务可用",
         }
 
     def _save_provider_credential(
@@ -677,7 +1151,12 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         self.send_response(status)
         self._headers(content_type=media_type, length=len(content), cache="no-store")
-        self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        safe_name = _safe_download_name(download_name, fallback="download.bin")
+        ascii_name = safe_name.encode("ascii", "ignore").decode("ascii") or "download.bin"
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(safe_name)}',
+        )
         self.end_headers()
         self.wfile.write(content)
 

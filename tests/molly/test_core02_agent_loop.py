@@ -624,21 +624,10 @@ def test_rejected_approval_is_durable_and_does_not_execute(tmp_path: Path) -> No
         reviewer_ref="reviewer-ref",
     )
     result = loop.run(request, approval=rejected)
-    assert result.status == RunStatus.ACTIVE.value
+    assert result.status == RunStatus.REJECTED.value
     assert _events(ledger, TOOL_EXECUTION_STARTED) == []
     assert len(_events(ledger, TOOL_CALL_REJECTED)) == 1
-
-    next_provider = ScriptedProvider(StopAction("after rejection"))
-    next_loop = AgentLoop(
-        store=loop.store,
-        ledger=RunLedger(ledger.path),
-        lineage=ArtifactLineage(loop.lineage.path),
-        registry=loop.registry,
-        policy=policy,
-        decision_provider=next_provider,
-    )
-    assert next_loop.run(request).status == RunStatus.STOPPED.value
-    assert next_provider.calls == 1
+    assert len(_events(ledger, "RUN_REJECTED")) == 1
 
 
 def test_approval_digest_and_active_tool_semantics_are_exact(tmp_path: Path) -> None:

@@ -68,6 +68,7 @@ TOOL_EXECUTION_SUCCEEDED = "TOOL_EXECUTION_SUCCEEDED"
 TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"
 REVIEW_REQUESTED = "REVIEW_REQUESTED"
 RUN_STOPPED = "RUN_STOPPED"
+RUN_REJECTED = "RUN_REJECTED"
 RUN_FAILED = "RUN_FAILED"
 BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 INTENT_FROZEN = "INTENT_FROZEN"
@@ -85,6 +86,7 @@ EVENT_TYPES = frozenset(
         TOOL_EXECUTION_FAILED,
         REVIEW_REQUESTED,
         RUN_STOPPED,
+        RUN_REJECTED,
         RUN_FAILED,
         BUDGET_EXHAUSTED,
         INTENT_FROZEN,
@@ -370,7 +372,7 @@ class AgentLoop:
         terminal_run_events = [
             event
             for event in events
-            if event.event_type in {RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED}
+            if event.event_type in {RUN_STOPPED, RUN_REJECTED, RUN_FAILED, BUDGET_EXHAUSTED}
         ]
         terminal_run = terminal_run_events[-1] if terminal_run_events else None
         if terminal_run is not None and events[-1].event_id != terminal_run.event_id:
@@ -552,6 +554,7 @@ class AgentLoop:
         if projection.terminal_event is not None:
             status = {
                 RUN_STOPPED: RunStatus.STOPPED,
+                RUN_REJECTED: RunStatus.REJECTED,
                 RUN_FAILED: RunStatus.FAILED,
                 BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED,
             }[projection.terminal_event.event_type]
@@ -623,7 +626,12 @@ class AgentLoop:
             initial_artifact_ids=request.input_artifact_ids,
             request_metadata={
                 key: request.metadata[key]
-                for key in ("llm_profile_ref", "llm_profile_digest")
+                for key in (
+                    "llm_profile_ref",
+                    "llm_profile_digest",
+                    "workflow_intent_preview",
+                    "workflow_intent_preview_digest",
+                )
                 if key in request.metadata
             },
             recent_events=self._recent_events(events),
@@ -718,6 +726,7 @@ class AgentLoop:
             input_artifact_ids=proposal.input_artifact_ids,
             created_at=self._now(),
             tool_call_digest=None,
+            reason_summary=proposal.reason_summary,
         )
 
     def _validate_proposal_inputs(
@@ -994,6 +1003,20 @@ class AgentLoop:
                 self._record_approval(request, pending.call, approval)
                 if approval.decision == ApprovalDecision.REJECTED.value:
                     self._append_rejection(request, pending.call, approval)
+                    self._append(
+                        request,
+                        RUN_REJECTED,
+                        status="REJECTED",
+                        step_id=pending.call.step_id,
+                        tool_name=pending.call.tool_name,
+                        tool_version=pending.call.tool_version,
+                        input_artifact_ids=pending.call.input_artifact_ids,
+                        metadata={
+                            "rejected_call_id": pending.call.call_id,
+                            "tool_call_digest": pending.call.tool_call_digest,
+                            "reason": "operator rejected the pending operation",
+                        },
+                    )
                     return self._result(request, message="approval rejected")
                 # The exact approved call is executed below without asking
                 # the DecisionProvider to recreate it.
@@ -1104,6 +1127,7 @@ __all__ = [
     "INTENT_FROZEN",
     "REVIEW_REQUESTED",
     "RUN_FAILED",
+    "RUN_REJECTED",
     "RUN_STARTED",
     "RUN_STOPPED",
     "SERVER_RUN_HARD_LIMITS",
