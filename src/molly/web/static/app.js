@@ -325,6 +325,9 @@ const renderNew = () => {
   const fileReady = !needsFile || state.files.length === 1;
   const planReady = !needsFile || Boolean(state.plan?.preview_token && state.planConfirmed);
   const cannotStart = noProfile || !modelReady || !fileReady || !planReady;
+  const modelHint = needsModel
+    ? "任务目标必须经过已配置的结构化 LLM 解析；API Key 只由本机服务端读取。"
+    : "当前工作流不需要自然语言解析；执行策略和资源配置由服务器端登记。";
   const workflowHint = currentProfile
     ? "工作流会按服务器端登记的资源配置，在需要确认的阶段暂停。"
     : "运行配置由本机服务器端登记。";
@@ -372,7 +375,7 @@ const renderNew = () => {
           <div class="field">
             <label class="field-label" for="llm-profile">自然语言解析模型服务</label>
             <select id="llm-profile" ${!modelProfiles.length ? "disabled" : ""}>${modelOptions}</select>
-            <span class="field-hint">任务目标必须经过已配置的结构化 LLM 解析；API Key 只由本机服务端读取。</span>
+            <span class="field-hint">${html(modelHint)}</span>
           </div>
           <div class="field">
             <label class="field-label">资源选择</label>
@@ -385,7 +388,7 @@ const renderNew = () => {
               <div class="upload-title">数据文件 <span class="optional-label">${needsFile ? "（必填，单个）" : "（可选）"}</span></div>
               <div class="upload-subtitle">${needsFile ? "仅支持一个 .json 或 .csv 文件；选择后会先检查格式和必需字段。" : "文件会保存到本机的不可变数据区，单个文件不超过 128 MB。"}</div>
             </div>
-            <label class="file-button" for="file-input">选择或替换文件<input class="visually-hidden" id="file-input" type="file" accept=".json,.csv" ${needsFile ? "aria-required=\"true\"" : ""} /></label>
+            <label class="file-button" for="file-input">选择或替换文件<input class="visually-hidden" id="file-input" type="file" accept="${needsFile ? ".json,.csv" : "*/*"}" ${needsFile ? "aria-required=\"true\"" : ""} /></label>
           </div>
           <div class="file-list" id="file-list">${renderFiles()}</div>
         </div>

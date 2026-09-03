@@ -11,6 +11,7 @@ import threading
 
 import pytest
 
+from molly.core.artifacts import ArtifactStore
 from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
 from molly.plugins.br1_inverse_design.errors import Br1IntegrityError
@@ -340,6 +341,18 @@ def test_workflow_preview_binds_the_frozen_plan_to_start(tmp_path: Path, monkeyp
         )
         assert status == 400
         assert mismatch_start["error_type"] == "WORKFLOW_FILE_INVALID"
+
+        def fail_on_body_read(*_args: object, **_kwargs: object) -> bytes:
+            raise AssertionError("run-detail polling must not read artifact bodies")
+
+        monkeypatch.setattr(
+            ArtifactStore,
+            "_read_verified_bytes",
+            staticmethod(fail_on_body_read),
+        )
+        status, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
+        assert status == 200
+        assert detail["status"] == "WAITING_APPROVAL"
     finally:
         app.close()
 

@@ -619,7 +619,7 @@ class MollyWebApplication:
                 background_error_type = (
                     error_type if error_type.isidentifier() else "BackgroundRunError"
                 )
-        inspection = self.service.inspect_run(run_id)
+        inspection = self.service.inspect_run_lightweight(run_id)
         value = inspection.to_dict()
         value["step_count"] = inspection.step_count
         value["tool_call_count"] = inspection.tool_call_count

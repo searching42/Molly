@@ -408,9 +408,12 @@ class RunInspector:
         except Exception as exc:
             raise InspectionIntegrityError("ArtifactLineage integrity verification failed") from exc
 
-    def _verify_artifact(self, artifact_id: str) -> None:
+    def _verify_artifact(self, artifact_id: str, *, verify_bytes: bool = True) -> None:
         try:
-            self.store.verify(artifact_id)
+            if verify_bytes:
+                self.store.verify(artifact_id)
+            else:
+                self.store.read_metadata(artifact_id)
         except Exception as exc:
             raise InspectionIntegrityError(
                 "inspection references an unavailable or corrupt artifact"
@@ -420,6 +423,8 @@ class RunInspector:
         self,
         events: tuple[LedgerEvent, ...],
         relations: tuple[LineageRelation, ...],
+        *,
+        verify_bytes: bool = True,
     ) -> None:
         seen: set[str] = set()
         for event in events:
@@ -430,7 +435,7 @@ class RunInspector:
                 if identity.startswith("sha256:"):
                     seen.add(identity)
         for artifact_id in sorted(seen):
-            self._verify_artifact(artifact_id)
+            self._verify_artifact(artifact_id, verify_bytes=verify_bytes)
 
     @staticmethod
     def _request_from_start(start: LedgerEvent) -> RunRequest:
@@ -692,8 +697,17 @@ class RunInspector:
             projected.append(value)
         return tuple(projected)
 
-    def inspect_run(self, run_id: str) -> RunInspection:
-        """Return a canonical projection; this method never appends or repairs."""
+    def inspect_run(
+        self,
+        run_id: str,
+        *,
+        verify_artifact_bytes: bool = True,
+    ) -> RunInspection:
+        """Return a canonical projection; this method never appends or repairs.
+
+        Full artifact verification remains the default. Hosts may explicitly
+        request a metadata-only projection for high-frequency status polling.
+        """
 
         try:
             validate_identifier(run_id, field="run_id")
@@ -709,8 +723,12 @@ class RunInspector:
         request = self._request_from_start(starts[0])
         relations = self._all_relations()
         for artifact_id in request.input_artifact_ids:
-            self._verify_artifact(artifact_id)
-        self._verify_all_artifact_references(all_events, relations)
+            self._verify_artifact(artifact_id, verify_bytes=verify_artifact_bytes)
+        self._verify_all_artifact_references(
+            all_events,
+            relations,
+            verify_bytes=verify_artifact_bytes,
+        )
         calls, pending_call, unresolved = self._project_calls(events)
         status = self._status(events, pending_approval=pending_call, unresolved=unresolved)
         final_ids: list[str] = list(request.input_artifact_ids)
