@@ -428,6 +428,12 @@ class ProviderConfigStore:
             secret_resolver=self.resolve_secret,
         )
 
+    def test_connection(self, profile_ref: str) -> None:
+        """Probe the configured endpoint and model without returning content."""
+
+        provider = self.create_intent_provider(profile_ref)
+        provider.test_connection()
+
 
 __all__ = [
     "LEGACY_PROVIDER_SECRET_CONFIG_VERSION",

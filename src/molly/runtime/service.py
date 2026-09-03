@@ -225,6 +225,15 @@ class RuntimeService:
         store, ledger, lineage = self._open_components(create=False)
         return RunInspector(store=store, ledger=ledger, lineage=lineage).inspect_run(run_id)
 
+    def inspect_run_lightweight(self, run_id: str):
+        """Project one run for polling without reading referenced object bodies."""
+
+        store, ledger, lineage = self._open_components(create=False)
+        return RunInspector(store=store, ledger=ledger, lineage=lineage).inspect_run(
+            run_id,
+            verify_artifact_bytes=False,
+        )
+
     def list_runs(self):
         """Return read-only inspections for all locally recorded runs."""
 
@@ -253,6 +262,12 @@ class RuntimeService:
         store, _, _ = self._open_components(create=False)
         record = store.verify(validate_artifact_id(artifact_id))
         return record, store.read(record.artifact_id)
+
+    def artifact_metadata(self, artifact_id: str) -> ArtifactRecord:
+        """Return immutable artifact metadata without reading the object body."""
+
+        store, _, _ = self._open_components(create=False)
+        return store.read_metadata(validate_artifact_id(artifact_id))
 
     def inspect_artifact(self, artifact_id: str):
         store, ledger, lineage = self._open_components(create=False)

@@ -11,7 +11,13 @@ import threading
 
 import pytest
 
+from molly.core import StopAction, ToolPolicy, ToolRegistry
+from molly.core.artifacts import ArtifactStore
 from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
+from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
+from molly.plugins.br1_inverse_design.errors import Br1IntegrityError
+from molly.plugins.br1_inverse_design.workflow import br1_profile
+from molly.runtime import RuntimeProfile, RuntimeProfileRegistry, RuntimeService
 
 
 pytestmark = pytest.mark.acceptance
@@ -141,8 +147,257 @@ def test_upload_publishes_verified_local_file_without_path_input(tmp_path: Path)
     assert status == 200
     assert content == b"local notes"
     assert media_type == "text/plain"
-    assert download_name.endswith(".bin")
+    assert download_name == "notes.txt"
     assert app.dispatch("GET", f"/api/artifacts/{uploaded['artifact_id']}/content")[0] == 200
+
+
+def test_workflow_requires_one_valid_dataset_file(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    profile = br1_profile(root, profile_id="profile:workflow-input")
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service)
+    valid = json.dumps(
+        {
+            "columns": ["canonical_smiles", "quantum_yield"],
+            "data": [["CCO", 0.4]],
+        }
+    ).encode()
+    try:
+        status, missing = app.dispatch(
+            "POST",
+            "/api/runs",
+            {"profile_id": profile.profile_id, "goal": "rank molecules"},
+        )
+        assert status == 400
+        assert missing["error_type"] == "WORKFLOW_FILE_REQUIRED"
+
+        uploaded_ids = []
+        for name, content in (("one.json", valid), ("two.json", valid + b" ")):
+            status, uploaded = app.dispatch(
+                "POST",
+                "/api/artifacts",
+                {
+                    "file_name": name,
+                    "media_type": "application/json",
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "workflow": "br1",
+                },
+            )
+            assert status == 201
+            uploaded_ids.append(uploaded["artifact_id"])
+        status, multiple = app.dispatch(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "rank molecules",
+                "input_artifact_ids": uploaded_ids,
+            },
+        )
+        assert status == 400
+        assert multiple["error_type"] == "WORKFLOW_SINGLE_FILE_REQUIRED"
+
+        status, invalid = app.dispatch(
+            "POST",
+            "/api/artifacts",
+            {
+                "file_name": "invalid.json",
+                "media_type": "application/json",
+                "content_base64": base64.b64encode(b'{"wrong": []}').decode("ascii"),
+                "workflow": "br1",
+            },
+        )
+        assert status == 400
+        assert invalid["error_type"] == "WORKFLOW_FILE_INVALID"
+
+        with pytest.raises(Br1IntegrityError):
+            validate_raw_dataset_source(
+                json.dumps(
+                    {
+                        "columns": ["canonical_smiles", "energies_occ_pbe0_vac_tier2"],
+                        "data": [["CCO", [-5.0]]],
+                    }
+                ).encode(),
+                target_property="homo_lumo_gap",
+            )
+    finally:
+        app.close()
+
+
+def test_non_br1_run_ignores_residual_unconfigured_model_reference(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    provider_store = ProviderConfigStore(root)
+    provider_store.upsert_profile(
+        {
+            "profile_ref": "provider:unused",
+            "display_name": "未配置模型",
+            "endpoint": "https://models.example.test/v1/chat/completions",
+            "model_identifier": "unused-model",
+        }
+    )
+
+    class StopProvider:
+        def next_action(self, context: object, model_visible_tools: object) -> StopAction:
+            return StopAction("core workflow complete")
+
+    profile = RuntimeProfile(
+        profile_id="profile:core-web",
+        tool_registry_factory=ToolRegistry,
+        tool_policy_factory=ToolPolicy,
+        decision_provider_factory=StopProvider,
+        config={"display_name": "核心工作流", "workflow": "core"},
+    )
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service, provider_store=provider_store)
+    payload = {
+        "profile_id": profile.profile_id,
+        "goal": "run the core workflow",
+        "llm_profile_ref": "provider:unused",
+    }
+    try:
+        status, preview = app.dispatch("POST", "/api/workflows/preview", payload)
+        assert status == 200
+        assert preview["workflow"] == "core"
+
+        status, started = app.dispatch("POST", "/api/runs", payload)
+        assert status == 201
+        assert started["status"] == "STOPPED"
+    finally:
+        app.close()
+
+
+def test_workflow_preview_binds_the_frozen_plan_to_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "runtime"
+    provider_store = ProviderConfigStore(root)
+    provider_store.upsert_profile(
+        {
+            "profile_ref": "provider:test",
+            "display_name": "测试模型",
+            "endpoint": "https://models.example.test/v1/chat/completions",
+            "model_identifier": "structured-test",
+        }
+    )
+    provider_store.set_secret("provider:test", "test-api-key")
+    profile = br1_profile(
+        root,
+        profile_id="profile:workflow-preview",
+        intent_provider_resolver=provider_store.create_intent_provider,
+    )
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service, provider_store=provider_store)
+    intent_payload = {
+        "target_property": "quantum_yield",
+        "direction": "MAX",
+        "candidate_count": 8,
+        "top_n": 2,
+        "scaffold_constraint": "NONE",
+        "seed": 11,
+        "host_preference": "auto",
+        "cpu_threads": 8,
+        "gpu_count": 0,
+        "walltime_sec": 3600,
+    }
+    requests: list[dict[str, object]] = []
+
+    def fake_transport(profile):
+        def send(endpoint, *, headers, json_body, timeout_seconds):
+            requests.append({"endpoint": endpoint, "headers": dict(headers), "body": dict(json_body)})
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(intent_payload)}}]}
+            ).encode()
+
+        return send
+
+    monkeypatch.setattr(ProviderConfigStore, "_transport", staticmethod(fake_transport))
+    try:
+        _, uploaded = app.dispatch(
+            "POST",
+            "/api/artifacts",
+            {
+                "file_name": "dataset.json",
+                "media_type": "application/json",
+                "content_base64": base64.b64encode(
+                    json.dumps(
+                        {"columns": ["canonical_smiles", "quantum_yield"], "data": [["CCO", 0.4]]}
+                    ).encode()
+                ).decode("ascii"),
+            },
+        )
+        status, preview = app.dispatch(
+            "POST",
+            "/api/workflows/preview",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+            },
+        )
+        assert status == 200
+        assert preview["intent"]["spec"]["candidate_count"] == 8
+        assert preview["preview_token"]
+
+        status, started = app.dispatch(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+                "workflow_intent_preview_token": preview["preview_token"],
+            },
+        )
+        assert status == 201
+        assert started["status"] == "WAITING_APPROVAL"
+        assert started["inspection"]["frozen_intent"]["spec"]["seed"] == 11
+        assert len(requests) == 1
+
+        status, tested = app.dispatch(
+            "POST", "/api/model-profiles/provider:test/test", {}
+        )
+        assert status == 200
+        assert tested["ready"] is True
+
+        intent_payload["target_property"] = "homo_lumo_gap"
+        status, mismatch = app.dispatch(
+            "POST",
+            "/api/workflows/preview",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+            },
+        )
+        assert status == 400
+        assert mismatch["error_type"] == "WORKFLOW_FILE_INVALID"
+        status, mismatch_start = app.dispatch(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+            },
+        )
+        assert status == 400
+        assert mismatch_start["error_type"] == "WORKFLOW_FILE_INVALID"
+
+        def fail_on_body_read(*_args: object, **_kwargs: object) -> bytes:
+            raise AssertionError("run-detail polling must not read artifact bodies")
+
+        monkeypatch.setattr(
+            ArtifactStore,
+            "_read_verified_bytes",
+            staticmethod(fail_on_body_read),
+        )
+        status, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
+        assert status == 200
+        assert detail["status"] == "WAITING_APPROVAL"
+    finally:
+        app.close()
 
 
 def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Path) -> None:
@@ -222,5 +477,115 @@ def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Pa
     finally:
         server.shutdown()
         thread.join(timeout=3)
+        server.server_close()
+        app.close()
+
+
+def test_http_run_response_serializes_nested_frozen_intent(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    provider_store = ProviderConfigStore(root)
+    provider_store.upsert_profile(
+        {
+            "profile_ref": "provider:test",
+            "display_name": "测试模型",
+            "endpoint": "https://models.example.test/v1/chat/completions",
+            "model_identifier": "structured-test",
+        }
+    )
+    provider_store.set_secret("provider:test", "test-api-key")
+    provider_profile = provider_store.get_profile("provider:test").profile
+    intent_payload = {
+        "target_property": "quantum_yield",
+        "direction": "MAX",
+        "candidate_count": 8,
+        "top_n": 2,
+        "scaffold_constraint": "NONE",
+        "seed": 11,
+        "host_preference": "auto",
+        "cpu_threads": 8,
+        "gpu_count": 0,
+        "walltime_sec": 3600,
+    }
+
+    class IntentProvider:
+        profile = provider_profile
+
+        def parse_br1_intent(self, goal: str, *, allowed_target_properties):
+            return dict(intent_payload)
+
+    profile = br1_profile(
+        root,
+        profile_id="profile:http-run",
+        intent_provider_resolver=lambda _profile_ref: IntentProvider(),
+    )
+    service = RuntimeService(root, profiles=RuntimeProfileRegistry((profile,)))
+    app = create_application(root, service=service, provider_store=provider_store)
+    handler = type(
+        "TestHttpRunHandler",
+        (MollyHTTPRequestHandler,),
+        {"application": app},
+    )
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    except PermissionError:
+        app.close()
+        pytest.skip("the test environment does not permit local socket binding")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_port
+    host = f"127.0.0.1:{port}"
+    origin = f"http://127.0.0.1:{port}"
+
+    def send(method: str, path: str, value: object | None = None) -> tuple[int, dict[str, object]]:
+        body = json.dumps(value).encode() if value is not None else None
+        headers = {"Host": host, "Content-Type": "application/json"}
+        if method == "POST":
+            headers.update(
+                {
+                    "Origin": origin,
+                    "X-Local-Session-Token": app.local_session_token,
+                }
+            )
+        connection = HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+
+    try:
+        status, uploaded = send(
+            "POST",
+            "/api/artifacts",
+            {
+                "file_name": "dataset.json",
+                "media_type": "application/json",
+                "content_base64": base64.b64encode(
+                    json.dumps(
+                        {"columns": ["canonical_smiles", "quantum_yield"], "data": [["CCO", 0.4]]}
+                    ).encode()
+                ).decode("ascii"),
+            },
+        )
+        assert status == 201
+        status, started = send(
+            "POST",
+            "/api/runs",
+            {
+                "profile_id": profile.profile_id,
+                "goal": "maximize quantum yield",
+                "input_artifact_ids": [uploaded["artifact_id"]],
+                "llm_profile_ref": "provider:test",
+            },
+        )
+        assert status == 201
+        assert started["inspection"]["frozen_intent"]["spec"]["target_property"] == "quantum_yield"
+        status, detail = send("GET", f"/api/runs/{started['run_id']}")
+        assert status == 200
+        assert detail["frozen_intent"]["spec"]["seed"] == 11
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
         server.server_close()
         app.close()

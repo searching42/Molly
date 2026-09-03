@@ -18,6 +18,7 @@ from .agent_loop import (
     DECISION_RECORDED,
     REVIEW_REQUESTED,
     RUN_FAILED,
+    RUN_REJECTED,
     RUN_STARTED,
     RUN_STOPPED,
     TOOL_CALL_MATERIALIZED,
@@ -45,7 +46,7 @@ from .runs import RunRequest, RunStatus
 from .tools import MAX_TOOL_RESULT_DATA_BYTES, MaterializedToolCall
 
 
-_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED})
+_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_REJECTED, RUN_FAILED, BUDGET_EXHAUSTED})
 _CALL_EVENT_TYPES = frozenset(
     {
         TOOL_CALL_MATERIALIZED,
@@ -131,6 +132,7 @@ class ToolCallInspection:
     approval_required: bool
     approval_status: str | None
     execution_status: str
+    reason_summary: str = ""
     result_data: Any = None
     result_data_sha256: str | None = None
     failure_type: str | None = None
@@ -162,6 +164,10 @@ class ToolCallInspection:
         if self.approval_status is not None:
             validate_identifier(self.approval_status, field="approval_status")
         validate_identifier(self.execution_status, field="execution_status")
+        if not isinstance(self.reason_summary, str) or len(self.reason_summary) > 2_000:
+            raise InspectionError("inspection reason_summary must be bounded text")
+        if "\x00" in self.reason_summary:
+            raise InspectionError("inspection reason_summary contains NUL")
         if self.result_data_sha256 is not None:
             validate_digest_reference(self.result_data_sha256, field="result_data_sha256")
             freeze_json_value(self.result_data, field="inspection result data")
@@ -187,6 +193,7 @@ class ToolCallInspection:
             "approval_required": self.approval_required,
             "approval_status": self.approval_status,
             "execution_status": self.execution_status,
+            "reason_summary": self.reason_summary,
             "event_ids": list(self.event_ids),
         }
         if self.result_data_sha256 is not None:
@@ -401,9 +408,12 @@ class RunInspector:
         except Exception as exc:
             raise InspectionIntegrityError("ArtifactLineage integrity verification failed") from exc
 
-    def _verify_artifact(self, artifact_id: str) -> None:
+    def _verify_artifact(self, artifact_id: str, *, verify_bytes: bool = True) -> None:
         try:
-            self.store.verify(artifact_id)
+            if verify_bytes:
+                self.store.verify(artifact_id)
+            else:
+                self.store.read_metadata(artifact_id)
         except Exception as exc:
             raise InspectionIntegrityError(
                 "inspection references an unavailable or corrupt artifact"
@@ -413,6 +423,8 @@ class RunInspector:
         self,
         events: tuple[LedgerEvent, ...],
         relations: tuple[LineageRelation, ...],
+        *,
+        verify_bytes: bool = True,
     ) -> None:
         seen: set[str] = set()
         for event in events:
@@ -423,7 +435,7 @@ class RunInspector:
                 if identity.startswith("sha256:"):
                     seen.add(identity)
         for artifact_id in sorted(seen):
-            self._verify_artifact(artifact_id)
+            self._verify_artifact(artifact_id, verify_bytes=verify_bytes)
 
     @staticmethod
     def _request_from_start(start: LedgerEvent) -> RunRequest:
@@ -611,6 +623,7 @@ class RunInspector:
                     approval_required=required,
                     approval_status=approval_status,
                     execution_status=execution_status,
+                    reason_summary=call.reason_summary,
                     result_data=result_data,
                     result_data_sha256=result_digest,
                     failure_type=failure_type,
@@ -637,6 +650,7 @@ class RunInspector:
                 raise InspectionIntegrityError("events follow a terminal run event")
             return {
                 RUN_STOPPED: RunStatus.STOPPED.value,
+                RUN_REJECTED: RunStatus.REJECTED.value,
                 RUN_FAILED: RunStatus.FAILED.value,
                 BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED.value,
             }[terminal[-1].event_type]
@@ -683,8 +697,17 @@ class RunInspector:
             projected.append(value)
         return tuple(projected)
 
-    def inspect_run(self, run_id: str) -> RunInspection:
-        """Return a canonical projection; this method never appends or repairs."""
+    def inspect_run(
+        self,
+        run_id: str,
+        *,
+        verify_artifact_bytes: bool = True,
+    ) -> RunInspection:
+        """Return a canonical projection; this method never appends or repairs.
+
+        Full artifact verification remains the default. Hosts may explicitly
+        request a metadata-only projection for high-frequency status polling.
+        """
 
         try:
             validate_identifier(run_id, field="run_id")
@@ -700,8 +723,12 @@ class RunInspector:
         request = self._request_from_start(starts[0])
         relations = self._all_relations()
         for artifact_id in request.input_artifact_ids:
-            self._verify_artifact(artifact_id)
-        self._verify_all_artifact_references(all_events, relations)
+            self._verify_artifact(artifact_id, verify_bytes=verify_artifact_bytes)
+        self._verify_all_artifact_references(
+            all_events,
+            relations,
+            verify_bytes=verify_artifact_bytes,
+        )
         calls, pending_call, unresolved = self._project_calls(events)
         status = self._status(events, pending_approval=pending_call, unresolved=unresolved)
         final_ids: list[str] = list(request.input_artifact_ids)

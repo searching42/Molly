@@ -31,7 +31,7 @@ from molly.core.tools import (
 )
 from molly.runtime.profiles import RuntimeProfile
 
-from .dataset import CORE05_DATASET_SCHEMA_NAME
+from .dataset import CORE05_DATASET_SCHEMA_NAME, validate_raw_dataset_source
 from .errors import Br1Error, Br1RuntimeError
 from .intent import Br1Intent, parse_br1_request
 from .schema import (
@@ -171,6 +171,29 @@ class Br1WorkflowProvider(DecisionProvider):
             raise Br1Error("BR1 structured LLM intent profile changed during the run")
         return provider
 
+    def compile_intent(
+        self,
+        goal: str,
+        *,
+        profile_ref: str,
+        profile_digest: str,
+    ) -> Br1Intent:
+        """Compile one intent for a Web preview or start preflight.
+
+        The returned object is passed back to ``AgentLoop`` as the immutable
+        preview binding, so the run does not ask the LLM to parse the same
+        goal a second time.
+        """
+
+        provider = self._provider_for_binding(profile_ref, profile_digest)
+        return parse_br1_request(
+            goal,
+            provider=provider,
+            allowed_target_properties=self.config.supported_target_properties,
+            llm_profile_ref=profile_ref,
+            overrides=self.default_overrides,
+        )
+
     def _persist_intent(
         self,
         context: Any,
@@ -218,6 +241,27 @@ class Br1WorkflowProvider(DecisionProvider):
             return self._load_frozen_intent(
                 context,
                 frozen,
+                profile_ref=profile_ref,
+                profile_digest=profile_digest,
+            )
+        metadata = getattr(context, "request_metadata", {})
+        preview = metadata.get("workflow_intent_preview") if isinstance(metadata, Mapping) else None
+        if preview is not None:
+            try:
+                intent = Br1Intent.from_dict(preview)
+                preview_digest = validate_digest_reference(
+                    str(metadata.get("workflow_intent_preview_digest", "")),
+                    field="workflow intent preview digest",
+                )
+            except Exception as exc:
+                raise Br1Error("workflow intent preview is malformed") from exc
+            if intent.digest != preview_digest:
+                raise Br1Error("workflow intent preview digest does not match the intent")
+            if intent.spec.llm_profile_ref != profile_ref:
+                raise Br1Error("workflow intent preview is bound to another provider")
+            return self._persist_intent(
+                context,
+                intent,
                 profile_ref=profile_ref,
                 profile_digest=profile_digest,
             )
@@ -283,6 +327,14 @@ class Br1WorkflowProvider(DecisionProvider):
         if spec.target_property not in self.config.supported_target_properties:
             raise Br1Error(f"unsupported BR1 target property: {spec.target_property}")
         raw_dataset_id = self._initial_dataset(context)
+        if not self._is_accepted_dataset(raw_dataset_id):
+            try:
+                validate_raw_dataset_source(
+                    self.store.read(raw_dataset_id),
+                    target_property=spec.target_property,
+                )
+            except Exception as exc:
+                raise Br1Error("uploaded dataset does not contain the selected target property") from exc
         prepared_dataset_id = self._success_artifact(
             context.run_id, "br1_prepare_dataset", CLEANED_DATASET_SCHEMA_NAME
         )

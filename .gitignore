@@ -18,6 +18,10 @@ tmp/
 **/.molly-private/
 **/.molly/provider_profiles.json
 **/.molly/provider_secrets.json
+**/.molly/artifacts/
+**/.molly/events.jsonl
+**/.molly/lineage.jsonl
+**/.molly/web_artifact_names.json
 **/connections.json
 **/connection_profiles.json
 **/remote_workers.json

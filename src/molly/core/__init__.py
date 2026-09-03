@@ -1,6 +1,6 @@
 """Minimal production contracts for Molly Core v2 CORE-01 and CORE-02."""
 
-from .agent_loop import BUDGET_EXHAUSTED, INTENT_FROZEN, AgentLoop, RunEngine
+from .agent_loop import BUDGET_EXHAUSTED, INTENT_FROZEN, RUN_REJECTED, AgentLoop, RunEngine
 from .approvals import ApprovalDecision, ApprovalRecord
 from .artifacts import ArtifactRecord, ArtifactStore
 from .errors import (
@@ -91,6 +91,7 @@ __all__ = [
     "PathSecurityError",
     "ReconciliationError",
     "RelationType",
+    "RUN_REJECTED",
     "ReviewBindingError",
     "ReviewDecision",
     "ReviewError",

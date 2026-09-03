@@ -180,6 +180,7 @@ class RunStatus(str, Enum):
     WAITING_REVIEW = "WAITING_REVIEW"
     INTERRUPTED = "INTERRUPTED"
     STOPPED = "STOPPED"
+    REJECTED = "REJECTED"
     FAILED = "FAILED"
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 
@@ -187,6 +188,7 @@ class RunStatus(str, Enum):
 TERMINAL_RUN_STATUSES = frozenset(
     {
         RunStatus.STOPPED.value,
+        RunStatus.REJECTED.value,
         RunStatus.FAILED.value,
         RunStatus.BUDGET_EXHAUSTED.value,
     }

@@ -401,6 +401,11 @@ def test_browser_br1_flow_resumes_background_turns_and_exposes_top_n(tmp_path: P
 
         assert detail["status"] == "STOPPED"
         assert detail["failure_summary"] == []
+        assert detail["top_n_result"]["rows"]
+        assert detail["artifact_groups"]["inputs"][0]["name"] == "oe62.json"
+        assert detail["artifact_groups"]["final"]
+        assert all(item["download_name"].endswith(".json") for item in detail["artifact_groups"]["final"])
+        assert detail["frozen_intent"]["spec"]["seed"] == 7
         assert [
             call["tool_name"] for call in detail["materialized_calls"]
         ] == [
@@ -486,24 +491,14 @@ def test_browser_br1_rejection_stops_without_reproposing_the_stage(tmp_path: Pat
                 "call_id": pending["call_id"],
             },
         )
-        assert rejected["inspection"]["background_pending"] is True
+        assert rejected["inspection"]["status"] in {"ACTIVE", "REJECTED"}
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             _, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
             if not detail["background_pending"]:
                 break
             time.sleep(0.01)
-
-        _, resumed = app.dispatch("POST", f"/api/runs/{started['run_id']}/resume", {})
-        assert resumed["inspection"]["background_pending"] is True
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            _, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
-            if not detail["background_pending"]:
-                break
-            time.sleep(0.01)
-
-        assert detail["status"] == "STOPPED"
+        assert detail["status"] == "REJECTED"
         assert len(detail["materialized_calls"]) == 1
         assert detail["materialized_calls"][0]["execution_status"] == "REJECTED"
     finally:

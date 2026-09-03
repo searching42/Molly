@@ -370,9 +370,25 @@ class ArtifactStore:
         return self.read(artifact_id)
 
     def get_metadata(self, artifact_id: str) -> ArtifactRecord:
-        """Look up metadata only after verifying the referenced object."""
+        """Look up metadata after verifying the referenced object."""
 
         return self.verify(artifact_id)
+
+    def read_metadata(self, artifact_id: str) -> ArtifactRecord:
+        """Read immutable metadata without reading the artifact object."""
+
+        validate_artifact_id(artifact_id)
+        object_path, metadata_path = self._paths(artifact_id)
+        record = self._read_record(metadata_path)
+        if record.artifact_id != artifact_id:
+            raise ArtifactIntegrityError("metadata artifact identity does not match lookup key")
+        if object_path.is_symlink():
+            raise PathSecurityError("artifact object cannot be a symlink")
+        if not object_path.exists():
+            raise ArtifactNotFoundError(f"artifact object is missing: {object_path.name}")
+        if not object_path.is_file():
+            raise ArtifactIntegrityError("artifact object is not a regular file")
+        return record
 
     def metadata(self, artifact_id: str) -> ArtifactRecord:
         """Alias for :meth:`get_metadata`."""
