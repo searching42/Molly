@@ -143,6 +143,7 @@ class UniMolTrainingService:
         preflight_artifact_id: str,
         *,
         target_property: str,
+        seed: int = 42,
         run_id: str,
         step_id: str,
     ) -> TrainingOutcome:
@@ -150,11 +151,15 @@ class UniMolTrainingService:
             raise Br1IntegrityError(f"unsupported BR1 target property: {target_property}")
         inspection = self.gate.inspect(dataset_artifact_id, target_property=target_property)
         preflight = self._preflight(preflight_artifact_id, dataset_artifact_id, target_property)
+        default_parameters = dict(TrainingConfig().parameters)
+        default_parameters.update(dict(self.config.training_parameters))
         config = TrainingConfig(
             target_property=target_property,
+            seed=seed,
             unimol_version=self.config.unimol_version,
             resource_profile_ref=self.config.training_profile_ref,
             environment_ref=self.config.environment_ref,
+            parameters=default_parameters,
         )
         stage = self.runtime.train(inspection, config, run_id=run_id, step_id=step_id)
         by_name = {item.name: item for item in stage.artifacts}

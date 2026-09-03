@@ -105,6 +105,8 @@ install heavy scientific, PDF, telemetry, or legacy runtime dependencies.
 | `molly approve` | Record one decision for one exact pending tool call |
 | `molly review` | Bind a scientific review to one exact artifact digest |
 | `molly observe` | Produce a read-only run trace or observer export |
+| `molly web` | Start the local-only browser interface; add `--demo` to try the UI without a registered scientific profile |
+| `molly config` | Save or remove provider credentials through a hidden terminal prompt |
 
 Molly does not ship a general-purpose default LLM Agent profile. A scientific
 run requires an explicitly registered, server-owned `RuntimeProfile` containing
@@ -158,6 +160,82 @@ Molly keeps authority on the host side:
 
 See [SECURITY.md](SECURITY.md) for the repository security boundary and
 [the documentation map](docs/README.md) for current contracts and evidence.
+
+## Local browser interface
+
+The first browser surface is intentionally small and binds only to
+`127.0.0.1`. It is an operator view over the existing Core service, not a
+second execution authority:
+
+```bash
+PYTHONPATH=src .venv/bin/python -c \
+  'from molly.cli import main; raise SystemExit(main())' \
+  --state-root .molly web --demo
+```
+
+Open <http://127.0.0.1:8765/>. The explicit `--demo` profile lets you try the
+new-task → confirmation → continue → completed flow with a deterministic local
+operation. Normal mode keeps the existing closed profile registry and shows no
+implicit general-purpose model profile.
+
+The browser can save only non-secret model settings. It never accepts an API
+key. After saving a provider profile in the UI, configure its key from the
+same local checkout:
+
+```bash
+PYTHONPATH=src .venv/bin/python -c \
+  'from molly.cli import main; raise SystemExit(main())' \
+  --state-root .molly config set-key --profile provider-test
+```
+
+The prompt is hidden, and the credential is stored in the server-side
+`provider_secrets.json` file with owner-only permissions. The browser receives
+only whether a key is configured; the key is never written to Core requests,
+ledger events, artifacts, or browser storage.
+
+### BR1 real end-to-end run
+
+Normal web mode exposes only worker profiles that are complete and registered
+by the server. Configure each worker with its own complete, host-qualified
+environment-variable bundle before starting Molly. Replace `<HOST_ID>` with
+the exact server-registered host identifier and adjust the paths for that host:
+
+```bash
+# Replace <HOST_ID> with the exact registered identifier in each name:
+# MOLLY_BR1_<HOST_ID>_SSH_TARGET=worker-alias
+# MOLLY_BR1_<HOST_ID>_REMOTE_ROOT=/srv/molly/br1
+# MOLLY_BR1_<HOST_ID>_UNIMOL_PYTHON=/opt/unimol/bin/python
+# MOLLY_BR1_<HOST_ID>_REINVENT_PYTHON=/opt/reinvent/bin/python
+# MOLLY_BR1_<HOST_ID>_REINVENT_REPOSITORY=/opt/REINVENT4
+
+PYTHONPATH=src .venv/bin/python -c \
+  'from molly.cli import main; raise SystemExit(main())' \
+  --state-root .molly web
+```
+
+The unqualified `MOLLY_BR1_SSH_TARGET`, `MOLLY_BR1_REMOTE_ROOT`, and related
+variables are ignored. Do not reuse one host's SSH target under another
+host's identity; each registered worker must resolve to its own target and
+provenance.
+
+In the browser, upload the OE62 JSON/CSV file, enter the target and Top-N
+request in natural language, choose the registered CPU/GPU profile, and
+approve each displayed external-compute step. Molly then runs cleaning,
+applicability preflight, fresh Uni-Mol training, unrestricted REINVENT4
+sampling, current-run prediction, and Top-N ranking. The page polls the run,
+shows the exact tool lifecycle and failure summary, and exposes immutable
+result artifacts for download. The default UI budget is sufficient for the
+six-stage BR1 chain; lower limits are intended for smoke runs.
+
+Optional observer exports are enabled by server-side configuration:
+
+```bash
+export MOLLY_OTEL_ENDPOINT=https://otel.example/v1/traces
+export LANGSMITH_API_KEY= # set outside browser/UI, if used
+```
+
+JSON observation is always available. OpenTelemetry and LangSmith remain
+observer-only and cannot change the run or its artifacts.
 
 ## Development
 

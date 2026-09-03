@@ -27,6 +27,10 @@ COMPUTATIONAL_ONLY = "COMPUTATIONAL_ONLY"
 
 DATASET_IMPORT_SCHEMA_NAME = "molly.br1.migrated-reviewed-dataset"
 DATASET_IMPORT_SCHEMA_VERSION = "1"
+CLEANED_DATASET_SCHEMA_NAME = "molly.br1.cleaned-dataset"
+CLEANED_DATASET_SCHEMA_VERSION = "1"
+RUN_SPEC_SCHEMA_NAME = "molly.br1.run-spec"
+RUN_SPEC_SCHEMA_VERSION = "1"
 PREFLIGHT_SCHEMA_NAME = "molly.br1.applicability-preflight"
 PREFLIGHT_SCHEMA_VERSION = "1"
 MODEL_SCHEMA_NAME = "molly.br1.model-package"
@@ -39,6 +43,8 @@ PREDICTION_REPORT_SCHEMA_NAME = "molly.br1.prediction-report"
 TOP_N_SCHEMA_NAME = "molly.br1.computational-top-n"
 TOP_N_SCHEMA_VERSION = "1"
 EVALUATION_REPORT_SCHEMA_NAME = "molly.br1.evaluation-report"
+_WORKSTATION_PREFIX = "workstation"
+_WORKSTATION_IDS = frozenset(_WORKSTATION_PREFIX + str(number) for number in (1, 2))
 
 
 def _bounded_int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
@@ -75,7 +81,10 @@ class Br1PluginConfig:
     generation_profile_ref: str = "profile:br1-generation"
     prediction_profile_ref: str = "profile:br1-prediction"
     environment_ref: str = "environment:br1"
-    supported_target_properties: tuple[str, ...] = ("quantum_yield",)
+    supported_target_properties: tuple[str, ...] = ("quantum_yield", "homo_lumo_gap")
+    training_parameters: Mapping[str, Any] = field(default_factory=dict)
+    generation_parameters: Mapping[str, Any] = field(default_factory=dict)
+    prediction_parameters: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "plugin_version", _nonempty_identifier(self.plugin_version, field="plugin_version"))
@@ -95,6 +104,8 @@ class Br1PluginConfig:
         if not properties or len(properties) != len(set(properties)):
             raise Br1Error("supported_target_properties must be non-empty and unique")
         object.__setattr__(self, "supported_target_properties", properties)
+        for name in ("training_parameters", "generation_parameters", "prediction_parameters"):
+            object.__setattr__(self, name, freeze_json_mapping(getattr(self, name), field=name))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +118,9 @@ class Br1PluginConfig:
             "prediction_profile_ref": self.prediction_profile_ref,
             "environment_ref": self.environment_ref,
             "supported_target_properties": list(self.supported_target_properties),
+            "training_parameters": thaw_json(self.training_parameters),
+            "generation_parameters": thaw_json(self.generation_parameters),
+            "prediction_parameters": thaw_json(self.prediction_parameters),
         }
 
     @property
@@ -310,6 +324,86 @@ class EvaluationConfig:
         return self.digest
 
 
+@dataclass(frozen=True, slots=True)
+class Br1RunSpec:
+    """The validated, server-owned meaning of one BR1 natural-language request.
+
+    This is deliberately smaller than a generic agent plan.  It contains only
+    the scientific choices that are safe to expose in a request: target,
+    ranking direction, sampling size, Top-N size, and bounded resource
+    preferences.  Hosts, executable paths, credentials, and remote roots are
+    resolved by the registered runtime profile and never enter this object.
+    """
+
+    target_property: str
+    direction: str = "MIN"
+    candidate_count: int = 1000
+    top_n: int = 5
+    scaffold_constraint: str = "NONE"
+    seed: int = 42
+    host_preference: str = "auto"
+    cpu_threads: int = 8
+    gpu_count: int = 1
+    walltime_sec: int = 7_200
+    llm_profile_ref: str | None = None
+    source_format: str = "auto"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "target_property", _nonempty_identifier(self.target_property, field="target_property"))
+        if not isinstance(self.direction, str) or self.direction.strip().upper() not in {"MIN", "MAX"}:
+            raise Br1Error("BR1 run direction must be MIN or MAX")
+        object.__setattr__(self, "direction", self.direction.strip().upper())
+        object.__setattr__(self, "candidate_count", _bounded_int(self.candidate_count, field="candidate_count", minimum=1, maximum=1024))
+        object.__setattr__(self, "top_n", _bounded_int(self.top_n, field="top_n", minimum=1, maximum=1024))
+        if self.top_n > self.candidate_count:
+            raise Br1Error("top_n cannot exceed candidate_count")
+        if not isinstance(self.scaffold_constraint, str) or not self.scaffold_constraint.strip():
+            raise Br1Error("scaffold_constraint is required")
+        scaffold = self.scaffold_constraint.strip().upper()
+        if scaffold not in {"NONE", "UNRESTRICTED"}:
+            raise Br1Error("only an unrestricted scaffold constraint is enabled by BR1")
+        object.__setattr__(self, "scaffold_constraint", "NONE")
+        object.__setattr__(self, "seed", _bounded_seed(self.seed))
+        host = self.host_preference.strip().casefold() if isinstance(self.host_preference, str) else ""
+        if host not in {"auto", "local", *_WORKSTATION_IDS}:
+            raise Br1Error("host_preference must be auto, local, or a registered workstation")
+        object.__setattr__(self, "host_preference", host)
+        object.__setattr__(self, "cpu_threads", _bounded_int(self.cpu_threads, field="cpu_threads", minimum=1, maximum=256))
+        object.__setattr__(self, "gpu_count", _bounded_int(self.gpu_count, field="gpu_count", minimum=0, maximum=8))
+        object.__setattr__(self, "walltime_sec", _bounded_int(self.walltime_sec, field="walltime_sec", minimum=60, maximum=604_800))
+        if self.llm_profile_ref is not None:
+            object.__setattr__(self, "llm_profile_ref", _profile_ref(self.llm_profile_ref, field="llm_profile_ref"))
+        if not isinstance(self.source_format, str) or self.source_format.strip().casefold() not in {"auto", "oe62_json", "csv", "json"}:
+            raise Br1Error("source_format is not supported")
+        object.__setattr__(self, "source_format", self.source_format.strip().casefold())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_name": RUN_SPEC_SCHEMA_NAME,
+            "schema_version": RUN_SPEC_SCHEMA_VERSION,
+            "target_property": self.target_property,
+            "direction": self.direction,
+            "candidate_count": self.candidate_count,
+            "top_n": self.top_n,
+            "scaffold_constraint": self.scaffold_constraint,
+            "seed": self.seed,
+            "host_preference": self.host_preference,
+            "cpu_threads": self.cpu_threads,
+            "gpu_count": self.gpu_count,
+            "walltime_sec": self.walltime_sec,
+            "llm_profile_ref": self.llm_profile_ref,
+            "source_format": self.source_format,
+        }
+
+    @property
+    def digest(self) -> str:
+        return sha256_bytes(canonical_json_bytes(self.to_dict()))
+
+    @property
+    def config_digest(self) -> str:
+        return self.digest
+
+
 def assert_digest(value: str, *, field: str) -> str:
     return validate_digest_reference(value, field=field)
 
@@ -333,6 +427,8 @@ __all__ = [
     "BR1_PLUGIN_VERSION",
     "Br1PluginConfig",
     "CANDIDATE_SCHEMA_NAME",
+    "CLEANED_DATASET_SCHEMA_NAME",
+    "CLEANED_DATASET_SCHEMA_VERSION",
     "COMPUTATIONAL_ONLY",
     "DATASET_IMPORT_SCHEMA_NAME",
     "DATASET_IMPORT_SCHEMA_VERSION",
@@ -347,6 +443,9 @@ __all__ = [
     "PREFLIGHT_SCHEMA_NAME",
     "PREFLIGHT_SCHEMA_VERSION",
     "PredictionConfig",
+    "RUN_SPEC_SCHEMA_NAME",
+    "RUN_SPEC_SCHEMA_VERSION",
+    "Br1RunSpec",
     "TOP_N_SCHEMA_NAME",
     "TOP_N_SCHEMA_VERSION",
     "TRAINING_REPORT_SCHEMA_NAME",

@@ -3,6 +3,7 @@ include SECURITY.md
 include pyproject.toml
 include uv.lock
 recursive-include src/molly *.py
+recursive-include src/molly/web/static *.html *.js *.css
 recursive-include docs/v2 *.md *.json *.csv
 prune .github
 prune build

@@ -30,7 +30,15 @@ class ReinventGenerationService:
         self.runtime = runtime
         self.config = config
 
-    def run(self, model_artifact_id: str, *, candidate_count: int, run_id: str, step_id: str) -> GenerationOutcome:
+    def run(
+        self,
+        model_artifact_id: str,
+        *,
+        candidate_count: int,
+        seed: int = 42,
+        run_id: str,
+        step_id: str,
+    ) -> GenerationOutcome:
         successful_output_event(
             self.ledger,
             run_id=run_id,
@@ -39,11 +47,15 @@ class ReinventGenerationService:
         )
         model_record = self.store.verify(model_artifact_id)
         model_bytes = self.store.read(model_artifact_id)
+        default_parameters = dict(GenerationConfig().parameters)
+        default_parameters.update(dict(self.config.generation_parameters))
         generation_config = GenerationConfig(
             candidate_count=candidate_count,
             reinvent4_version=self.config.reinvent4_version,
+            seed=seed,
             resource_profile_ref=self.config.generation_profile_ref,
             environment_ref=self.config.environment_ref,
+            parameters=default_parameters,
         )
         stage = self.runtime.generate(
             model_artifact_id,

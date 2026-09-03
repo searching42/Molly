@@ -227,6 +227,35 @@ class RuntimeService:
         store, ledger, lineage = self._open_components(create=False)
         return RunInspector(store=store, ledger=ledger, lineage=lineage).inspect_run(run_id)
 
+    def list_runs(self):
+        """Return read-only inspections for all locally recorded runs."""
+
+        store, ledger, lineage = self._open_components(create=False)
+        run_ids: list[str] = []
+        for event in ledger.events:
+            if event.run_id not in run_ids:
+                run_ids.append(event.run_id)
+        inspector = RunInspector(store=store, ledger=ledger, lineage=lineage)
+        return tuple(inspector.inspect_run(run_id) for run_id in run_ids)
+
+    def publish_artifact(
+        self,
+        content: bytes | bytearray | memoryview,
+        *,
+        media_type: str,
+    ) -> ArtifactRecord:
+        """Publish one user-provided file through the Core artifact store."""
+
+        store, _, _ = self._open_components(create=True)
+        return store.put(content, media_type=media_type)
+
+    def read_artifact(self, artifact_id: str) -> tuple[ArtifactRecord, bytes]:
+        """Verify and read one immutable artifact for a server adapter."""
+
+        store, _, _ = self._open_components(create=False)
+        record = store.verify(validate_artifact_id(artifact_id))
+        return record, store.read(record.artifact_id)
+
     def inspect_artifact(self, artifact_id: str):
         store, ledger, lineage = self._open_components(create=False)
         return RunInspector(store=store, ledger=ledger, lineage=lineage).inspect_artifact(artifact_id)

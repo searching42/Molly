@@ -46,11 +46,14 @@ class UniMolPredictionService:
         )
         model_bytes = self.store.read(model_artifact_id)
         candidate_bytes = self.store.read(candidate_artifact_id)
+        default_parameters = dict(PredictionConfig().parameters)
+        default_parameters.update(dict(self.config.prediction_parameters))
         prediction_config = PredictionConfig(
             target_property=target_property,
             unimol_version=self.config.unimol_version,
             resource_profile_ref=self.config.prediction_profile_ref,
             environment_ref=self.config.environment_ref,
+            parameters=default_parameters,
         )
         stage = self.runtime.predict(
             model_artifact_id,

@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from molly.core.artifacts import ArtifactStore
 from molly.core.errors import CoreContractError
-from molly.core.ids import canonical_json_bytes, sha256_bytes
+from molly.core.ids import artifact_id_for_sha256, canonical_json_bytes, sha256_bytes
 from molly.core.ledger import RunLedger
 from molly.core.tools import (
     ArtifactDraft,
@@ -18,12 +18,14 @@ from molly.core.tools import (
     ToolSpec,
 )
 
-from .dataset import DatasetGate
+from .dataset import DatasetGate, prepare_raw_dataset
 from .evaluation import TopNEvaluationService
 from .reinvent import ReinventGenerationService
 from .runtime import Br1Runtime, DeterministicBr1Runtime
 from .schema import (
     Br1PluginConfig,
+    CLEANED_DATASET_SCHEMA_NAME,
+    CLEANED_DATASET_SCHEMA_VERSION,
     EvaluationConfig,
     GenerationConfig,
     PredictionConfig,
@@ -48,21 +50,25 @@ def _artifact_id_schema() -> dict[str, Any]:
 
 def _stage_config_digest(config: Br1PluginConfig, stage: str) -> str:
     stage_configs = {
+        "prepare_dataset": {"plugin_config_digest": config.digest, "cleaning_version": "1"},
         "applicability_preflight": {"plugin_config_digest": config.digest},
         "train_unimol": TrainingConfig(
             unimol_version=config.unimol_version,
             resource_profile_ref=config.training_profile_ref,
             environment_ref=config.environment_ref,
+            parameters={**dict(TrainingConfig().parameters), **dict(config.training_parameters)},
         ).to_dict(),
         "generate_reinvent4": GenerationConfig(
             reinvent4_version=config.reinvent4_version,
             resource_profile_ref=config.generation_profile_ref,
             environment_ref=config.environment_ref,
+            parameters={**dict(GenerationConfig().parameters), **dict(config.generation_parameters)},
         ).to_dict(),
         "predict_unimol": PredictionConfig(
             unimol_version=config.unimol_version,
             resource_profile_ref=config.prediction_profile_ref,
             environment_ref=config.environment_ref,
+            parameters={**dict(PredictionConfig().parameters), **dict(config.prediction_parameters)},
         ).to_dict(),
         "evaluate_top_n": EvaluationConfig().to_dict(),
     }
@@ -123,16 +129,29 @@ def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...
     config = config or Br1PluginConfig()
     target_schema = {"type": "string", "enum": list(config.supported_target_properties)}
     empty = {"type": "object", "additionalProperties": False}
+    prepare_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"target_property": target_schema},
+    }
     preflight_input = {
         "type": "object",
         "additionalProperties": False,
         "properties": {"target_property": target_schema},
     }
-    train_input = preflight_input
+    seed_schema = {"type": "integer", "minimum": 0, "maximum": 2**63 - 1}
+    train_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"target_property": target_schema, "seed": seed_schema},
+    }
     generate_input = {
         "type": "object",
         "additionalProperties": False,
-        "properties": {"candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024}},
+        "properties": {
+            "candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "seed": seed_schema,
+        },
     }
     predict_input = {
         "type": "object",
@@ -149,6 +168,30 @@ def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...
         },
     }
     return (
+        ToolSpec(
+            name="br1_prepare_dataset",
+            version="1",
+            description="Clean one uploaded raw dataset into the bounded BR1 training dataset.",
+            input_schema=prepare_input,
+            output_schema=_summary_schema({
+                "status": {"type": "string", "enum": ["DATASET_CLEANED"]},
+                "source_artifact_id": _artifact_id_schema(),
+                "dataset_artifact_id": _artifact_id_schema(),
+                "cleaning_report_artifact_id": _artifact_id_schema(),
+                "target_property": {"type": "string"},
+                "source_row_count": {"type": "integer", "minimum": 1},
+                "row_count": {"type": "integer", "minimum": 1},
+                "invalid_row_count": {"type": "integer", "minimum": 0},
+                "duplicate_row_count": {"type": "integer", "minimum": 0},
+                "source_format": {"type": "string"},
+                "transformation_digest": {"type": "string", "pattern": r"^[0-9a-f]{64}$"},
+                "run_id": {"type": "string"},
+                "step_id": {"type": "string"},
+            }),
+            side_effect_class=SideEffectClass.LOCAL_ARTIFACT,
+            requires_approval=True,
+            execution_config_digest=_stage_config_digest(config, "prepare_dataset"),
+        ),
         ToolSpec(
             name="br1_applicability_preflight",
             version="1",
@@ -168,11 +211,7 @@ def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...
             name="br1_train_unimol",
             version="1",
             description="Train a fresh Uni-Mol model from the exact reviewed dataset and preflight.",
-            input_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {"target_property": target_schema},
-            },
+            input_schema=train_input,
             output_schema=_summary_schema({
                 "status": {"type": "string", "enum": ["TRAINED"]},
                 "dataset_artifact_id": _artifact_id_schema(),
@@ -266,6 +305,48 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
         raise CoreContractError("register_br1_tools requires Br1Services")
     specs = br1_tool_specs(services.config)
 
+    def prepare(context: ToolExecutionContext) -> ToolResult:
+        if len(context.input_artifact_ids) != 1:
+            raise ValueError("br1_prepare_dataset requires one raw dataset artifact")
+        target = str(context.arguments.get("target_property") or services.config.supported_target_properties[0])
+        if target not in services.config.supported_target_properties:
+            raise ValueError(f"unsupported BR1 target property: {target}")
+        prepared = prepare_raw_dataset(
+            context.read_artifact(context.input_artifact_ids[0]),
+            target_property=target,
+        )
+        return ToolResult(
+            data={
+                "status": "DATASET_CLEANED",
+                "source_artifact_id": context.input_artifact_ids[0],
+                "dataset_artifact_id": prepared.artifact_id,
+                "cleaning_report_artifact_id": artifact_id_for_sha256(sha256_bytes(prepared.report)),
+                "target_property": target,
+                "source_row_count": prepared.source_row_count,
+                "row_count": prepared.row_count,
+                "invalid_row_count": prepared.invalid_row_count,
+                "duplicate_row_count": prepared.duplicate_row_count,
+                "source_format": prepared.source_format,
+                "transformation_digest": prepared.transformation_digest,
+                "run_id": context.run_id,
+                "step_id": context.step_id,
+            },
+            artifacts=(
+                ArtifactDraft(
+                    prepared.content,
+                    "application/json",
+                    CLEANED_DATASET_SCHEMA_NAME,
+                    CLEANED_DATASET_SCHEMA_VERSION,
+                ),
+                ArtifactDraft(
+                    prepared.report,
+                    "application/json",
+                    "molly.br1.dataset-cleaning-report",
+                    "1",
+                ),
+            ),
+        )
+
     def preflight(context: ToolExecutionContext) -> ToolResult:
         if len(context.input_artifact_ids) != 1:
             raise ValueError("br1_applicability_preflight requires one dataset artifact")
@@ -292,6 +373,7 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
             context.input_artifact_ids[0],
             context.input_artifact_ids[1],
             target_property=target,
+            seed=int(context.arguments.get("seed", 42)),
             run_id=context.run_id,
             step_id=context.step_id,
         )
@@ -304,6 +386,7 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
         outcome = services.generation.run(
             context.input_artifact_ids[0],
             candidate_count=count,
+            seed=int(context.arguments.get("seed", 42)),
             run_id=context.run_id,
             step_id=context.step_id,
         )
@@ -337,7 +420,7 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
         )
         return ToolResult(data=outcome.summary, artifacts=(outcome.top_n_draft, outcome.report_draft))
 
-    executors = (preflight, train, generate, predict, evaluate)
+    executors = (prepare, preflight, train, generate, predict, evaluate)
     for spec, executor in zip(specs, executors):
         registry.register(spec, executor)
     return specs

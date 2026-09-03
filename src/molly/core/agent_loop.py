@@ -532,6 +532,7 @@ class AgentLoop:
             run_id=request.run_id,
             goal=request.goal,
             visible_artifact_ids=self._visible_artifacts(request, events),
+            initial_artifact_ids=request.input_artifact_ids,
             remaining_budget=self._remaining_budget(request, events),
             recent_events=self._recent_events(events),
             previous_tool_outcome=previous,

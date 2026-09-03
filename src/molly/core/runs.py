@@ -215,6 +215,7 @@ class RunContext:
     goal: str
     visible_artifact_ids: tuple[str, ...]
     remaining_budget: RunBudget
+    initial_artifact_ids: tuple[str, ...] = ()
     recent_events: tuple[Mapping[str, Any], ...] = ()
     previous_tool_outcome: Mapping[str, Any] | None = None
 
@@ -226,6 +227,11 @@ class RunContext:
             self,
             "visible_artifact_ids",
             validate_artifact_ids(self.visible_artifact_ids, field="visible_artifact_ids"),
+        )
+        object.__setattr__(
+            self,
+            "initial_artifact_ids",
+            validate_artifact_ids(self.initial_artifact_ids, field="initial_artifact_ids"),
         )
         if not isinstance(self.remaining_budget, RunBudget):
             raise BudgetError("context remaining_budget must be a RunBudget")
@@ -246,6 +252,7 @@ class RunContext:
             "run_id": self.run_id,
             "goal": self.goal,
             "visible_artifact_ids": list(self.visible_artifact_ids),
+            "initial_artifact_ids": list(self.initial_artifact_ids),
             "remaining_budget": self.remaining_budget.to_dict(),
             "recent_events": thaw_json(self.recent_events),
             "previous_tool_outcome": thaw_json(self.previous_tool_outcome),

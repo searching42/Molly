@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="molly-local-token" content="__MOLLY_LOCAL_SESSION_TOKEN__" />
+    <title>Molly · 科学任务工作台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">M</div>
+          <div>
+            <div class="brand-name">Molly</div>
+            <div class="brand-subtitle">科学任务工作台</div>
+          </div>
+        </div>
+
+        <nav class="main-nav" aria-label="主导航">
+          <button class="nav-item is-active" data-view="new" type="button">
+            <span class="nav-icon" aria-hidden="true">＋</span>
+            <span>新建任务</span>
+          </button>
+          <button class="nav-item" data-view="runs" type="button">
+            <span class="nav-icon" aria-hidden="true">▤</span>
+            <span>任务记录</span>
+          </button>
+          <button class="nav-item" data-view="providers" type="button">
+            <span class="nav-icon" aria-hidden="true">◈</span>
+            <span>模型与服务</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="server-state">
+            <span class="state-dot" aria-hidden="true"></span>
+            <span>本机服务正常</span>
+          </div>
+          <button class="theme-button" id="theme-toggle" type="button">
+            <span aria-hidden="true">☼</span>
+            <span id="theme-label">切换深色</span>
+          </button>
+          <div class="sidebar-note">数据和密钥只保存在本机</div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="topbar-context" id="topbar-context">新建任务</div>
+          <button class="refresh-button" id="refresh-button" type="button" title="刷新">
+            <span aria-hidden="true">↻</span>
+            <span>刷新</span>
+          </button>
+        </header>
+        <section class="page" id="app-content" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

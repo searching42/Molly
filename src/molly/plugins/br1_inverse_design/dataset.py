@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import csv
+import hashlib
 import io
 import json
 import math
@@ -23,6 +24,8 @@ from molly.core.ids import (
 
 from .errors import Br1Error, Br1IntegrityError
 from .schema import (
+    CLEANED_DATASET_SCHEMA_NAME,
+    CLEANED_DATASET_SCHEMA_VERSION,
     DATASET_IMPORT_SCHEMA_NAME,
     DATASET_IMPORT_SCHEMA_VERSION,
     PREFLIGHT_SCHEMA_NAME,
@@ -269,6 +272,12 @@ class DatasetGate:
             review_basis = str(value["historical_review_basis"])
             source_digest = validate_digest_reference(str(value["source_content_digest"]), field="source_content_digest")
             transform_digest = validate_digest_reference(str(value["transformation_digest"]), field="transformation_digest")
+        elif record.schema_name == CLEANED_DATASET_SCHEMA_NAME:
+            rows = _cleaned_rows(value)
+            review_status = "CLEANED_DATASET"
+            review_basis = "operator-approved BR1 cleaning occurrence"
+            source_digest = validate_digest_reference(str(value["source_content_digest"]), field="source_content_digest")
+            transform_digest = validate_digest_reference(str(value["transformation_digest"]), field="transformation_digest")
         else:
             raise Br1IntegrityError("dataset artifact schema is not accepted by BR1")
         if target_property is not None and not any(row.target_property == target_property for row in rows):
@@ -319,6 +328,314 @@ class MigratedDataset:
     @property
     def artifact_id(self) -> str:
         return artifact_id_for_sha256(sha256_bytes(self.content))
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDataset:
+    """A deterministic raw-file cleaning result awaiting/after operator approval."""
+
+    content: bytes
+    report: bytes
+    source_content_digest: str
+    transformation_digest: str
+    row_count: int
+    source_row_count: int
+    invalid_row_count: int
+    duplicate_row_count: int
+    source_format: str
+
+    @property
+    def artifact_id(self) -> str:
+        return artifact_id_for_sha256(sha256_bytes(self.content))
+
+
+def _cleaned_rows(value: Mapping[str, Any]) -> tuple[DatasetRow, ...]:
+    """Parse a server-produced cleaned dataset without accepting raw upload claims."""
+
+    if value.get("schema_name") != CLEANED_DATASET_SCHEMA_NAME or value.get("schema_version") != CLEANED_DATASET_SCHEMA_VERSION:
+        raise Br1IntegrityError("unsupported cleaned BR1 dataset schema")
+    if value.get("review_status") != "CLEANED_DATASET":
+        raise Br1IntegrityError("cleaned dataset does not carry the cleaning status")
+    if value.get("review_record_recreated") is not False:
+        raise Br1IntegrityError("cleaned dataset must not fabricate a ReviewRecord")
+    raw_rows = value.get("rows")
+    if not isinstance(raw_rows, list):
+        raise Br1IntegrityError("cleaned dataset rows must be a JSON array")
+    rows: list[DatasetRow] = []
+    for raw in raw_rows:
+        if not isinstance(raw, Mapping):
+            raise Br1IntegrityError("cleaned dataset row is not an object")
+        try:
+            rows.append(
+                DatasetRow(
+                    row_id=str(raw["row_id"]),
+                    smiles=str(raw["smiles"]),
+                    target_property=str(raw["target_property"]),
+                    target_value=raw["target_value"],
+                    condition=str(raw.get("condition", "UNSPECIFIED")),
+                    source_reference=str(raw["source_reference"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError, CoreContractError) as exc:
+            raise Br1IntegrityError("cleaned dataset row is malformed") from exc
+    return tuple(rows)
+
+
+def _json_records(source: bytes) -> tuple[list[Mapping[str, Any]], str]:
+    """Decode the two JSON layouts commonly produced by pandas."""
+
+    try:
+        value = json.loads(source.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Br1IntegrityError("JSON dataset source is not valid UTF-8 JSON") from exc
+    if isinstance(value, Mapping) and isinstance(value.get("columns"), list) and isinstance(value.get("data"), list):
+        columns = value["columns"]
+        if not columns or any(not isinstance(item, str) or not item.strip() for item in columns):
+            raise Br1IntegrityError("split JSON dataset columns are malformed")
+        columns = [item.strip() for item in columns]
+        if len(columns) != len(set(columns)):
+            raise Br1IntegrityError("split JSON dataset columns are duplicated")
+        records: list[Mapping[str, Any]] = []
+        for row in value["data"]:
+            if not isinstance(row, list) or len(row) != len(columns):
+                records.append({"__molly_invalid_row__": "row_shape"})
+                continue
+            records.append(dict(zip(columns, row, strict=True)))
+        return records, "pandas_split_json"
+    if isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+        return [dict(item) for item in value], "json_records"
+    raise Br1IntegrityError("JSON dataset must be pandas split JSON or an array of records")
+
+
+def _source_records(source: bytes, source_format: str) -> tuple[list[Mapping[str, Any]], str]:
+    normalized = source_format.strip().casefold() if isinstance(source_format, str) else ""
+    if normalized not in {"auto", "oe62_json", "json", "csv"}:
+        raise Br1Error("source_format must be auto, oe62_json, json, or csv")
+    looks_json = source.lstrip().startswith((b"{", b"["))
+    if normalized in {"oe62_json", "json"} or (normalized == "auto" and looks_json):
+        return _json_records(source)
+    try:
+        text = source.decode("utf-8")
+        reader = csv.DictReader(io.StringIO(text, newline=""))
+        fieldnames = tuple(reader.fieldnames or ())
+        if not fieldnames:
+            raise Br1IntegrityError("CSV dataset has no header")
+        return [dict(row) for row in reader], "csv"
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise Br1IntegrityError("CSV dataset source is not a UTF-8 CSV") from exc
+
+
+def _column(record: Mapping[str, Any], names: Sequence[str]) -> tuple[str | None, Any]:
+    by_normalized = {
+        str(key).strip().casefold(): (str(key), value)
+        for key, value in record.items()
+        if isinstance(key, str)
+    }
+    for name in names:
+        value = by_normalized.get(name.strip().casefold())
+        if value is not None:
+            return value
+    return None, None
+
+
+def _number_array(value: Any) -> list[float]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    numbers: list[float] = []
+    for item in value:
+        try:
+            number = float(item)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        if not math.isfinite(number):
+            return []
+        numbers.append(number)
+    return numbers
+
+
+def prepare_raw_dataset(
+    source_bytes: bytes,
+    *,
+    target_property: str,
+    source_dataset: str = "OE62",
+    source_subset: str = "df_5k",
+    source_format: str = "auto",
+    max_rows: int = 100_000,
+) -> PreparedDataset:
+    """Normalize one uploaded raw dataset into the BR1 training contract.
+
+    The adapter intentionally stores only standardized rows in the derived
+    artifact.  Large orbital arrays and other raw columns remain represented
+    by the exact source digest, while the cleaning report records counts and
+    reason classes.  The resulting artifact is only accepted by ``DatasetGate``
+    after this local cleaning operation has passed the AgentLoop approval gate.
+    """
+
+    if not isinstance(source_bytes, (bytes, bytearray, memoryview)):
+        raise Br1Error("raw dataset source must be bytes-like")
+    target = validate_reference(target_property.strip(), field="target_property") if isinstance(target_property, str) else ""
+    if not target:
+        raise Br1Error("target_property is required")
+    for value, field in ((source_dataset, "source_dataset"), (source_subset, "source_subset")):
+        if not isinstance(value, str) or not value.strip() or any(char in value for char in "\x00\r\n"):
+            raise Br1Error(f"{field} is required")
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 100_000:
+        raise Br1Error("max_rows is outside the raw dataset contract")
+
+    source = bytes(source_bytes)
+    source_digest = sha256_bytes(source)
+    source_sha512 = hashlib.sha512(source).hexdigest()
+    records, detected_format = _source_records(source, source_format)
+    considered = records[:max_rows]
+    reason_counts: dict[str, int] = {}
+    rows: list[dict[str, Any]] = []
+    seen_smiles: set[str] = set()
+    duplicate_count = 0
+
+    def rejected(reason: str) -> None:
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    for position, record in enumerate(considered):
+        if not isinstance(record, Mapping) or "__molly_invalid_row__" in record:
+            rejected("row_shape")
+            continue
+        _, raw_smiles = _column(record, ("canonical_smiles", "smiles", "SMILES", "chromophore"))
+        smiles = str(raw_smiles or "").strip()
+        if not smiles:
+            rejected("missing_smiles")
+            continue
+        _, raw_refcode = _column(record, ("refcode_csd", "refcode", "id", "molecule_id"))
+        refcode = str(raw_refcode or "").strip()
+        condition = "UNSPECIFIED"
+        target_unit = ""
+        raw_target: Any = None
+        formula = "source target column"
+        if target == "homo_lumo_gap":
+            _, occupied_value = _column(record, ("energies_occ_pbe0_vac_tier2",))
+            _, unoccupied_value = _column(record, ("energies_unocc_pbe0_vac_tier2",))
+            occupied = _number_array(occupied_value)
+            unoccupied = _number_array(unoccupied_value)
+            if not occupied or not unoccupied:
+                _, raw_target = _column(record, ("homo_lumo_gap", "target_value", "target"))
+                try:
+                    raw_target = float(raw_target)
+                except (TypeError, ValueError, OverflowError):
+                    rejected("missing_or_malformed_orbital_energies")
+                    continue
+                formula = "source homo_lumo_gap column"
+            else:
+                raw_target = unoccupied[0] - occupied[-1]
+                formula = "first(energies_unocc_pbe0_vac_tier2) - last(energies_occ_pbe0_vac_tier2)"
+            condition = "PBE0_vacuum_tier2"
+            target_unit = "eV"
+        else:
+            _, raw_target = _column(record, (target, "target_value", "target", "quantum yield", "quantum_yield"))
+            try:
+                raw_target = float(raw_target)
+            except (TypeError, ValueError, OverflowError):
+                rejected("missing_or_malformed_target")
+                continue
+        try:
+            target_value = float(raw_target)
+        except (TypeError, ValueError, OverflowError):
+            rejected("malformed_target")
+            continue
+        if not math.isfinite(target_value):
+            rejected("non_finite_target")
+            continue
+        if smiles in seen_smiles:
+            duplicate_count += 1
+            continue
+        seen_smiles.add(smiles)
+        source_reference = (
+            f"{source_dataset}:{source_subset}:{refcode}"
+            if refcode
+            else f"{source_dataset}:{source_subset}:source-row-{position}"
+        )
+        rows.append(
+            {
+                "row_id": f"{source_dataset.casefold()}_{source_subset}_{position:05d}",
+                "smiles": smiles,
+                "target_property": target,
+                "target_value": target_value,
+                "condition": condition,
+                "source_reference": source_reference,
+            }
+        )
+
+    if not rows:
+        raise Br1IntegrityError("raw dataset cleaning produced no usable rows")
+    invalid_count = sum(reason_counts.values())
+    transformation = {
+        "name": "molly.br1.raw-dataset-cleaning",
+        "version": "1",
+        "source_dataset": source_dataset.strip(),
+        "source_subset": source_subset.strip(),
+        "target_property": target,
+        "target_unit": target_unit or "unspecified",
+        "condition": "PBE0_vacuum_tier2" if target == "homo_lumo_gap" else "source_condition_or_unspecified",
+        "formula": formula,
+        "smiles_normalization": "strip surrounding whitespace only",
+        "duplicate_policy": "first occurrence in source order",
+        "max_rows": max_rows,
+        "source_format": detected_format,
+    }
+    transformation_digest = sha256_bytes(canonical_json_bytes(transformation))
+    clean_report = {
+        "schema_name": "molly.br1.dataset-cleaning-report",
+        "schema_version": "1",
+        "status": "READY_FOR_OPERATOR_CONFIRMATION",
+        "source_content_digest": source_digest,
+        "source_content_sha512": source_sha512,
+        "source_format": detected_format,
+        "source_row_count": len(records),
+        "considered_row_count": len(considered),
+        "transformed_row_count": len(rows),
+        "invalid_row_count": invalid_count,
+        "duplicate_row_count": duplicate_count,
+        "truncated_row_count": max(0, len(records) - len(considered)),
+        "rejection_reasons": reason_counts,
+        "target_property": target,
+        "target_unit": target_unit or "unspecified",
+        "transformation_digest": transformation_digest,
+        "claim_boundary": "COMPUTATIONAL_ONLY",
+    }
+    body = {
+        "schema_name": CLEANED_DATASET_SCHEMA_NAME,
+        "schema_version": CLEANED_DATASET_SCHEMA_VERSION,
+        "review_status": "CLEANED_DATASET",
+        "review_record_recreated": False,
+        "source_dataset": source_dataset.strip(),
+        "source_subset": source_subset.strip(),
+        "source_content_digest": source_digest,
+        "source_content_sha512": source_sha512,
+        "transformation_digest": transformation_digest,
+        "transformation": transformation,
+        "target_property": target,
+        "target_unit": target_unit or "unspecified",
+        "row_count": len(rows),
+        "source_row_count": len(records),
+        "invalid_row_count": invalid_count,
+        "duplicate_row_count": duplicate_count,
+        "cleaning_report": clean_report,
+        "rows": rows,
+    }
+    return PreparedDataset(
+        content=canonical_json_bytes(body),
+        report=canonical_json_bytes(clean_report),
+        source_content_digest=source_digest,
+        transformation_digest=transformation_digest,
+        row_count=len(rows),
+        source_row_count=len(records),
+        invalid_row_count=invalid_count,
+        duplicate_row_count=duplicate_count,
+        source_format=detected_format,
+    )
 
 
 def migrate_real_csv(
@@ -429,5 +746,7 @@ __all__ = [
     "DatasetInspection",
     "DatasetRow",
     "MigratedDataset",
+    "PreparedDataset",
     "migrate_real_csv",
+    "prepare_raw_dataset",
 ]
