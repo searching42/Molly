@@ -459,7 +459,6 @@ def validate_raw_dataset_source(
             "homo_lumo_gap",
             "target_value",
             "target",
-            "energies_occ_pbe0_vac_tier2",
         }
         has_orbital_pair = {
             "energies_occ_pbe0_vac_tier2",

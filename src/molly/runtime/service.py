@@ -254,6 +254,12 @@ class RuntimeService:
         record = store.verify(validate_artifact_id(artifact_id))
         return record, store.read(record.artifact_id)
 
+    def artifact_metadata(self, artifact_id: str) -> ArtifactRecord:
+        """Verify and return immutable metadata without reading the object body."""
+
+        store, _, _ = self._open_components(create=False)
+        return store.verify(validate_artifact_id(artifact_id))
+
     def inspect_artifact(self, artifact_id: str):
         store, ledger, lineage = self._open_components(create=False)
         return RunInspector(store=store, ledger=ledger, lineage=lineage).inspect_artifact(artifact_id)

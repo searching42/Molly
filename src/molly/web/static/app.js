@@ -106,7 +106,7 @@ const selectedModel = () => (state.bootstrap?.model_profiles || []).find(
   (profile) => profile.profile_ref === state.llmProfileRef
 );
 const workflowNeedsFile = () => selectedWorkflow() === "br1";
-const workflowNeedsModel = () => true;
+const workflowNeedsModel = () => workflowNeedsFile();
 const invalidatePlan = () => {
   state.plan = null;
   state.planConfirmed = false;
@@ -328,7 +328,9 @@ const renderNew = () => {
   const workflowHint = currentProfile
     ? "工作流会按服务器端登记的资源配置，在需要确认的阶段暂停。"
     : "运行配置由本机服务器端登记。";
-  const modelNotice = !modelProfiles.length
+  const modelNotice = !needsModel
+    ? ""
+    : !modelProfiles.length
     ? '<div class="notice failure-notice"><div class="notice-icon" aria-hidden="true">!</div><div><strong>尚未配置模型服务</strong>开始任务前请先添加模型服务并保存 API Key。<button class="text-button" data-view="providers" type="button">去配置模型服务</button></div></div>'
     : (needsModel && state.llmProfileRef && !modelReady
       ? '<div class="notice"><div class="notice-icon" aria-hidden="true">ⓘ</div><div><strong>所选模型服务尚未就绪</strong>请先保存 API Key，再解析执行计划。<button class="text-button" data-view="providers" type="button">去配置模型服务</button></div></div>'
@@ -390,7 +392,7 @@ const renderNew = () => {
         ${needsFile ? `<div class="plan-actions"><button class="secondary-button" data-preview-plan type="button" ${(!fileReady || !modelReady || noProfile) ? "disabled" : ""}>解析并预览执行计划</button><span class="field-hint">先确认结构化计划，再开始任务。</span></div>${state.plan ? renderIntentPlan(state.plan.intent, { confirm: true, digest: state.plan.intent_digest, specDigest: state.plan.spec_digest, title: "开始前确认执行计划" }) : ""}` : ""}
         <div class="form-actions">
           <button class="primary-button" type="submit" ${cannotStart ? "disabled" : ""}>开始任务</button>
-          <span class="field-hint">${!modelProfiles.length ? "请先配置模型服务。" : !modelReady ? "所选模型服务未配置 API Key。" : needsFile && !fileReady ? "请先添加一个数据文件。" : needsFile && !state.plan ? "请先预览并确认执行计划。" : "开始后仍可在需要时确认关键操作。"}</span>
+          <span class="field-hint">${needsModel && !modelProfiles.length ? "请先配置模型服务。" : needsModel && !modelReady ? "所选模型服务未配置 API Key。" : needsFile && !fileReady ? "请先添加一个数据文件。" : needsFile && !state.plan ? "请先预览并确认执行计划。" : "开始后仍可在需要时确认关键操作。"}</span>
         </div>
       </form>
       <div>
@@ -730,7 +732,7 @@ const bindPageEvents = () => {
     const llmProfileRef = document.getElementById("llm-profile")?.value || "";
     state.goal = goal; state.profileId = profileId; state.llmProfileRef = llmProfileRef;
     const workflow = selectedProfile()?.workflow || "core";
-    if (!goal || !profileId || !llmProfileRef) return showToast("请填写任务目标并选择运行配置和解析模型", true);
+    if (!goal || !profileId || (workflow === "br1" && !llmProfileRef)) return showToast("请填写任务目标并选择运行配置和解析模型", true);
     if (workflow === "br1" && state.files.length !== 1) return showToast("该工作流必须上传且只能上传一个数据文件", true);
     if (workflow === "br1" && !state.plan?.preview_token) return showToast("请先解析并预览执行计划", true);
     if (workflow === "br1" && !state.planConfirmed) return showToast("请先确认执行计划", true);
@@ -794,6 +796,11 @@ const bindPageEvents = () => {
     } finally {
       state.approvalInFlight = false;
       setBusy(false);
+      render({ force: true, preserveInteractive: true });
+      const status = state.detail?.effective_status || state.detail?.ui_status || state.detail?.status;
+      if (state.detail?.run_id && !state.detail.background_pending && !terminalStatuses.has(status)) {
+        startRunPolling();
+      }
     }
   }));
 

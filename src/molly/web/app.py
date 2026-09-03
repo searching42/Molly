@@ -30,7 +30,7 @@ from molly.core.errors import (
     RunError,
     ToolError,
 )
-from molly.core.ids import validate_artifact_id, validate_identifier
+from molly.core.ids import thaw_json, validate_artifact_id, validate_identifier
 from molly.core.ledger import RunLedger
 from molly.observability import (
     ExporterUnavailableError,
@@ -49,7 +49,7 @@ from molly.runtime import (
 
 from .providers import ProviderConfigError, ProviderConfigStore
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
-from molly.plugins.br1_inverse_design.intent import parse_br1_request
+from molly.plugins.br1_inverse_design.intent import Br1Intent, parse_br1_request
 from molly.plugins.br1_inverse_design.schema import Br1PluginConfig
 from .runtime_profiles import configured_br1_profiles
 
@@ -146,7 +146,9 @@ def _runtime_profile_view(profile: Any) -> dict[str, Any]:
         "workflow": config.get("workflow", "core"),
         "backend_kind": config.get("backend_kind", "local"),
         "host_identity": config.get("host_identity"),
-        "resource_constraints": resource_constraints if isinstance(resource_constraints, Mapping) else {},
+        "resource_constraints": thaw_json(resource_constraints)
+        if isinstance(resource_constraints, Mapping)
+        else {},
     }
 
 
@@ -326,7 +328,7 @@ class MollyWebApplication:
         return f"artifact-{record.sha256[:16]}{_media_extension(record.media_type)}"
 
     def _artifact_view(self, artifact_id: str, *, role: str) -> dict[str, Any]:
-        record, _ = self.service.read_artifact(artifact_id)
+        record = self.service.artifact_metadata(artifact_id)
         download_name = self._download_name(artifact_id, record)
         return {
             "artifact_id": record.artifact_id,
@@ -423,7 +425,7 @@ class MollyWebApplication:
             if method == "GET":
                 value = self.service.inspect_artifact(artifact_id).to_dict()
                 value["download_name"] = self._download_name(
-                    artifact_id, self.service.read_artifact(artifact_id)[0]
+                    artifact_id, self.service.artifact_metadata(artifact_id)
                 )
                 value["download_path"] = f"/api/artifacts/{artifact_id}/content"
                 return 200, value
@@ -514,7 +516,7 @@ class MollyWebApplication:
             raw_intent = event.metadata.get("intent")
             if not isinstance(raw_intent, Mapping):
                 continue
-            value: dict[str, Any] = {"intent": dict(raw_intent)}
+            value: dict[str, Any] = {"intent": thaw_json(raw_intent)}
             for key in (
                 "intent_digest",
                 "spec_digest",
@@ -709,7 +711,11 @@ class MollyWebApplication:
             raise WebRequestError(400, "INVALID_FILES", "数据文件列表格式不正确") from None
 
     def _validate_workflow_inputs(
-        self, workflow: str | None, input_artifact_ids: tuple[str, ...]
+        self,
+        workflow: str | None,
+        input_artifact_ids: tuple[str, ...],
+        *,
+        target_property: str | None = None,
     ) -> None:
         if workflow != _SCIENTIFIC_WORKFLOW:
             return
@@ -723,7 +729,7 @@ class MollyWebApplication:
             )
         try:
             _, content = self.service.read_artifact(input_artifact_ids[0])
-            validate_raw_dataset_source(content)
+            validate_raw_dataset_source(content, target_property=target_property)
         except WebRequestError:
             raise
         except Exception as exc:
@@ -772,6 +778,46 @@ class MollyWebApplication:
             )
         return llm_profile_ref.strip(), llm_profile
 
+    def _compile_workflow_intent(
+        self,
+        runtime_profile: Any,
+        *,
+        goal: str,
+        llm_profile_ref: str,
+        llm_profile_digest: str,
+    ) -> Br1Intent:
+        """Compile once through the selected server-owned provider."""
+
+        try:
+            workflow_provider = runtime_profile.create_decision_provider()
+            compiler = getattr(workflow_provider, "compile_intent", None)
+            if callable(compiler):
+                return compiler(
+                    goal,
+                    profile_ref=llm_profile_ref,
+                    profile_digest=llm_profile_digest,
+                )
+            provider = self.provider_store.create_intent_provider(llm_profile_ref)
+            return parse_br1_request(
+                goal,
+                provider=provider,
+                allowed_target_properties=Br1PluginConfig().supported_target_properties,
+                llm_profile_ref=llm_profile_ref,
+                overrides=(
+                    runtime_profile.config.get("spec_overrides", {})
+                    if isinstance(runtime_profile.config, Mapping)
+                    else {}
+                ),
+            )
+        except WebRequestError:
+            raise
+        except Exception as exc:
+            raise WebRequestError(
+                502,
+                "WORKFLOW_PLAN_UNAVAILABLE",
+                "模型服务未能解析任务计划，请检查连接后重试",
+            ) from exc
+
     def _preview_workflow(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         profile_id = payload.get("profile_id")
         goal = payload.get("goal")
@@ -783,7 +829,7 @@ class MollyWebApplication:
         runtime_profile, workflow = self._runtime_profile_for_id(profile_id)
         self._validate_workflow_inputs(workflow, input_artifact_ids)
         llm_ref, llm_profile = self._provider_binding(
-            payload.get("llm_profile_ref"), required=True
+            payload.get("llm_profile_ref"), required=workflow == _SCIENTIFIC_WORKFLOW
         )
         if workflow != _SCIENTIFIC_WORKFLOW:
             return {
@@ -792,25 +838,17 @@ class MollyWebApplication:
                 "preview_token": None,
                 "message": "当前工作流不需要自然语言解析计划",
             }
-        try:
-            provider = self.provider_store.create_intent_provider(llm_ref or "")
-            intent = parse_br1_request(
-                goal.strip(),
-                provider=provider,
-                allowed_target_properties=Br1PluginConfig().supported_target_properties,
-                llm_profile_ref=llm_ref,
-                overrides=(
-                    runtime_profile.config.get("spec_overrides", {})
-                    if isinstance(runtime_profile.config, Mapping)
-                    else {}
-                ),
-            )
-        except Exception as exc:
-            raise WebRequestError(
-                502,
-                "WORKFLOW_PLAN_UNAVAILABLE",
-                "模型服务未能解析任务计划，请检查连接后重试",
-            ) from exc
+        intent = self._compile_workflow_intent(
+            runtime_profile,
+            goal=goal.strip(),
+            llm_profile_ref=llm_ref or "",
+            llm_profile_digest=llm_profile.profile.digest if llm_profile is not None else "",
+        )
+        self._validate_workflow_inputs(
+            workflow,
+            input_artifact_ids,
+            target_property=intent.spec.target_property,
+        )
         token = secrets.token_urlsafe(32)
         with self._preview_lock:
             self._intent_previews[token] = {
@@ -895,22 +933,50 @@ class MollyWebApplication:
         llm_profile_ref = payload.get("llm_profile_ref")
         metadata: dict[str, Any] = {}
         bound_ref, llm_profile = self._provider_binding(
-            llm_profile_ref, required=True
+            llm_profile_ref, required=workflow == _SCIENTIFIC_WORKFLOW
         )
         if bound_ref is not None and llm_profile is not None:
             metadata["llm_profile_ref"] = bound_ref
             metadata["llm_profile_digest"] = llm_profile.profile.digest
-        preview_intent = self._preview_binding_for_start(
-            payload.get("workflow_intent_preview_token"),
-            profile_id=profile_id.strip(),
-            runtime_profile_digest=runtime_profile.digest,
-            workflow=workflow,
-            goal=goal.strip(),
-            input_artifact_ids=input_artifact_ids,
-            llm_profile_ref=bound_ref,
-            llm_profile_digest=(llm_profile.profile.digest if llm_profile is not None else None),
-        )
-        if preview_intent is not None:
+        preview_intent: Mapping[str, Any] | None = None
+        if workflow == _SCIENTIFIC_WORKFLOW:
+            preview_intent = self._preview_binding_for_start(
+                payload.get("workflow_intent_preview_token"),
+                profile_id=profile_id.strip(),
+                runtime_profile_digest=runtime_profile.digest,
+                workflow=workflow,
+                goal=goal.strip(),
+                input_artifact_ids=input_artifact_ids,
+                llm_profile_ref=bound_ref,
+                llm_profile_digest=(llm_profile.profile.digest if llm_profile is not None else None),
+            )
+            if preview_intent is None:
+                intent = self._compile_workflow_intent(
+                    runtime_profile,
+                    goal=goal.strip(),
+                    llm_profile_ref=bound_ref or "",
+                    llm_profile_digest=llm_profile.profile.digest if llm_profile is not None else "",
+                )
+                self._validate_workflow_inputs(
+                    workflow,
+                    input_artifact_ids,
+                    target_property=intent.spec.target_property,
+                )
+                preview_intent = intent.to_dict()
+            else:
+                try:
+                    intent = Br1Intent.from_dict(preview_intent)
+                except Exception as exc:
+                    raise WebRequestError(
+                        409,
+                        "WORKFLOW_PLAN_INVALID",
+                        "执行计划内容无效，请重新解析",
+                    ) from exc
+                self._validate_workflow_inputs(
+                    workflow,
+                    input_artifact_ids,
+                    target_property=intent.spec.target_property,
+                )
             metadata["workflow_intent_preview"] = preview_intent
             metadata["workflow_intent_preview_digest"] = preview_intent.get("intent_digest")
         result = self.service.start_run(
