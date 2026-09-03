@@ -278,7 +278,7 @@ const renderNew = () => {
         </div>
         <div class="card side-card">
           <div class="side-title">密钥安全</div>
-          <p class="side-copy">模型密钥由本机服务器读取，网页不会接收、保存或转发密钥。你只需要在“模型与服务”中管理非敏感配置。</p>
+          <p class="side-copy">模型密钥由本机服务端保存和读取。网页输入后只发送到本机服务端，不写入浏览器存储；模型请求再由本机服务端按已保存的服务配置发送。</p>
         </div>
       </div>
     </div>

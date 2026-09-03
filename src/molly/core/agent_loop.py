@@ -431,25 +431,43 @@ class AgentLoop:
         )
         return decisions, tool_calls, steps
 
-    @classmethod
+    @staticmethod
+    def _effective_hard_limits(request: RunRequest) -> _ServerRunHardLimits:
+        """Apply the strictest limit when resuming a legacy request.
+
+        The removed request-level budget is retained only as a compatibility
+        binding. It must never expand the current server safety ceiling, but a
+        persisted lower value remains part of the authority of that old run.
+        """
+
+        legacy = getattr(request, "_legacy_budget", None)
+        if legacy is None:
+            return SERVER_RUN_HARD_LIMITS
+        return _ServerRunHardLimits(
+            max_decisions=min(SERVER_RUN_HARD_LIMITS.max_decisions, legacy["max_decisions"]),
+            max_tool_calls=min(SERVER_RUN_HARD_LIMITS.max_tool_calls, legacy["max_tool_calls"]),
+            max_steps=min(SERVER_RUN_HARD_LIMITS.max_steps, legacy["max_steps"]),
+        )
+
     def _hard_limit_reason(
-        cls,
+        self,
+        request: RunRequest,
         events: tuple[LedgerEvent, ...],
         *,
         pending_execution: bool = False,
     ) -> tuple[str, tuple[int, int, int]] | None:
-        """Return a server-limit reason without consulting request metadata.
+        """Return a server-limit reason without consulting new request input.
 
         A materialized call already admitted before the cap is allowed to
-        finish, including after approval.  The strict pre-provider check
+        finish, including after approval. The strict pre-provider check
         prevents another model decision or tool materialization; the relaxed
         pending-execution check only rejects legacy/corrupt states that are
-        already over the server ceiling.
+        already over the effective server ceiling.
         """
 
-        counts = cls._counts(events)
+        counts = self._counts(events)
         decisions, tool_calls, steps = counts
-        limits = SERVER_RUN_HARD_LIMITS
+        limits = self._effective_hard_limits(request)
         if pending_execution:
             if decisions > limits.max_decisions:
                 return "server decision safety limit exceeded", counts
@@ -475,6 +493,7 @@ class AgentLoop:
         events = self.ledger.for_run(request.run_id)
         if any(event.event_type == BUDGET_EXHAUSTED for event in events):
             return
+        limits = self._effective_hard_limits(request)
         self._append(
             request,
             BUDGET_EXHAUSTED,
@@ -487,9 +506,9 @@ class AgentLoop:
                     "steps": counts[2],
                 },
                 "server_limits": {
-                    "max_decisions": SERVER_RUN_HARD_LIMITS.max_decisions,
-                    "max_tool_calls": SERVER_RUN_HARD_LIMITS.max_tool_calls,
-                    "max_steps": SERVER_RUN_HARD_LIMITS.max_steps,
+                    "max_decisions": limits.max_decisions,
+                    "max_tool_calls": limits.max_tool_calls,
+                    "max_steps": limits.max_steps,
                 },
             },
         )
@@ -998,7 +1017,9 @@ class AgentLoop:
                 return self._result(request, projection=projection)
 
             if projection.pending_execution is not None:
-                hard_limit = self._hard_limit_reason(events, pending_execution=True)
+                hard_limit = self._hard_limit_reason(
+                    request, events, pending_execution=True
+                )
                 if hard_limit is not None:
                     reason, counts = hard_limit
                     self._append_hard_limit(request, reason, counts)
@@ -1013,7 +1034,7 @@ class AgentLoop:
                     return self._result(request)
                 continue
 
-            hard_limit = self._hard_limit_reason(events)
+            hard_limit = self._hard_limit_reason(request, events)
             if hard_limit is not None:
                 reason, counts = hard_limit
                 self._append_hard_limit(request, reason, counts)

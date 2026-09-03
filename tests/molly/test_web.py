@@ -157,6 +157,11 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     assert "demo" not in content.decode("utf-8").casefold()
     assert "max-decisions" not in content.decode("utf-8")
     assert app.local_session_token in content.decode("utf-8")
+    script = app.static_file("/static/app.js")
+    assert script is not None
+    _, script_content, _ = script
+    assert "网页不会接收" not in script_content.decode("utf-8")
+    assert "只发送到本机服务端" in script_content.decode("utf-8")
 
 
 def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Path) -> None:

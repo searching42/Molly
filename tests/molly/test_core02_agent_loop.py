@@ -331,6 +331,53 @@ def test_legacy_v2_request_and_terminal_are_read_without_digest_drift(tmp_path: 
     assert inspector.inspect_run(raw_request["run_id"]).status == RunStatus.BUDGET_EXHAUSTED.value
 
 
+def test_legacy_active_request_resume_uses_the_lower_persisted_limit(tmp_path: Path) -> None:
+    provider = EndlessProvider()
+    loop, _, _, ledger, _, _, _, policy = _environment(tmp_path, provider=provider)
+    raw_request = {
+        "run_id": "run_legacy_active",
+        "goal": "legacy active request",
+        "input_artifact_ids": [],
+        "tool_policy_digest": policy.digest,
+        "budget": {"max_decisions": 1, "max_tool_calls": 1, "max_steps": 1},
+        "created_at": utc_timestamp(),
+        "metadata": {},
+    }
+    request = RunRequest.from_dict(raw_request)
+    ledger.append(
+        event_id="evt_legacy_active_start",
+        run_id=request.run_id,
+        event_type="RUN_STARTED",
+        status="STARTED",
+        timestamp=request.created_at,
+        metadata={
+            "request": raw_request,
+            "request_digest": request.request_sha256,
+            "policy_digest": policy.digest,
+            "initial_artifact_ids": [],
+        },
+    )
+    ledger.append(
+        event_id="evt_legacy_active_decision",
+        run_id=request.run_id,
+        event_type=DECISION_RECORDED,
+        status="PROPOSED",
+        timestamp=utc_timestamp(),
+        metadata={"action": StopAction("historical decision").to_dict()},
+    )
+
+    result = loop.run(request)
+
+    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
+    assert provider.calls == 0
+    assert len(_events(ledger, TOOL_CALL_MATERIALIZED)) == 0
+    assert _events(ledger, BUDGET_EXHAUSTED)[0].metadata["server_limits"] == {
+        "max_decisions": 1,
+        "max_tool_calls": 1,
+        "max_steps": 1,
+    }
+
+
 def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
     parent = store.put(b"parent", media_type="text/plain")
