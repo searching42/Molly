@@ -37,9 +37,9 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--profile", required=True, dest="profile_id")
     start.add_argument("--goal", required=True)
     start.add_argument("--input-artifact", action="append", default=())
-    start.add_argument("--max-decisions", type=int, default=8)
-    start.add_argument("--max-tool-calls", type=int, default=4)
-    start.add_argument("--max-steps", type=int, default=4)
+    start.add_argument("--max-decisions", type=int, default=12)
+    start.add_argument("--max-tool-calls", type=int, default=8)
+    start.add_argument("--max-steps", type=int, default=8)
     resume = run_commands.add_parser("resume", help="resume an existing run")
     resume.add_argument("run_id")
 
@@ -68,6 +68,25 @@ def _parser() -> argparse.ArgumentParser:
     observe.add_argument("run_id")
     observe.add_argument("--format", choices=("json", "human"), default="human")
     observe.add_argument("--exporter", choices=("json", "otel", "langsmith"), default="json")
+
+    config = commands.add_parser(
+        "config", help="manage server-side settings without exposing secrets to the browser"
+    )
+    config_commands = config.add_subparsers(dest="config_command", required=True)
+    set_key = config_commands.add_parser(
+        "set-key", help="save one provider key through a hidden terminal prompt"
+    )
+    set_key.add_argument("--profile", required=True, dest="profile_ref")
+    remove_key = config_commands.add_parser("remove-key", help="remove one provider key")
+    remove_key.add_argument("--profile", required=True, dest="profile_ref")
+
+    web = commands.add_parser("web", help="start the local Molly browser interface")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument(
+        "--demo",
+        action="store_true",
+        help="enable an explicit deterministic profile for trying the UI",
+    )
     return parser
 
 
@@ -128,6 +147,29 @@ def main(
     errors = stderr or sys.stderr
     try:
         args = _parser().parse_args(argv)
+        if args.command == "config":
+            from getpass import getpass
+
+            from molly.web import ProviderConfigStore
+
+            store = ProviderConfigStore(Path(args.state_root))
+            if args.config_command == "set-key":
+                secret = getpass("Provider key (input hidden): ")
+                store.set_secret(args.profile_ref, secret)
+                output.write("密钥已保存到本机服务器端。\n")
+            elif args.config_command == "remove-key":
+                store.remove_secret(args.profile_ref)
+                output.write("密钥已从本机服务器端移除。\n")
+            else:  # pragma: no cover - argparse choices make this unreachable
+                raise RuntimeError("unsupported config command")
+            return 0
+        if args.command == "web":
+            from molly.web import create_application, serve
+
+            return serve(
+                create_application(Path(args.state_root), demo=args.demo),
+                port=args.port,
+            )
         active_service = service or RuntimeService(
             Path(args.state_root), profiles=RuntimeProfileRegistry()
         )

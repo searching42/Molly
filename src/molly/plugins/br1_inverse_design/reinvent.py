@@ -39,11 +39,14 @@ class ReinventGenerationService:
         )
         model_record = self.store.verify(model_artifact_id)
         model_bytes = self.store.read(model_artifact_id)
+        default_parameters = dict(GenerationConfig().parameters)
+        default_parameters.update(dict(self.config.generation_parameters))
         generation_config = GenerationConfig(
             candidate_count=candidate_count,
             reinvent4_version=self.config.reinvent4_version,
             resource_profile_ref=self.config.generation_profile_ref,
             environment_ref=self.config.environment_ref,
+            parameters=default_parameters,
         )
         stage = self.runtime.generate(
             model_artifact_id,
