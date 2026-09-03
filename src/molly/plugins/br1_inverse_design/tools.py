@@ -139,11 +139,19 @@ def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...
         "additionalProperties": False,
         "properties": {"target_property": target_schema},
     }
-    train_input = preflight_input
+    seed_schema = {"type": "integer", "minimum": 0, "maximum": 2**63 - 1}
+    train_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"target_property": target_schema, "seed": seed_schema},
+    }
     generate_input = {
         "type": "object",
         "additionalProperties": False,
-        "properties": {"candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024}},
+        "properties": {
+            "candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "seed": seed_schema,
+        },
     }
     predict_input = {
         "type": "object",
@@ -203,11 +211,7 @@ def br1_tool_specs(config: Br1PluginConfig | None = None) -> tuple[ToolSpec, ...
             name="br1_train_unimol",
             version="1",
             description="Train a fresh Uni-Mol model from the exact reviewed dataset and preflight.",
-            input_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {"target_property": target_schema},
-            },
+            input_schema=train_input,
             output_schema=_summary_schema({
                 "status": {"type": "string", "enum": ["TRAINED"]},
                 "dataset_artifact_id": _artifact_id_schema(),
@@ -369,6 +373,7 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
             context.input_artifact_ids[0],
             context.input_artifact_ids[1],
             target_property=target,
+            seed=int(context.arguments.get("seed", 42)),
             run_id=context.run_id,
             step_id=context.step_id,
         )
@@ -381,6 +386,7 @@ def register_br1_tools(registry: ToolRegistry, services: Br1Services) -> tuple[T
         outcome = services.generation.run(
             context.input_artifact_ids[0],
             candidate_count=count,
+            seed=int(context.arguments.get("seed", 42)),
             run_id=context.run_id,
             step_id=context.step_id,
         )

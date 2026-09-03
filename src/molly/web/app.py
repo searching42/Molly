@@ -5,11 +5,15 @@ from __future__ import annotations
 from base64 import b64decode
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+import hmac
+import html
+import ipaddress
 import json
 import mimetypes
 import os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import secrets
 import threading
 from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
@@ -56,6 +60,9 @@ MAX_BUDGET_VALUE = 1_000
 # predict, rank) plus a final stop decision.  The UI still lets the operator
 # lower these values explicitly for a smoke run.
 DEFAULT_BUDGET = RunBudget(max_decisions=12, max_tool_calls=8, max_steps=8)
+LOCAL_SESSION_TOKEN_HEADER = "X-Molly-Local-Token"
+LOCAL_SESSION_TOKEN_META = "molly-local-token"
+_ALLOWED_FETCH_SITES = frozenset({"same-origin", "same-site", "none"})
 
 STATUS_LABELS = {
     "NEW": "未开始",
@@ -192,9 +199,16 @@ class MollyWebApplication:
         self.service = service
         self.provider_store = provider_store
         self.static_root = static_root or Path(__file__).with_name("static")
+        self._local_session_token = secrets.token_urlsafe(32)
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="molly-run")
         self._futures: dict[str, Future[Any]] = {}
         self._future_lock = threading.Lock()
+
+    @property
+    def local_session_token(self) -> str:
+        """Return the process-local token used by the browser write surface."""
+
+        return self._local_session_token
 
     def dispatch(
         self,
@@ -228,7 +242,13 @@ class MollyWebApplication:
             "app.js": "text/javascript; charset=utf-8",
             "styles.css": "text/css; charset=utf-8",
         }[name]
-        return 200, candidate.read_bytes(), media_type
+        content = candidate.read_bytes()
+        if name == "index.html":
+            content = content.replace(
+                b"__MOLLY_LOCAL_SESSION_TOKEN__",
+                html.escape(self.local_session_token, quote=True).encode("ascii"),
+            )
+        return 200, content, media_type
 
     def _dispatch(
         self,
@@ -636,7 +656,7 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _send_static(self, status: int, content: bytes, media_type: str) -> None:
         self.send_response(status)
-        self._headers(content_type=media_type, length=len(content), cache="no-cache")
+        self._headers(content_type=media_type, length=len(content), cache="no-store")
         self.end_headers()
         self.wfile.write(content)
 
@@ -654,6 +674,12 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def _read_json(self) -> Mapping[str, Any]:
+        content_types = self.headers.get_all("Content-Type") or []
+        if len(content_types) != 1:
+            raise WebRequestError(415, "JSON_CONTENT_TYPE_REQUIRED", "写请求必须使用 application/json")
+        media_type = content_types[0].split(";", 1)[0].strip().casefold()
+        if media_type != "application/json":
+            raise WebRequestError(415, "JSON_CONTENT_TYPE_REQUIRED", "写请求必须使用 application/json")
         header = self.headers.get("Content-Length")
         try:
             length = int(header) if header is not None else -1
@@ -674,7 +700,85 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
             raise WebRequestError(400, "INVALID_JSON", "请求内容必须是 JSON 对象")
         return value
 
+    @staticmethod
+    def _loopback_hostname(hostname: str) -> bool:
+        clean = str(hostname or "").strip().casefold()
+        if clean == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(clean).is_loopback
+        except ValueError:
+            return False
+
+    def _validate_host(self) -> None:
+        values = self.headers.get_all("Host") or []
+        if len(values) != 1 or not values[0].strip():
+            raise WebRequestError(403, "LOCAL_HOST_REQUIRED", "只允许通过本机 Host 访问")
+        authority = values[0].strip()
+        parsed = None
+        try:
+            parsed = urlsplit("//" + authority)
+            hostname = parsed.hostname or ""
+            _ = parsed.port
+        except ValueError:
+            hostname = ""
+        if (
+            parsed is None
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or not self._loopback_hostname(hostname)
+        ):
+            raise WebRequestError(403, "LOCAL_HOST_REQUIRED", "只允许通过本机 Host 访问")
+
+    def _validate_origin(self) -> None:
+        values = self.headers.get_all("Origin") or []
+        if len(values) != 1 or not values[0].strip():
+            raise WebRequestError(403, "LOCAL_ORIGIN_REQUIRED", "写请求必须来自本机 Origin")
+        try:
+            parsed = urlsplit(values[0].strip())
+            _ = parsed.port
+        except ValueError:
+            parsed = None
+        if (
+            parsed is None
+            or parsed.scheme.casefold() not in {"http", "https"}
+            or not self._loopback_hostname(parsed.hostname or "")
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise WebRequestError(403, "LOCAL_ORIGIN_REQUIRED", "写请求必须来自本机 Origin")
+
+    def _authorize_request(self, *, mutation: bool) -> None:
+        remote_address = self.client_address[0] if self.client_address else ""
+        if not self._loopback_hostname(remote_address):
+            raise WebRequestError(403, "LOCAL_CLIENT_REQUIRED", "只允许本机客户端访问")
+        self._validate_host()
+        if not mutation:
+            return
+        self._validate_origin()
+        fetch_site = self.headers.get("Sec-Fetch-Site", "").strip().casefold()
+        if fetch_site and fetch_site not in _ALLOWED_FETCH_SITES:
+            raise WebRequestError(403, "LOCAL_ORIGIN_REQUIRED", "跨站写请求已拒绝")
+        tokens = self.headers.get_all(LOCAL_SESSION_TOKEN_HEADER) or []
+        if len(tokens) != 1 or not hmac.compare_digest(
+            tokens[0], self.application.local_session_token
+        ):
+            raise WebRequestError(403, "LOCAL_SESSION_REQUIRED", "需要本机会话令牌")
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        try:
+            self._authorize_request(mutation=False)
+        except Exception as exc:
+            status, value = _safe_exception_response(exc)
+            self._send_json(status, value)
+            return
         if self.path.startswith("/api/"):
             parsed = urlsplit(self.path)
             route = [unquote(part) for part in parsed.path.split("/") if part]
@@ -699,6 +803,7 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         try:
+            self._authorize_request(mutation=True)
             payload = self._read_json()
         except Exception as exc:
             status, value = _safe_exception_response(exc)
@@ -746,6 +851,17 @@ def serve(
         raise TypeError("application must be a MollyWebApplication")
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65_535:
         raise ValueError("port must be between 1 and 65535")
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("host must be localhost or a loopback address")
+    host = host.strip()
+    if host.casefold() != "localhost":
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                raise ValueError("host must be a loopback address")
+        except ValueError as exc:
+            if str(exc) == "host must be a loopback address":
+                raise
+            raise ValueError("host must be localhost or a loopback address") from exc
     handler = type(
         "BoundMollyHTTPRequestHandler",
         (MollyHTTPRequestHandler,),
@@ -766,6 +882,8 @@ def serve(
 __all__ = [
     "MAX_REQUEST_BYTES",
     "MAX_UPLOAD_BYTES",
+    "LOCAL_SESSION_TOKEN_HEADER",
+    "LOCAL_SESSION_TOKEN_META",
     "MollyHTTPRequestHandler",
     "MollyWebApplication",
     "STATUS_LABELS",

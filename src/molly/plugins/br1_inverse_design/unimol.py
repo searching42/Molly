@@ -143,6 +143,7 @@ class UniMolTrainingService:
         preflight_artifact_id: str,
         *,
         target_property: str,
+        seed: int = 42,
         run_id: str,
         step_id: str,
     ) -> TrainingOutcome:
@@ -154,6 +155,7 @@ class UniMolTrainingService:
         default_parameters.update(dict(self.config.training_parameters))
         config = TrainingConfig(
             target_property=target_property,
+            seed=seed,
             unimol_version=self.config.unimol_version,
             resource_profile_ref=self.config.training_profile_ref,
             environment_ref=self.config.environment_ref,

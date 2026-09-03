@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 import json
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+import threading
 
 import pytest
 
-from molly.web import ProviderConfigStore, create_application
+from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
 
 
 pytestmark = pytest.mark.acceptance
@@ -153,3 +156,66 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     assert status == 200
     assert media_type.startswith("text/html")
     assert "科学任务工作台" in content.decode("utf-8")
+    assert app.local_session_token in content.decode("utf-8")
+
+
+def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Path) -> None:
+    app = create_application(tmp_path / "runtime")
+    handler = type(
+        "TestMollyHTTPRequestHandler",
+        (MollyHTTPRequestHandler,),
+        {"application": app},
+    )
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    except PermissionError:
+        app.close()
+        pytest.skip("the test environment does not permit local socket binding")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_port
+    host = f"127.0.0.1:{port}"
+    origin = f"http://127.0.0.1:{port}"
+    body = json.dumps({"file_name": "notes.txt", "content_base64": "bG9jYWw="}).encode()
+
+    def post(**overrides: str | None) -> tuple[int, dict[str, object]]:
+        headers = {
+            "Host": host,
+            "Origin": origin,
+            "X-Molly-Local-Token": app.local_session_token,
+            "Content-Type": "application/json",
+        }
+        headers.update({key: value for key, value in overrides.items() if value is not None})
+        connection = HTTPConnection("127.0.0.1", port, timeout=3)
+        try:
+            connection.request("POST", "/api/artifacts", body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+
+    try:
+        status, accepted = post()
+        assert status == 201
+        assert "artifact_id" in accepted
+
+        status, rejected = post(Host="attacker.example")
+        assert status == 403
+        assert rejected["error_type"] == "LOCAL_HOST_REQUIRED"
+
+        status, rejected = post(Origin="https://attacker.example")
+        assert status == 403
+        assert rejected["error_type"] == "LOCAL_ORIGIN_REQUIRED"
+
+        status, rejected = post(**{"X-Molly-Local-Token": "wrong-token"})
+        assert status == 403
+        assert rejected["error_type"] == "LOCAL_SESSION_REQUIRED"
+
+        status, rejected = post(**{"Content-Type": "text/plain"})
+        assert status == 415
+        assert rejected["error_type"] == "JSON_CONTENT_TYPE_REQUIRED"
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+        server.server_close()
+        app.close()

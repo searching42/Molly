@@ -37,6 +37,27 @@ class Br1RemoteError(Br1RuntimeError):
     """A server-owned remote command or transfer failed."""
 
 
+DEFAULT_REMOTE_WALLTIME_SEC = 7_200
+DEFAULT_REMOTE_CONNECT_TIMEOUT_SEC = 15
+REMOTE_KILL_GRACE_SEC = 30
+MAX_REMOTE_WALLTIME_SEC = 604_800
+MAX_REMOTE_CONNECT_TIMEOUT_SEC = 300
+
+
+def _bounded_seconds(
+    constraints: Mapping[str, Any],
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = constraints.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise Br1RemoteError(f"{name} must be an integer in [{minimum}, {maximum}]")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Br1RemoteHost:
     """Non-secret connection and software references for one worker profile."""
@@ -50,7 +71,12 @@ class Br1RemoteHost:
     worker_ref: str = "worker:br1"
     credential_ref: str = "server-material:br1-ssh"
     resource_constraints: Mapping[str, Any] = field(
-        default_factory=lambda: {"cpu_threads": 8, "gpu_count": 1, "walltime_sec": 7_200}
+        default_factory=lambda: {
+            "cpu_threads": 8,
+            "gpu_count": 1,
+            "walltime_sec": DEFAULT_REMOTE_WALLTIME_SEC,
+            "connect_timeout_sec": DEFAULT_REMOTE_CONNECT_TIMEOUT_SEC,
+        }
     )
 
     def __post_init__(self) -> None:
@@ -68,23 +94,94 @@ class Br1RemoteHost:
                 raise Br1RuntimeError(f"{label} is not configured")
         if not self.remote_root.startswith("/") or not self.unimol_python.startswith("/") or not self.reinvent_python.startswith("/") or not self.reinvent_repository.startswith("/"):
             raise Br1RuntimeError("remote paths must be absolute server-owned paths")
-        object.__setattr__(self, "resource_constraints", dict(self.resource_constraints))
+        try:
+            constraints = dict(self.resource_constraints)
+        except (TypeError, ValueError) as exc:
+            raise Br1RuntimeError("resource_constraints must be a mapping") from exc
+        constraints["walltime_sec"] = _bounded_seconds(
+            constraints,
+            "walltime_sec",
+            default=DEFAULT_REMOTE_WALLTIME_SEC,
+            minimum=60,
+            maximum=MAX_REMOTE_WALLTIME_SEC,
+        )
+        constraints["connect_timeout_sec"] = _bounded_seconds(
+            constraints,
+            "connect_timeout_sec",
+            default=DEFAULT_REMOTE_CONNECT_TIMEOUT_SEC,
+            minimum=1,
+            maximum=MAX_REMOTE_CONNECT_TIMEOUT_SEC,
+        )
+        object.__setattr__(self, "resource_constraints", constraints)
 
 
-async def _run_checked_async(argv: Sequence[str]) -> None:
+def _walltime_sec(config: Br1RemoteHost) -> int:
+    return _bounded_seconds(
+        config.resource_constraints,
+        "walltime_sec",
+        default=DEFAULT_REMOTE_WALLTIME_SEC,
+        minimum=60,
+        maximum=MAX_REMOTE_WALLTIME_SEC,
+    )
+
+
+def _connect_timeout_sec(config: Br1RemoteHost) -> int:
+    return _bounded_seconds(
+        config.resource_constraints,
+        "connect_timeout_sec",
+        default=DEFAULT_REMOTE_CONNECT_TIMEOUT_SEC,
+        minimum=1,
+        maximum=MAX_REMOTE_CONNECT_TIMEOUT_SEC,
+    )
+
+
+def _subprocess_timeout_sec(config: Br1RemoteHost) -> int:
+    return _walltime_sec(config) + _connect_timeout_sec(config) + REMOTE_KILL_GRACE_SEC + 5
+
+
+def _connection_options(config: Br1RemoteHost) -> tuple[str, ...]:
+    return (
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "RequestTTY=no",
+        "-o",
+        f"ConnectTimeout={_connect_timeout_sec(config)}",
+        "-o",
+        "ConnectionAttempts=1",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+    )
+
+
+async def _run_checked_async(
+    argv: Sequence[str], *, timeout_sec: int = DEFAULT_REMOTE_WALLTIME_SEC
+) -> None:
     process = await asyncio.create_subprocess_exec(
         *(str(item) for item in argv),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    await process.communicate()
+    try:
+        await asyncio.wait_for(process.communicate(), timeout=float(timeout_sec))
+    except asyncio.TimeoutError as exc:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        await process.communicate()
+        raise RuntimeError("child process exceeded its wall-time limit") from exc
     if process.returncode != 0:
         raise RuntimeError("child process returned a non-zero status")
 
 
-def _run_checked(argv: Sequence[str], *, operation: str) -> None:
+def _run_checked(
+    argv: Sequence[str], *, operation: str, timeout_sec: int = DEFAULT_REMOTE_WALLTIME_SEC
+) -> None:
     try:
-        asyncio.run(_run_checked_async(argv))
+        asyncio.run(_run_checked_async(argv, timeout_sec=timeout_sec))
     except (OSError, RuntimeError) as exc:
         # Remote output is deliberately not persisted or returned.  It may
         # contain private filesystem paths, host details, or credentials.
@@ -93,15 +190,53 @@ def _run_checked(argv: Sequence[str], *, operation: str) -> None:
 
 def _ssh(config: Br1RemoteHost, command: Sequence[str]) -> None:
     rendered = " ".join(shlex.quote(str(item)) for item in command)
-    _run_checked(("ssh", config.ssh_target, "--", rendered), operation="remote command")
+    walltime = _walltime_sec(config)
+    wrapped = (
+        "timeout --signal=TERM --kill-after="
+        + str(REMOTE_KILL_GRACE_SEC)
+        + "s "
+        + shlex.quote(str(walltime))
+        + "s -- "
+        + rendered
+    )
+    _run_checked(
+        (
+            "ssh",
+            "-T",
+            *_connection_options(config),
+            config.ssh_target,
+            "--",
+            wrapped,
+        ),
+        operation="remote command",
+        timeout_sec=_subprocess_timeout_sec(config),
+    )
 
 
 def _scp(config: Br1RemoteHost, source: Path | str, target: str) -> None:
-    _run_checked(("scp", str(source), f"{config.ssh_target}:{target}"), operation="artifact transfer")
+    _run_checked(
+        (
+            "scp",
+            *_connection_options(config),
+            str(source),
+            f"{config.ssh_target}:{target}",
+        ),
+        operation="artifact transfer",
+        timeout_sec=_subprocess_timeout_sec(config),
+    )
 
 
 def _scp_from_remote(config: Br1RemoteHost, source: str, target: Path) -> None:
-    _run_checked(("scp", f"{config.ssh_target}:{source}", str(target)), operation="artifact download")
+    _run_checked(
+        (
+            "scp",
+            *_connection_options(config),
+            f"{config.ssh_target}:{source}",
+            str(target),
+        ),
+        operation="artifact download",
+        timeout_sec=_subprocess_timeout_sec(config),
+    )
 
 
 def _remote_child(root: str, name: str) -> str:

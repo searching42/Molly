@@ -25,6 +25,8 @@ from molly.core.errors import CoreContractError
 from molly.core.ids import canonical_json_bytes
 from molly.plugins.br1_inverse_design import (
     Br1BindingError,
+    Br1RemoteError,
+    Br1RemoteHost,
     Br1Services,
     DatasetGate,
     DeterministicBr1Runtime,
@@ -32,6 +34,7 @@ from molly.plugins.br1_inverse_design import (
     migrate_real_csv,
     register_br1_tools,
 )
+from molly.plugins.br1_inverse_design import remote as remote_module
 
 
 pytestmark = pytest.mark.unit
@@ -269,3 +272,52 @@ def test_br1_production_namespace_has_no_legacy_or_spike_imports() -> None:
             else:
                 continue
             assert not any(name == item or name.startswith(item + ".") for name in names for item in forbidden), path
+
+
+def test_remote_commands_are_noninteractive_and_walltime_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    host = Br1RemoteHost(
+        ssh_target="compute-worker-main",
+        remote_root="/srv/molly-br1",
+        unimol_python="/opt/unimol/bin/python",
+        reinvent_python="/opt/reinvent/bin/python",
+        reinvent_repository="/opt/reinvent/repository",
+        resource_constraints={"walltime_sec": 120, "connect_timeout_sec": 3},
+    )
+    calls: list[tuple[tuple[str, ...], str, int]] = []
+
+    def fake_run(
+        argv: tuple[str, ...], *, operation: str, timeout_sec: int
+    ) -> None:
+        calls.append((argv, operation, timeout_sec))
+
+    monkeypatch.setattr(remote_module, "_run_checked", fake_run)
+    remote_module._ssh(host, ("python", "-c", "print('ok')"))
+    remote_module._scp(host, "/tmp/input.json", "/srv/molly-br1/input.json")
+
+    assert len(calls) == 2
+    ssh_argv, operation, timeout_sec = calls[0]
+    assert operation == "remote command"
+    assert "-T" in ssh_argv
+    assert "BatchMode=yes" in ssh_argv
+    assert "ConnectTimeout=3" in ssh_argv
+    assert "ConnectionAttempts=1" in ssh_argv
+    assert "timeout --signal=TERM --kill-after=30s 120s --" in ssh_argv[-1]
+    assert timeout_sec == 158
+    scp_argv, operation, timeout_sec = calls[1]
+    assert operation == "artifact transfer"
+    assert scp_argv[0] == "scp"
+    assert "BatchMode=yes" in scp_argv
+    assert "ConnectTimeout=3" in scp_argv
+    assert timeout_sec == 158
+
+
+def test_remote_host_rejects_unbounded_timeouts() -> None:
+    with pytest.raises(Br1RemoteError):
+        Br1RemoteHost(
+            ssh_target="compute-worker-main",
+            remote_root="/srv/molly-br1",
+            unimol_python="/opt/unimol/bin/python",
+            reinvent_python="/opt/reinvent/bin/python",
+            reinvent_repository="/opt/reinvent/repository",
+            resource_constraints={"walltime_sec": 1},
+        )

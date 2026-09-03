@@ -196,20 +196,27 @@ ledger events, artifacts, or browser storage.
 ### BR1 real end-to-end run
 
 Normal web mode exposes only worker profiles that are complete and registered
-by the server. Configure a worker before starting Molly; the example uses a
-placeholder SSH alias and must be adjusted to the paths on that host:
+by the server. Configure each worker with its own complete, host-qualified
+environment-variable bundle before starting Molly. Replace `<HOST_ID>` with
+the exact server-registered host identifier and adjust the paths for that host:
 
 ```bash
-export MOLLY_BR1_SSH_TARGET=worker-alias
-export MOLLY_BR1_REMOTE_ROOT=/srv/molly/br1
-export MOLLY_BR1_UNIMOL_PYTHON=/opt/unimol/bin/python
-export MOLLY_BR1_REINVENT_PYTHON=/opt/reinvent/bin/python
-export MOLLY_BR1_REINVENT_REPOSITORY=/opt/REINVENT4
+# Replace <HOST_ID> with the exact registered identifier in each name:
+# MOLLY_BR1_<HOST_ID>_SSH_TARGET=worker-alias
+# MOLLY_BR1_<HOST_ID>_REMOTE_ROOT=/srv/molly/br1
+# MOLLY_BR1_<HOST_ID>_UNIMOL_PYTHON=/opt/unimol/bin/python
+# MOLLY_BR1_<HOST_ID>_REINVENT_PYTHON=/opt/reinvent/bin/python
+# MOLLY_BR1_<HOST_ID>_REINVENT_REPOSITORY=/opt/REINVENT4
 
 PYTHONPATH=src .venv/bin/python -c \
   'from molly.cli import main; raise SystemExit(main())' \
   --state-root .molly web
 ```
+
+The unqualified `MOLLY_BR1_SSH_TARGET`, `MOLLY_BR1_REMOTE_ROOT`, and related
+variables are ignored. Do not reuse one host's SSH target under another
+host's identity; each registered worker must resolve to its own target and
+provenance.
 
 In the browser, upload the OE62 JSON/CSV file, enter the target and Top-N
 request in natural language, choose the registered CPU/GPU profile, and

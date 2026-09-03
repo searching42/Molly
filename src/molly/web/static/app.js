@@ -16,6 +16,7 @@ const state = {
 const content = document.getElementById("app-content");
 const topbarContext = document.getElementById("topbar-context");
 const toast = document.getElementById("toast");
+const localSessionToken = document.querySelector('meta[name="molly-local-token"]')?.content || "";
 
 const html = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
@@ -63,9 +64,11 @@ const operationLabel = (toolName) => operationLabels[toolName] || "系统操作"
 const executionLabel = (status) => executionLabels[status] || "处理中";
 
 const request = async (path, options = {}) => {
+  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  headers["X-Molly-Local-Token"] = localSessionToken;
   const response = await fetch(path, {
     ...options,
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
+    headers,
   });
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.message || "操作没有完成");

@@ -44,11 +44,13 @@ def configured_br1_profiles(
     for number in (1, 2):
         host_name = "workstation" + str(number)
         prefix = "MOLLY_BR1_" + host_name.upper() + "_"
-        ssh_target = _first(values, prefix + "SSH_TARGET", "MOLLY_BR1_SSH_TARGET")
-        remote_root = _first(values, prefix + "REMOTE_ROOT", "MOLLY_BR1_REMOTE_ROOT")
-        unimol_python = _first(values, prefix + "UNIMOL_PYTHON", "MOLLY_BR1_UNIMOL_PYTHON")
-        reinvent_python = _first(values, prefix + "REINVENT_PYTHON", "MOLLY_BR1_REINVENT_PYTHON")
-        reinvent_repository = _first(values, prefix + "REINVENT_REPOSITORY", "MOLLY_BR1_REINVENT_REPOSITORY")
+        # Every host must provide its own complete bundle.  Falling back to a
+        # shared target would clone one SSH endpoint into multiple identities.
+        ssh_target = _first(values, prefix + "SSH_TARGET")
+        remote_root = _first(values, prefix + "REMOTE_ROOT")
+        unimol_python = _first(values, prefix + "UNIMOL_PYTHON")
+        reinvent_python = _first(values, prefix + "REINVENT_PYTHON")
+        reinvent_repository = _first(values, prefix + "REINVENT_REPOSITORY")
         if not all((ssh_target, remote_root, unimol_python, reinvent_python, reinvent_repository)):
             continue
         try:

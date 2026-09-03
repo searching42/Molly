@@ -10,6 +10,7 @@ import time
 import pytest
 
 from molly.core.artifacts import ArtifactStore
+from molly.core.ledger import RunLedger
 from molly.plugins.br1_inverse_design import (
     Br1PluginConfig,
     DatasetGate,
@@ -47,7 +48,7 @@ def _raw_oe62() -> bytes:
 
 def test_natural_language_compiles_to_the_requested_br1_spec() -> None:
     intent = parse_br1_request(
-        "以 HOMO-LUMO gap 为目标，不限制骨架，采样空间为1000，筛选 HOMO-LUMO gap 较小的分子，最终输出 top 5，在 workstation 2 上执行"
+        "以 HOMO-LUMO gap 为目标，不限制骨架，采样空间为1000，筛选 HOMO-LUMO gap 较小的分子，最终输出 top 5，随机种子为7，在 workstation 2 上执行"
     )
 
     assert intent.spec.target_property == "homo_lumo_gap"
@@ -55,6 +56,7 @@ def test_natural_language_compiles_to_the_requested_br1_spec() -> None:
     assert intent.spec.candidate_count == 1000
     assert intent.spec.top_n == 5
     assert intent.spec.scaffold_constraint == "NONE"
+    assert intent.spec.seed == 7
     assert intent.spec.host_preference == _WORKSTATION_TWO
 
 
@@ -99,6 +101,18 @@ def test_configured_worker_profiles_are_server_owned(tmp_path: Path) -> None:
     assert all("ssh_target" not in profile.config for profile in profiles)
 
 
+def test_generic_worker_variables_do_not_clone_one_target_across_hosts(tmp_path: Path) -> None:
+    values = {
+        "MOLLY_BR1_SSH_TARGET": "shared-worker-alias",
+        "MOLLY_BR1_REMOTE_ROOT": "/srv/molly-br1",
+        "MOLLY_BR1_UNIMOL_PYTHON": "/opt/unimol/bin/python",
+        "MOLLY_BR1_REINVENT_PYTHON": "/opt/reinvent/bin/python",
+        "MOLLY_BR1_REINVENT_REPOSITORY": "/opt/reinvent/repository",
+    }
+
+    assert configured_br1_profiles(tmp_path / "runtime", environ=values) == ()
+
+
 def test_browser_br1_flow_resumes_background_turns_and_exposes_top_n(tmp_path: Path) -> None:
     root = tmp_path / "runtime"
     profile = br1_profile(
@@ -129,7 +143,7 @@ def test_browser_br1_flow_resumes_background_turns_and_exposes_top_n(tmp_path: P
             "/api/runs",
             {
                 "profile_id": "profile:br1-test",
-                "goal": "以 HOMO-LUMO gap 为目标，不限制骨架，采样空间为8，筛选较小的分子，最终输出 top 3",
+                "goal": "以 HOMO-LUMO gap 为目标，不限制骨架，采样空间为8，筛选较小的分子，最终输出 top 3，随机种子为7",
                 "input_artifact_ids": [uploaded["artifact_id"]],
                 "budget": {"max_decisions": 12, "max_tool_calls": 8, "max_steps": 8},
             },
@@ -183,6 +197,22 @@ def test_browser_br1_flow_resumes_background_turns_and_exposes_top_n(tmp_path: P
         top_n = json.loads(service.read_artifact(top_n_id)[1].decode("utf-8"))
         assert len(top_n["rows"]) == 3
         assert top_n["target_property"] == "homo_lumo_gap"
+        ledger = RunLedger(root / "events.jsonl")
+        successes = {
+            event.tool_name: event
+            for event in ledger.for_run(started["run_id"])
+            if event.event_type == "TOOL_EXECUTION_SUCCEEDED" and event.tool_name
+        }
+        training_report = json.loads(
+            service.read_artifact(successes["br1_train_unimol"].output_artifact_ids[1])[1]
+            .decode("utf-8")
+        )
+        generation_report = json.loads(
+            service.read_artifact(successes["br1_generate_reinvent4"].output_artifact_ids[1])[1]
+            .decode("utf-8")
+        )
+        assert training_report["seed"] == 7
+        assert generation_report["seed"] == 7
     finally:
         app.close()
 
@@ -225,7 +255,8 @@ def test_browser_br1_rejection_stops_without_reproposing_the_stage(tmp_path: Pat
             },
         )
         assert rejected["inspection"]["background_pending"] is True
-        for _ in range(50):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             _, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
             if not detail["background_pending"]:
                 break
@@ -233,7 +264,8 @@ def test_browser_br1_rejection_stops_without_reproposing_the_stage(tmp_path: Pat
 
         _, resumed = app.dispatch("POST", f"/api/runs/{started['run_id']}/resume", {})
         assert resumed["inspection"]["background_pending"] is True
-        for _ in range(50):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             _, detail = app.dispatch("GET", f"/api/runs/{started['run_id']}")
             if not detail["background_pending"]:
                 break

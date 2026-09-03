@@ -153,14 +153,14 @@ class Br1WorkflowProvider(DecisionProvider):
         if model_id is None:
             return ToolCallProposal(
                 "br1_train_unimol",
-                arguments={"target_property": spec.target_property},
+                arguments={"target_property": spec.target_property, "seed": spec.seed},
                 input_artifact_ids=(dataset_id, preflight_id),
                 reason_summary="用当前数据集从头训练 Uni-Mol 回归模型",
             )
         if candidate_id is None:
             return ToolCallProposal(
                 "br1_generate_reinvent4",
-                arguments={"candidate_count": spec.candidate_count},
+                arguments={"candidate_count": spec.candidate_count, "seed": spec.seed},
                 input_artifact_ids=(model_id,),
                 reason_summary=f"使用 REINVENT4 生成 {spec.candidate_count} 个无骨架限制候选",
             )
