@@ -10,7 +10,6 @@ import pytest
 
 from molly.core import (
     ArtifactStore,
-    RunBudget,
     SideEffectClass,
     StopAction,
     ToolCallProposal,
@@ -95,7 +94,6 @@ def test_cli_inspect_json_is_canonical_and_read_only(tmp_path: Path) -> None:
     result = service.start_run(
         profile_id=profile.profile_id,
         goal="CLI inspection",
-        budget=RunBudget(max_decisions=3, max_tool_calls=2, max_steps=2),
     )
     events_path = tmp_path / "runtime" / "events.jsonl"
     before = events_path.read_bytes()
@@ -125,7 +123,6 @@ def test_cli_approval_derives_exact_pending_call_and_does_not_reinvoke_provider(
     waiting = service.start_run(
         profile_id=profile.profile_id,
         goal="CLI approval",
-        budget=RunBudget(max_decisions=3, max_tool_calls=2, max_steps=2),
     )
     assert waiting.status == "WAITING_APPROVAL"
     stdout, stderr = StringIO(), StringIO()

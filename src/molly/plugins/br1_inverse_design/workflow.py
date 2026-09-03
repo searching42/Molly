@@ -40,14 +40,16 @@ class Br1WorkflowProvider(DecisionProvider):
     The provider never trusts an in-memory call counter.  On every turn it
     reads the current run ledger and artifact metadata, which makes a resumed
     web process select the same next stage without replaying training or
-    generation.  Its goal is only an input to the deterministic intent parser;
-    all execution identity and host authority remain in Core and the profile.
+    generation.  Its goal is sent to a server-owned structured LLM intent
+    provider; all execution identity and host authority remain in Core and
+    the profile.
     """
 
     store: ArtifactStore
     ledger: RunLedger
     config: Br1PluginConfig = Br1PluginConfig()
     default_overrides: Mapping[str, Any] | None = None
+    intent_provider_resolver: Callable[[str], Any] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, ArtifactStore):
@@ -57,9 +59,35 @@ class Br1WorkflowProvider(DecisionProvider):
         if not isinstance(self.config, Br1PluginConfig):
             raise TypeError("Br1WorkflowProvider requires a Br1PluginConfig")
         object.__setattr__(self, "default_overrides", dict(self.default_overrides or {}))
+        if self.intent_provider_resolver is not None and not callable(
+            self.intent_provider_resolver
+        ):
+            raise TypeError("Br1WorkflowProvider intent provider resolver must be callable")
 
-    def _intent(self, goal: str) -> Br1Intent:
-        return parse_br1_request(goal, overrides=self.default_overrides)
+    def _intent(self, context: Any) -> Br1Intent:
+        metadata = getattr(context, "request_metadata", {})
+        profile_ref = metadata.get("llm_profile_ref") if isinstance(metadata, Mapping) else None
+        profile_digest = metadata.get("llm_profile_digest") if isinstance(metadata, Mapping) else None
+        if not isinstance(profile_ref, str) or not profile_ref:
+            raise Br1Error("BR1 requires a selected structured LLM intent profile")
+        if self.intent_provider_resolver is None:
+            raise Br1Error("BR1 structured LLM intent provider is not configured")
+        try:
+            provider = self.intent_provider_resolver(profile_ref)
+        except Exception as exc:
+            raise Br1Error("BR1 structured LLM intent provider is unavailable") from exc
+        if profile_digest is not None:
+            provider_profile = getattr(provider, "profile", None)
+            actual_digest = getattr(provider_profile, "digest", None)
+            if actual_digest != profile_digest:
+                raise Br1Error("BR1 structured LLM intent profile changed during the run")
+        return parse_br1_request(
+            context.goal,
+            provider=provider,
+            allowed_target_properties=self.config.supported_target_properties,
+            llm_profile_ref=profile_ref,
+            overrides=self.default_overrides,
+        )
 
     def _success_artifact(self, run_id: str, tool_name: str, schema_name: str) -> str | None:
         found: str | None = None
@@ -103,7 +131,7 @@ class Br1WorkflowProvider(DecisionProvider):
         return latest
 
     def next_action(self, context: Any, _model_visible_tools: Any) -> Any:
-        intent = self._intent(context.goal)
+        intent = self._intent(context)
         spec = intent.spec
         if spec.target_property not in self.config.supported_target_properties:
             raise Br1Error(f"unsupported BR1 target property: {spec.target_property}")
@@ -193,6 +221,7 @@ def br1_profile(
     runtime_factory: Callable[[ArtifactStore, RunLedger], Any] | None = None,
     config: Mapping[str, Any] | None = None,
     spec_overrides: Mapping[str, Any] | None = None,
+    intent_provider_resolver: Callable[[str], Any] | None = None,
 ) -> RuntimeProfile:
     """Assemble one closed runtime profile around the production BR1 plugin."""
 
@@ -233,6 +262,7 @@ def br1_profile(
             ledger,
             config=configured,
             default_overrides=spec_overrides,
+            intent_provider_resolver=intent_provider_resolver,
         )
 
     profile_config = {

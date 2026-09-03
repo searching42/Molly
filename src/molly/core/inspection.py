@@ -14,7 +14,6 @@ from typing import Any
 from .agent_loop import (
     APPROVAL_RECORDED,
     APPROVAL_REQUIRED,
-    BUDGET_EXHAUSTED,
     DECISION_RECORDED,
     REVIEW_REQUESTED,
     RUN_FAILED,
@@ -45,7 +44,7 @@ from .runs import RunRequest, RunStatus
 from .tools import MAX_TOOL_RESULT_DATA_BYTES, MaterializedToolCall
 
 
-_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED})
+_TERMINAL_RUN_EVENTS = frozenset({RUN_STOPPED, RUN_FAILED})
 _CALL_EVENT_TYPES = frozenset(
     {
         TOOL_CALL_MATERIALIZED,
@@ -638,7 +637,6 @@ class RunInspector:
             return {
                 RUN_STOPPED: RunStatus.STOPPED.value,
                 RUN_FAILED: RunStatus.FAILED.value,
-                BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED.value,
             }[terminal[-1].event_type]
         if any(
             event.event_type == TOOL_EXECUTION_STARTED

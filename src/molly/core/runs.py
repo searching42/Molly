@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
-from .errors import BudgetError, CoreContractError, RunBindingError
+from .errors import CoreContractError, RunBindingError
 from .ids import (
     canonical_json_bytes,
     freeze_json_mapping,
@@ -30,54 +30,6 @@ def _bare_digest(value: str, *, field: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class RunBudget:
-    """Small immutable limits reconstructed from the RunLedger."""
-
-    max_decisions: int = 8
-    max_tool_calls: int = 4
-    max_steps: int = 4
-
-    def __post_init__(self) -> None:
-        for name in ("max_decisions", "max_tool_calls", "max_steps"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise BudgetError(f"{name} must be a non-negative integer")
-
-    def to_dict(self) -> dict[str, int]:
-        return {
-            "max_decisions": self.max_decisions,
-            "max_tool_calls": self.max_tool_calls,
-            "max_steps": self.max_steps,
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "RunBudget":
-        if not isinstance(value, Mapping):
-            raise BudgetError("budget must be a JSON object")
-        try:
-            return cls(
-                max_decisions=value["max_decisions"],
-                max_tool_calls=value["max_tool_calls"],
-                max_steps=value["max_steps"],
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise BudgetError("budget is malformed") from exc
-
-    def remaining(
-        self,
-        *,
-        decisions: int,
-        tool_calls: int,
-        steps: int,
-    ) -> "RunBudget":
-        return RunBudget(
-            max_decisions=max(0, self.max_decisions - decisions),
-            max_tool_calls=max(0, self.max_tool_calls - tool_calls),
-            max_steps=max(0, self.max_steps - steps),
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class RunRequest:
     """An immutable, canonical request bound to one server-owned run ID."""
 
@@ -85,7 +37,6 @@ class RunRequest:
     goal: str = ""
     input_artifact_ids: tuple[str, ...] = ()
     tool_policy_digest: str = ""
-    budget: RunBudget = field(default_factory=RunBudget)
     created_at: str = field(default_factory=utc_timestamp)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -105,10 +56,6 @@ class RunRequest:
             "tool_policy_digest",
             _bare_digest(self.tool_policy_digest, field="tool_policy_digest"),
         )
-        if isinstance(self.budget, Mapping):
-            object.__setattr__(self, "budget", RunBudget.from_dict(self.budget))
-        elif not isinstance(self.budget, RunBudget):
-            raise BudgetError("budget must be a RunBudget")
         object.__setattr__(
             self,
             "created_at",
@@ -126,7 +73,6 @@ class RunRequest:
         *,
         goal: str,
         tool_policy_digest: str,
-        budget: RunBudget,
         input_artifact_ids: tuple[str, ...] = (),
         metadata: Mapping[str, Any] | None = None,
         created_at: str | None = None,
@@ -136,7 +82,6 @@ class RunRequest:
         return cls(
             goal=goal,
             tool_policy_digest=tool_policy_digest,
-            budget=budget,
             input_artifact_ids=input_artifact_ids,
             metadata={} if metadata is None else metadata,
             created_at=created_at or utc_timestamp(),
@@ -148,7 +93,6 @@ class RunRequest:
             "goal": self.goal,
             "input_artifact_ids": list(self.input_artifact_ids),
             "tool_policy_digest": self.tool_policy_digest,
-            "budget": self.budget.to_dict(),
             "created_at": self.created_at,
             "metadata": thaw_json(self.metadata),
         }
@@ -182,7 +126,6 @@ class RunRequest:
                 goal=str(value["goal"]),
                 input_artifact_ids=tuple(value.get("input_artifact_ids", ())),
                 tool_policy_digest=str(value["tool_policy_digest"]),
-                budget=RunBudget.from_dict(value["budget"]),
                 created_at=str(value["created_at"]),
                 metadata=dict(value.get("metadata", {})),
             )
@@ -199,11 +142,10 @@ class RunStatus(str, Enum):
     INTERRUPTED = "INTERRUPTED"
     STOPPED = "STOPPED"
     FAILED = "FAILED"
-    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 
 
 TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.STOPPED.value, RunStatus.FAILED.value, RunStatus.BUDGET_EXHAUSTED.value}
+    {RunStatus.STOPPED.value, RunStatus.FAILED.value}
 )
 
 
@@ -214,8 +156,8 @@ class RunContext:
     run_id: str
     goal: str
     visible_artifact_ids: tuple[str, ...]
-    remaining_budget: RunBudget
     initial_artifact_ids: tuple[str, ...] = ()
+    request_metadata: Mapping[str, Any] = field(default_factory=dict)
     recent_events: tuple[Mapping[str, Any], ...] = ()
     previous_tool_outcome: Mapping[str, Any] | None = None
 
@@ -233,8 +175,11 @@ class RunContext:
             "initial_artifact_ids",
             validate_artifact_ids(self.initial_artifact_ids, field="initial_artifact_ids"),
         )
-        if not isinstance(self.remaining_budget, RunBudget):
-            raise BudgetError("context remaining_budget must be a RunBudget")
+        object.__setattr__(
+            self,
+            "request_metadata",
+            freeze_json_mapping(self.request_metadata, field="request metadata"),
+        )
         object.__setattr__(
             self,
             "recent_events",
@@ -253,7 +198,7 @@ class RunContext:
             "goal": self.goal,
             "visible_artifact_ids": list(self.visible_artifact_ids),
             "initial_artifact_ids": list(self.initial_artifact_ids),
-            "remaining_budget": self.remaining_budget.to_dict(),
+            "request_metadata": thaw_json(self.request_metadata),
             "recent_events": thaw_json(self.recent_events),
             "previous_tool_outcome": thaw_json(self.previous_tool_outcome),
         }
@@ -266,7 +211,6 @@ class RunResult:
     run_id: str
     status: str | RunStatus
     visible_artifact_ids: tuple[str, ...]
-    remaining_budget: RunBudget
     last_event_id: str | None = None
     pending_call: Mapping[str, Any] | None = None
     message: str = ""
@@ -282,8 +226,6 @@ class RunResult:
             "visible_artifact_ids",
             validate_artifact_ids(self.visible_artifact_ids, field="visible_artifact_ids"),
         )
-        if not isinstance(self.remaining_budget, RunBudget):
-            raise BudgetError("result remaining_budget must be a RunBudget")
         if self.last_event_id is not None:
             validate_identifier(self.last_event_id, field="last_event_id")
         if self.pending_call is not None:
@@ -302,7 +244,6 @@ class RunResult:
             "run_id": self.run_id,
             "status": self.status,
             "visible_artifact_ids": list(self.visible_artifact_ids),
-            "remaining_budget": self.remaining_budget.to_dict(),
             "last_event_id": self.last_event_id,
             "pending_call": thaw_json(self.pending_call),
             "message": self.message,

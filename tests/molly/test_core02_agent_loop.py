@@ -23,7 +23,6 @@ from molly.core import (
     RelationType,
     RequestReviewAction,
     RunBindingError,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStateError,
@@ -43,7 +42,6 @@ from molly.core import (
 from molly.core.agent_loop import (
     APPROVAL_RECORDED,
     APPROVAL_REQUIRED,
-    BUDGET_EXHAUSTED,
     DECISION_RECORDED,
     TOOL_CALL_MATERIALIZED,
     TOOL_CALL_REJECTED,
@@ -137,7 +135,6 @@ def _environment(
     request = RunRequest.create(
         goal="run deterministic CORE-02 fixture",
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=8, max_tool_calls=4, max_steps=4),
     )
     return loop, request, store, ledger, lineage, registry, spec, policy
 
@@ -173,7 +170,6 @@ def test_run_request_is_server_owned_digest_bound_and_restartable(tmp_path: Path
         goal="changed goal",
         input_artifact_ids=request.input_artifact_ids,
         tool_policy_digest=request.tool_policy_digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -186,7 +182,6 @@ def test_run_request_is_server_owned_digest_bound_and_restartable(tmp_path: Path
         goal=request.goal,
         input_artifact_ids=request.input_artifact_ids,
         tool_policy_digest=other_policy.digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -297,7 +292,6 @@ def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: 
         goal=request.goal,
         input_artifact_ids=(parent.artifact_id,),
         tool_policy_digest=request.tool_policy_digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -372,7 +366,6 @@ def test_parameterized_output_changes_with_materialized_arguments(tmp_path: Path
         request = RunRequest.create(
             goal=f"multiply {value}",
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=2, max_tool_calls=2, max_steps=2),
         )
         assert loop.run(request).status == RunStatus.ACTIVE.value
 
@@ -608,7 +601,6 @@ def test_artifact_visibility_is_run_scoped_and_explicit_cross_run_inputs_work(
         goal=explicit_request.goal,
         input_artifact_ids=(external.artifact_id,),
         tool_policy_digest=policy.digest,
-        budget=explicit_request.budget,
         created_at=explicit_request.created_at,
         metadata=explicit_request.metadata,
     )
@@ -632,7 +624,10 @@ def test_identical_outputs_across_runs_keep_distinct_occurrences(tmp_path: Path)
 
     requests = []
     for run_name in ("A", "B"):
-        provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
+        provider = ScriptedProvider(
+            ToolCallProposal("emit", {"value": 1}),
+            StopAction("done"),
+        )
         loop = AgentLoop(
             store=store,
             ledger=ledger,
@@ -644,10 +639,9 @@ def test_identical_outputs_across_runs_keep_distinct_occurrences(tmp_path: Path)
         request = RunRequest.create(
             goal=f"run {run_name}",
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=1, max_tool_calls=1, max_steps=1),
         )
         requests.append(request)
-        assert loop.run(request).status == RunStatus.BUDGET_EXHAUSTED.value
+        assert loop.run(request).status == RunStatus.STOPPED.value
 
     successes = _events(ledger, TOOL_EXECUTION_SUCCEEDED)
     assert len(successes) == 2
@@ -850,36 +844,34 @@ def test_interrupted_started_call_stops_without_reexecution(tmp_path: Path) -> N
     assert not _events(ledger, TOOL_EXECUTION_SUCCEEDED)
 
 
-def test_budget_is_reconstructed_after_restart(tmp_path: Path) -> None:
-    provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
-    loop, request, store, ledger, lineage, registry, _, policy = _environment(
+def test_run_continues_until_provider_stops(tmp_path: Path) -> None:
+    provider = ScriptedProvider(
+        ToolCallProposal("emit", {"value": 1}),
+        StopAction("done"),
+    )
+    loop, request, _, ledger, _, _, _, _ = _environment(
         tmp_path, provider=provider
     )
-    request = RunRequest(
-        run_id=request.run_id,
-        goal=request.goal,
-        input_artifact_ids=(),
-        tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=1, max_tool_calls=1, max_steps=1),
-        created_at=request.created_at,
-    )
-    result = loop.run(request)
-    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
-    assert result.remaining_budget == RunBudget(0, 0, 0)
-    assert len(_events(ledger, BUDGET_EXHAUSTED)) == 1
 
-    resumed_provider = ScriptedProvider(StopAction("must not run"))
-    resumed = AgentLoop(
-        store=ArtifactStore(store.root),
-        ledger=RunLedger(ledger.path),
-        lineage=ArtifactLineage(lineage.path),
-        registry=registry,
-        policy=policy,
-        decision_provider=resumed_provider,
-    ).run(request)
-    assert resumed.status == RunStatus.BUDGET_EXHAUSTED.value
-    assert resumed.remaining_budget == RunBudget(0, 0, 0)
-    assert resumed_provider.calls == 0
+    result = loop.run(request)
+
+    assert result.status == RunStatus.STOPPED.value
+    assert set(request.to_dict()) == {
+        "run_id",
+        "goal",
+        "input_artifact_ids",
+        "tool_policy_digest",
+        "created_at",
+        "metadata",
+    }
+    assert set(result.to_dict()) == {
+        "run_id",
+        "status",
+        "visible_artifact_ids",
+        "last_event_id",
+        "pending_call",
+        "message",
+    }
 
 
 def test_stop_review_and_unknown_actions_are_closed(tmp_path: Path) -> None:

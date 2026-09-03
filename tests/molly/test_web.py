@@ -17,66 +17,6 @@ from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_appli
 pytestmark = pytest.mark.acceptance
 
 
-def test_demo_web_flow_exposes_core_state_and_exact_confirmation(tmp_path: Path) -> None:
-    app = create_application(tmp_path / "runtime", demo=True)
-
-    status, bootstrap = app.dispatch("GET", "/api/bootstrap")
-    assert status == 200
-    assert bootstrap["runtime_profiles"][0]["name"] == "本地演示"
-    assert "provider_secrets" not in json.dumps(bootstrap, ensure_ascii=False)
-
-    status, started = app.dispatch(
-        "POST",
-        "/api/runs",
-        {
-            "profile_id": "profile:web-demo",
-            "goal": "体验一遍本地任务流程",
-            "budget": {"max_decisions": 4, "max_tool_calls": 2, "max_steps": 2},
-        },
-    )
-    assert status == 201
-    assert started["status"] == "WAITING_APPROVAL"
-    pending = started["inspection"]["pending_call"]
-    assert pending["tool_name"] == "create_demo_result"
-
-    status, approved = app.dispatch(
-        "POST",
-        f"/api/runs/{started['run_id']}/approval",
-        {
-            "decision": "APPROVED",
-            "reviewer_ref": "local-user",
-            "call_id": pending["call_id"],
-        },
-    )
-    assert status == 200
-    assert approved["approval"]["decision"] == "APPROVED"
-    assert approved["result"]["status"] == "ACTIVE"
-
-    status, finished = app.dispatch(
-        "POST",
-        f"/api/runs/{started['run_id']}/resume",
-        {},
-    )
-    assert status == 200
-    assert finished["status"] == "STOPPED"
-    assert finished["inspection"]["status_label"] == "已完成"
-    assert finished["inspection"]["final_artifact_ids"]
-
-    status, observed = app.dispatch(
-        "POST",
-        f"/api/runs/{started['run_id']}/observe",
-        {"exporter": "json"},
-    )
-    assert status == 200
-    assert observed["status"] == "EXPORTED"
-    assert observed["trace"]["run_id"] == started["run_id"]
-
-    status, runs = app.dispatch("GET", "/api/runs")
-    assert status == 200
-    assert len(runs["runs"]) == 1
-    assert runs["runs"][0]["status_label"] == "已完成"
-
-
 def test_provider_settings_are_non_secret_in_browser_and_secret_is_server_only(
     tmp_path: Path,
 ) -> None:
@@ -97,16 +37,24 @@ def test_provider_settings_are_non_secret_in_browser_and_secret_is_server_only(
     assert saved["profile"]["credential_status"] == "未配置"
     assert "secret" not in json.dumps(saved, ensure_ascii=False).lower()
 
-    app.provider_store.set_secret("provider:test", "server-only-secret")
+    status, credential = app.dispatch(
+        "POST",
+        "/api/model-profiles/provider:test/credential",
+        {"api_key": "browser-supplied-secret"},
+    )
+    assert status == 200
+    assert credential["credential_configured"] is True
+    assert "browser-supplied-secret" not in json.dumps(credential, ensure_ascii=False)
+
     status, profiles = app.dispatch("GET", "/api/model-profiles")
     assert status == 200
     assert profiles["profiles"][0]["credential_configured"] is True
-    assert "server-only-secret" not in json.dumps(profiles, ensure_ascii=False)
+    assert "browser-supplied-secret" not in json.dumps(profiles, ensure_ascii=False)
 
     status, checked = app.dispatch("POST", "/api/model-profiles/provider:test/check", {})
     assert status == 200
     assert checked["ready"] is True
-    assert "server-only-secret" not in json.dumps(checked, ensure_ascii=False)
+    assert "browser-supplied-secret" not in json.dumps(checked, ensure_ascii=False)
 
     status, rejected = app.dispatch(
         "POST",
@@ -156,6 +104,9 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     assert status == 200
     assert media_type.startswith("text/html")
     assert "科学任务工作台" in content.decode("utf-8")
+    assert "Molly" not in content.decode("utf-8")
+    assert "demo" not in content.decode("utf-8").casefold()
+    assert "max-decisions" not in content.decode("utf-8")
     assert app.local_session_token in content.decode("utf-8")
 
 
@@ -182,7 +133,7 @@ def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Pa
         headers = {
             "Host": host,
             "Origin": origin,
-            "X-Molly-Local-Token": app.local_session_token,
+            "X-Local-Session-Token": app.local_session_token,
             "Content-Type": "application/json",
         }
         headers.update({key: value for key, value in overrides.items() if value is not None})
@@ -207,7 +158,7 @@ def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Pa
         assert status == 403
         assert rejected["error_type"] == "LOCAL_ORIGIN_REQUIRED"
 
-        status, rejected = post(**{"X-Molly-Local-Token": "wrong-token"})
+        status, rejected = post(**{"X-Local-Session-Token": "wrong-token"})
         assert status == 403
         assert rejected["error_type"] == "LOCAL_SESSION_REQUIRED"
 

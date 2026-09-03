@@ -18,7 +18,7 @@ import threading
 from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
-from molly.core import ApprovalDecision, ReviewDecision, RunBudget
+from molly.core import ApprovalDecision, ReviewDecision
 from molly.core.errors import (
     ArtifactError,
     ApprovalError,
@@ -44,7 +44,6 @@ from molly.runtime import (
     RuntimeStateError,
 )
 
-from .demo import demo_profile
 from .providers import ProviderConfigError, ProviderConfigStore
 from .runtime_profiles import configured_br1_profiles
 
@@ -55,13 +54,8 @@ from .runtime_profiles import configured_br1_profiles
 # changing the artifact contract.
 MAX_UPLOAD_BYTES = 128 * 1024 * 1024
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
-MAX_BUDGET_VALUE = 1_000
-# A BR1 run has six bounded tool calls (clean, preflight, train, generate,
-# predict, rank) plus a final stop decision.  The UI still lets the operator
-# lower these values explicitly for a smoke run.
-DEFAULT_BUDGET = RunBudget(max_decisions=12, max_tool_calls=8, max_steps=8)
-LOCAL_SESSION_TOKEN_HEADER = "X-Molly-Local-Token"
-LOCAL_SESSION_TOKEN_META = "molly-local-token"
+LOCAL_SESSION_TOKEN_HEADER = "X-Local-Session-Token"
+LOCAL_SESSION_TOKEN_META = "local-session-token"
 _ALLOWED_FETCH_SITES = frozenset({"same-origin", "same-site", "none"})
 
 STATUS_LABELS = {
@@ -72,7 +66,6 @@ STATUS_LABELS = {
     "INTERRUPTED": "已中断",
     "STOPPED": "已完成",
     "FAILED": "执行失败",
-    "BUDGET_EXHAUSTED": "达到运行限额",
 }
 
 
@@ -245,7 +238,7 @@ class MollyWebApplication:
         content = candidate.read_bytes()
         if name == "index.html":
             content = content.replace(
-                b"__MOLLY_LOCAL_SESSION_TOKEN__",
+                b"__LOCAL_SESSION_TOKEN__",
                 html.escape(self.local_session_token, quote=True).encode("ascii"),
             )
         return 200, content, media_type
@@ -263,7 +256,7 @@ class MollyWebApplication:
             raise WebRequestError(400, "INVALID_JSON", "请求内容必须是 JSON 对象")
 
         if route == ["api", "health"] and method == "GET":
-            return 200, {"status": "ok", "service": "molly-local-web"}
+            return 200, {"status": "ok", "service": "local-scientific-workbench"}
         if route == ["api", "bootstrap"] and method == "GET":
             return 200, self._bootstrap()
         if route == ["api", "runs"]:
@@ -308,6 +301,8 @@ class MollyWebApplication:
                 return 201, self._save_provider_profile(body)
         if len(route) == 4 and route[:2] == ["api", "model-profiles"]:
             profile_ref, action = route[2], route[3]
+            if method == "POST" and action == "credential":
+                return 200, self._save_provider_credential(profile_ref, body)
             if method == "POST" and action == "check":
                 return 200, self._check_provider_profile(profile_ref)
         if route and route[0] == "api":
@@ -316,7 +311,6 @@ class MollyWebApplication:
 
     def _bootstrap(self) -> dict[str, Any]:
         return {
-            "app_name": "Molly",
             "app_subtitle": "科学任务工作台",
             "runtime_profiles": [
                 _runtime_profile_view(profile) for profile in self.service.profiles.profiles
@@ -423,31 +417,6 @@ class MollyWebApplication:
         return {"run_id": run_id, "status": value["status"], "inspection": value, "message": message}
 
     @staticmethod
-    def _budget(payload: Mapping[str, Any]) -> RunBudget:
-        raw = payload.get("budget", {})
-        if raw is None:
-            raw = {}
-        if not isinstance(raw, Mapping):
-            raise WebRequestError(400, "INVALID_BUDGET", "运行限额格式不正确")
-        allowed = {"max_decisions", "max_tool_calls", "max_steps"}
-        if set(raw) - allowed:
-            raise WebRequestError(400, "INVALID_BUDGET", "运行限额包含不支持的字段")
-
-        def bounded(name: str, default: int) -> int:
-            value = raw.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise WebRequestError(400, "INVALID_BUDGET", "运行限额必须是整数")
-            if value < 0 or value > MAX_BUDGET_VALUE:
-                raise WebRequestError(400, "INVALID_BUDGET", "运行限额超出允许范围")
-            return value
-
-        return RunBudget(
-            max_decisions=bounded("max_decisions", DEFAULT_BUDGET.max_decisions),
-            max_tool_calls=bounded("max_tool_calls", DEFAULT_BUDGET.max_tool_calls),
-            max_steps=bounded("max_steps", DEFAULT_BUDGET.max_steps),
-        )
-
-    @staticmethod
     def _artifact_ids(payload: Mapping[str, Any]) -> tuple[str, ...]:
         value = payload.get("input_artifact_ids", ())
         if not isinstance(value, (list, tuple)):
@@ -480,13 +449,34 @@ class MollyWebApplication:
             if not isinstance(llm_profile_ref, str) or not llm_profile_ref.strip():
                 raise WebRequestError(400, "INVALID_LLM_PROFILE", "模型服务配置不正确")
             validate_identifier(llm_profile_ref.strip(), field="llm_profile_ref")
-            self.provider_store.get_profile(llm_profile_ref.strip())
+            llm_profile = self.provider_store.get_profile(llm_profile_ref.strip())
+            if not llm_profile.credential_configured:
+                raise WebRequestError(
+                    409,
+                    "LLM_CREDENTIAL_REQUIRED",
+                    "请先为所选模型服务保存 API Key",
+                )
             metadata["llm_profile_ref"] = llm_profile_ref.strip()
+            metadata["llm_profile_digest"] = llm_profile.profile.digest
+        try:
+            runtime_profile = self.service.profiles.resolve(profile_id.strip())
+        except Exception:
+            runtime_profile = None
+        workflow = (
+            runtime_profile.config.get("workflow")
+            if runtime_profile is not None and isinstance(runtime_profile.config, Mapping)
+            else None
+        )
+        if workflow == "br1" and "llm_profile_ref" not in metadata:
+            raise WebRequestError(
+                400,
+                "LLM_PROFILE_REQUIRED",
+                "BR1 任务必须选择自然语言解析模型服务",
+            )
         result = self.service.start_run(
-            profile_id=profile_id,
+            profile_id=profile_id.strip(),
             goal=goal.strip(),
             input_artifact_ids=self._artifact_ids(payload),
-            budget=self._budget(payload),
             metadata=metadata,
         )
         return self._result_payload(self.service, result)
@@ -629,7 +619,24 @@ class MollyWebApplication:
         return {
             "ready": False,
             "credential_status": "未配置",
-            "message": "请在本机终端写入密钥，网页不会接收密钥",
+            "message": "请在本页面输入 API Key，密钥只会保存到本机服务端",
+        }
+
+    def _save_provider_credential(
+        self, profile_ref: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        validate_identifier(profile_ref, field="provider profile_ref")
+        if set(payload) != {"api_key"}:
+            raise WebRequestError(400, "INVALID_CREDENTIAL", "请求只允许包含 API Key")
+        api_key = payload.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise WebRequestError(400, "INVALID_CREDENTIAL", "API Key 不能为空")
+        self.provider_store.set_secret(profile_ref, api_key)
+        return {
+            "profile_ref": profile_ref,
+            "credential_configured": True,
+            "credential_status": "已配置",
+            "message": "API Key 已安全保存到本机服务端，不会显示或写入任务数据",
         }
 
 
@@ -637,7 +644,7 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
     """HTTP adapter kept separate from the application for direct testing."""
 
     application: MollyWebApplication
-    server_version = "MollyLocalWeb/0.1"
+    server_version = "LocalScientificWorkbench/0.1"
 
     def _headers(self, *, content_type: str, length: int, cache: str) -> None:
         self.send_header("Content-Type", content_type)
@@ -820,22 +827,25 @@ class MollyHTTPRequestHandler(BaseHTTPRequestHandler):
 def create_application(
     root: Path | str,
     *,
-    demo: bool = False,
     service: RuntimeService | None = None,
     provider_store: ProviderConfigStore | None = None,
 ) -> MollyWebApplication:
-    """Create the local web app; demo mode is explicit and opt-in."""
+    """Create the local web app from server-owned runtime profiles."""
 
     configured_root = Path(root)
+    configured_provider_store = provider_store or ProviderConfigStore(configured_root)
     if service is None:
-        profiles = (demo_profile(),) if demo else configured_br1_profiles(configured_root)
+        profiles = configured_br1_profiles(
+            configured_root,
+            intent_provider_resolver=configured_provider_store.create_intent_provider,
+        )
         service = RuntimeService(
             configured_root,
             profiles=RuntimeProfileRegistry(profiles),
         )
     return MollyWebApplication(
         service=service,
-        provider_store=provider_store or ProviderConfigStore(configured_root),
+        provider_store=configured_provider_store,
     )
 
 
@@ -868,7 +878,7 @@ def serve(
         {"application": application},
     )
     server = ThreadingHTTPServer((host, port), handler)
-    print(f"Molly UI: http://{host}:{server.server_port}/", flush=True)
+    print(f"科学任务工作台: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

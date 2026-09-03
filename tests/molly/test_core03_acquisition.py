@@ -47,7 +47,6 @@ from molly.core import (
     AgentLoop,
     ArtifactLineage,
     ArtifactStore,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStatus,
@@ -276,7 +275,6 @@ def _loop(
     request = RunRequest.create(
         goal="offline CORE-03 acquisition fixture",
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=8, max_tool_calls=4, max_steps=4),
     )
     loop = AgentLoop(
         store=service.artifact_store,

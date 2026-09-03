@@ -10,7 +10,6 @@ from .errors import (
     ArtifactError,
     ArtifactIntegrityError,
     ArtifactNotFoundError,
-    BudgetError,
     CoreContractError,
     InspectionError,
     InspectionIntegrityError,
@@ -37,7 +36,7 @@ from .ledger import LedgerEvent, RunLedger
 from .lineage import ArtifactLineage, LineageRelation, RelationType
 from .inspection import ArtifactInspection, RunInspection, RunInspector, ToolCallInspection
 from .reviews import ReviewDecision, ReviewRecord
-from .runs import RunBudget, RunContext, RunRequest, RunResult, RunStatus
+from .runs import RunContext, RunRequest, RunResult, RunStatus
 from .tools import (
     ArtifactDraft,
     DecisionProvider,
@@ -74,7 +73,6 @@ __all__ = [
     "ArtifactRecord",
     "ArtifactStore",
     "ArtifactDraft",
-    "BudgetError",
     "CoreContractError",
     "InspectionError",
     "InspectionIntegrityError",
@@ -96,7 +94,6 @@ __all__ = [
     "ReviewError",
     "ReviewRecord",
     "RunBindingError",
-    "RunBudget",
     "RunContext",
     "RunEngine",
     "RunError",

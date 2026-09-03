@@ -1,10 +1,10 @@
-"""Server-side provider settings for the local Molly web surface.
+"""Server-side provider settings for the local browser surface.
 
-The browser can edit the non-secret provider declaration, but it never sends
-or receives a credential.  Credentials are written through the local CLI and
-kept in a file with owner-only permissions for this first local iteration.
-The file boundary is deliberately separate from Core run state so provider
-secrets cannot become part of a request, ledger event, or artifact.
+The browser can edit the non-secret provider declaration and submit a
+credential to the loopback service. Credentials are kept in a separate file
+with owner-only permissions. The file boundary is deliberately separate from
+Core run state so provider secrets cannot become part of a request, ledger
+event, or artifact.
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ import os
 from pathlib import Path
 import tempfile
 from typing import Any
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-from molly.llm import StructuredProviderProfile
-from molly.core.ids import validate_identifier
+from molly.core.ids import canonical_json_bytes, validate_identifier
+from molly.llm import OpenAICompatibleStructuredProvider, StructuredProviderProfile
 
 
 PROVIDER_CONFIG_VERSION = 1
@@ -28,6 +30,16 @@ MAX_PROVIDER_SECRET_LENGTH = 16_384
 
 class ProviderConfigError(ValueError):
     """A provider setting could not be read or validated."""
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Prevent an Authorization header from following an untrusted redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_HTTP_OPENER = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +137,7 @@ class ProviderConfigStore:
         return profiles
 
     def _read_secrets(self) -> dict[str, str]:
+        self._check_file(self.secrets_path)
         value = self._read_json(self.secrets_path, default={"version": 1, "secrets": {}})
         if value.get("version") != 1:
             raise ProviderConfigError("provider secret store version is unsupported")
@@ -136,6 +149,11 @@ class ProviderConfigStore:
             if not isinstance(key, str) or not isinstance(secret, str) or not secret:
                 raise ProviderConfigError("provider secret store contains an invalid entry")
             secrets[key] = secret
+        if self.secrets_path.exists():
+            try:
+                os.chmod(self.secrets_path, 0o600)
+            except OSError as exc:
+                raise ProviderConfigError("provider secret store permissions are unsafe") from exc
         return secrets
 
     def _write_json(self, path: Path, value: Mapping[str, Any], *, mode: int = 0o600) -> None:
@@ -153,6 +171,11 @@ class ProviderConfigStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
+            directory = os.open(self.root, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -284,6 +307,48 @@ class ProviderConfigStore:
         if not isinstance(profile, StructuredProviderProfile):
             raise ProviderConfigError("provider profile is required")
         return self._read_secrets().get(profile.profile_ref)
+
+    @staticmethod
+    def _transport(profile: StructuredProviderProfile):
+        def send(
+            endpoint: str,
+            *,
+            headers: Mapping[str, str],
+            json_body: Mapping[str, Any],
+            timeout_seconds: float,
+        ) -> bytes:
+            request = Request(
+                endpoint,
+                data=canonical_json_bytes(json_body),
+                headers=dict(headers),
+                method="POST",
+            )
+            try:
+                with _HTTP_OPENER.open(request, timeout=float(timeout_seconds)) as response:
+                    if not 200 <= response.status < 300:
+                        raise ProviderConfigError("model service returned a non-success status")
+                    body = response.read(profile.max_response_bytes + 1)
+            except HTTPError as exc:
+                raise ProviderConfigError("model service request failed") from exc
+            except ProviderConfigError:
+                raise
+            except Exception as exc:
+                raise ProviderConfigError("model service request failed") from exc
+            if len(body) > profile.max_response_bytes:
+                raise ProviderConfigError("model service response exceeds the configured limit")
+            return body
+
+        return send
+
+    def create_intent_provider(self, profile_ref: str) -> OpenAICompatibleStructuredProvider:
+        """Build a server-only structured LLM adapter for request parsing."""
+
+        view = self.get_profile(profile_ref)
+        return OpenAICompatibleStructuredProvider(
+            view.profile,
+            transport=self._transport(view.profile),
+            secret_resolver=self.resolve_secret,
+        )
 
 
 __all__ = [

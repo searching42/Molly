@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Callable, Mapping
 
 from molly.plugins.br1_inverse_design import (
     Br1PluginConfig,
@@ -26,6 +26,7 @@ def configured_br1_profiles(
     root: Path | str,
     *,
     environ: Mapping[str, str] | None = None,
+    intent_provider_resolver: Callable[[str], Any] | None = None,
 ) -> tuple[object, ...]:
     """Return only worker profiles with a complete server-owned configuration.
 
@@ -87,6 +88,7 @@ def configured_br1_profiles(
                     description=f"在 {host_name} 的服务端登记环境中执行 BR1 全流程",
                     host_preference=host_name,
                     gpu_count=gpu_count,
+                    intent_provider_resolver=intent_provider_resolver,
                 )
             )
     return tuple(profiles)

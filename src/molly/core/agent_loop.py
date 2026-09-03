@@ -12,7 +12,6 @@ from .artifacts import ArtifactStore
 from .errors import (
     ActionError,
     ApprovalError,
-    BudgetError,
     CoreContractError,
     ReconciliationError,
     RunBindingError,
@@ -35,7 +34,6 @@ from .ids import (
 from .ledger import LedgerEvent, RunLedger
 from .lineage import ArtifactLineage, RelationType
 from .runs import (
-    RunBudget,
     RunContext,
     RunRequest,
     RunResult,
@@ -71,7 +69,6 @@ TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"
 REVIEW_REQUESTED = "REVIEW_REQUESTED"
 RUN_STOPPED = "RUN_STOPPED"
 RUN_FAILED = "RUN_FAILED"
-BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 
 EVENT_TYPES = frozenset(
     {
@@ -87,7 +84,6 @@ EVENT_TYPES = frozenset(
         REVIEW_REQUESTED,
         RUN_STOPPED,
         RUN_FAILED,
-        BUDGET_EXHAUSTED,
     }
 )
 
@@ -358,7 +354,7 @@ class AgentLoop:
         terminal_run_events = [
             event
             for event in events
-            if event.event_type in {RUN_STOPPED, RUN_FAILED, BUDGET_EXHAUSTED}
+            if event.event_type in {RUN_STOPPED, RUN_FAILED}
         ]
         terminal_run = terminal_run_events[-1] if terminal_run_events else None
         if terminal_run is not None and events[-1].event_id != terminal_run.event_id:
@@ -406,23 +402,6 @@ class AgentLoop:
             terminal_event=terminal_run,
         )
 
-    @staticmethod
-    def _counts(request: RunRequest, events: tuple[LedgerEvent, ...]) -> tuple[int, int, int]:
-        decisions = sum(event.event_type == DECISION_RECORDED for event in events)
-        calls = sum(event.event_type == TOOL_CALL_MATERIALIZED for event in events)
-        steps = len(
-            {
-                event.step_id
-                for event in events
-                if event.event_type == TOOL_CALL_MATERIALIZED and event.step_id is not None
-            }
-        )
-        return decisions, calls, steps
-
-    def _remaining_budget(self, request: RunRequest, events: tuple[LedgerEvent, ...]) -> RunBudget:
-        decisions, calls, steps = self._counts(request, events)
-        return request.budget.remaining(decisions=decisions, tool_calls=calls, steps=steps)
-
     def _visible_artifacts(
         self, request: RunRequest, events: tuple[LedgerEvent, ...]
     ) -> tuple[str, ...]:
@@ -463,7 +442,6 @@ class AgentLoop:
             status = {
                 RUN_STOPPED: RunStatus.STOPPED,
                 RUN_FAILED: RunStatus.FAILED,
-                BUDGET_EXHAUSTED: RunStatus.BUDGET_EXHAUSTED,
             }[projection.terminal_event.event_type]
         elif projection.interrupted:
             status = RunStatus.INTERRUPTED
@@ -480,7 +458,6 @@ class AgentLoop:
             run_id=request.run_id,
             status=status,
             visible_artifact_ids=self._visible_artifacts(request, events),
-            remaining_budget=self._remaining_budget(request, events),
             last_event_id=events[-1].event_id if events else None,
             pending_call=pending,
             message=message,
@@ -496,7 +473,6 @@ class AgentLoop:
                 run_id=run_id,
                 status=RunStatus.NEW,
                 visible_artifact_ids=(),
-                remaining_budget=RunBudget(),
             )
         start = next((event for event in events if event.event_type == RUN_STARTED), None)
         if start is None or not isinstance(start.metadata.get("request"), Mapping):
@@ -533,7 +509,11 @@ class AgentLoop:
             goal=request.goal,
             visible_artifact_ids=self._visible_artifacts(request, events),
             initial_artifact_ids=request.input_artifact_ids,
-            remaining_budget=self._remaining_budget(request, events),
+            request_metadata={
+                key: request.metadata[key]
+                for key in ("llm_profile_ref", "llm_profile_digest")
+                if key in request.metadata
+            },
             recent_events=self._recent_events(events),
             previous_tool_outcome=previous,
         )
@@ -868,20 +848,6 @@ class AgentLoop:
                 raise
             raise ActionError("DecisionProvider returned an invalid action") from exc
 
-    def _budget_exhausted(self, request: RunRequest, events: tuple[LedgerEvent, ...]) -> bool:
-        decisions, calls, steps = self._counts(request, events)
-        return (
-            decisions >= request.budget.max_decisions
-            or calls >= request.budget.max_tool_calls
-            or steps >= request.budget.max_steps
-        )
-
-    def _append_budget_exhausted(self, request: RunRequest) -> None:
-        events = self.ledger.for_run(request.run_id)
-        if any(event.event_type == BUDGET_EXHAUSTED for event in events):
-            return
-        self._append(request, BUDGET_EXHAUSTED, status="EXHAUSTED")
-
     def run(
         self, request: RunRequest, *, approval: ApprovalRecord | None = None
     ) -> RunResult:
@@ -937,10 +903,6 @@ class AgentLoop:
                     raise ApprovalError("no pending approval matches the supplied record")
             if projection.waiting_review:
                 return self._result(request, projection=projection)
-
-            if self._budget_exhausted(request, events):
-                self._append_budget_exhausted(request)
-                return self._result(request)
 
             if projection.pending_execution is not None:
                 approval_resume = approval_resume or (
@@ -1011,7 +973,6 @@ __all__ = [
     "APPROVAL_RECORDED",
     "APPROVAL_REQUIRED",
     "AgentLoop",
-    "BUDGET_EXHAUSTED",
     "DECISION_RECORDED",
     "EVENT_TYPES",
     "REVIEW_REQUESTED",
