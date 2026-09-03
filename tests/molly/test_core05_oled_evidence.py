@@ -13,7 +13,6 @@ import pytest
 from molly.core import (
     AgentLoop,
     ArtifactStore,
-    RunBudget,
     RunLedger,
     RunRequest,
     SideEffectClass,
@@ -409,7 +408,7 @@ def test_agentloop_offline_core05_chain_reaches_review_bundle(tmp_path: Path) ->
             return StopAction("review bundle prepared")
 
     provider_loop = Provider()
-    request = RunRequest.create(goal="offline CORE-05 intake", input_artifact_ids=(canonical_record.artifact_id,), tool_policy_digest=policy.digest, budget=RunBudget(max_decisions=8, max_tool_calls=5, max_steps=5), created_at="2026-08-31T00:00:00Z")
+    request = RunRequest.create(goal="offline CORE-05 intake", input_artifact_ids=(canonical_record.artifact_id,), tool_policy_digest=policy.digest, created_at="2026-08-31T00:00:00Z")
     ledger = RunLedger(tmp_path / "events.jsonl")
     loop = AgentLoop(store=store, ledger=ledger, lineage=__import__("molly.core", fromlist=["ArtifactLineage"]).ArtifactLineage(tmp_path / "lineage.jsonl"), registry=registry, policy=policy, decision_provider=provider_loop)
     result = loop.run(request)

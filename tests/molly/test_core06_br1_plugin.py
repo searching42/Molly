@@ -14,7 +14,6 @@ from molly.core import (
     AgentLoop,
     ArtifactLineage,
     ArtifactStore,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStatus,
@@ -129,7 +128,6 @@ def _environment(tmp_path: Path):
     request = RunRequest.create(
         goal="offline CORE-06 BR1 contract chain",
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=8, max_tool_calls=6, max_steps=8),
         input_artifact_ids=(dataset_id,),
     )
     return loop, request, store, ledger, loop.lineage, provider, dataset_id

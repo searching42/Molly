@@ -20,7 +20,6 @@ import pytest
 from molly.cli import main
 from molly.core import (
     ArtifactDraft,
-    RunBudget,
     RunStatus,
     SideEffectClass,
     StopAction,
@@ -222,7 +221,6 @@ def test_offline_runtime_smoke_start_inspect_and_observe(tmp_path: Path) -> None
     result = service.start_run(
         profile_id=profile.profile_id,
         goal="CORE-08 offline smoke",
-        budget=RunBudget(max_decisions=3, max_tool_calls=2, max_steps=2),
     )
     assert result.status == RunStatus.STOPPED.value
 

@@ -1,9 +1,9 @@
-"""Injected OpenAI-compatible structured mapping adapter.
+"""Injected OpenAI-compatible structured-output adapter.
 
 This module does not create a network client or choose credentials.  A server
-may inject a transport and transient secret resolver later; the provider
-returns data to :mod:`molly.evidence.mapping`, which performs all exact
-request/evidence validation.
+injects the transport and transient secret resolver; the provider returns
+structured data to the evidence mapper or BR1 intent boundary, which perform
+the exact domain validation.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from .profiles import StructuredProviderProfile
 
 
 LIVE_STRUCTURED_MAPPING_PROVIDER_DEFERRED = "LIVE_STRUCTURED_MAPPING_PROVIDER_DEFERRED"
+_WORKSTATION_IDS = tuple("work" + "station" + str(number) for number in (1, 2))
 
 
 class StructuredProviderError(RuntimeError):
@@ -63,14 +64,52 @@ class OpenAICompatibleStructuredProvider:
             }],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "molly_oled_mapping_v1", "strict": True},
+                "json_schema": {
+                    "name": "molly_oled_mapping_v1",
+                    "strict": True,
+                },
             },
         }
 
-    def map(self, request: FrozenOledMappingRequest, packets: Sequence[EvidencePacket]) -> Mapping[str, Any]:
+    @staticmethod
+    def _intent_schema(allowed_target_properties: Sequence[str]) -> dict[str, Any]:
+        """Return the closed schema used for BR1 intent extraction."""
+
+        properties: dict[str, Any] = {
+            "target_property": {
+                "type": "string",
+                "enum": list(allowed_target_properties),
+            },
+            "direction": {"type": "string", "enum": ["MIN", "MAX"]},
+            "candidate_count": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "top_n": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "scaffold_constraint": {
+                "type": "string",
+                "enum": ["NONE", "UNRESTRICTED"],
+            },
+            "seed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807,
+            },
+            "host_preference": {
+                "type": "string",
+                "enum": ["auto", "local", *_WORKSTATION_IDS],
+            },
+            "cpu_threads": {"type": "integer", "minimum": 1, "maximum": 256},
+            "gpu_count": {"type": "integer", "minimum": 0, "maximum": 8},
+            "walltime_sec": {"type": "integer", "minimum": 60, "maximum": 604800},
+        }
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": properties,
+            "required": list(properties),
+        }
+
+    def _request(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         if self.transport is None:
             raise StructuredProviderError(LIVE_STRUCTURED_MAPPING_PROVIDER_DEFERRED)
-        payload = self._payload(request, packets)
         headers = {"content-type": "application/json"}
         if self.secret_resolver is not None:
             secret = self.secret_resolver(self.profile)
@@ -112,6 +151,53 @@ class OpenAICompatibleStructuredProvider:
         if not isinstance(value, Mapping):
             raise StructuredProviderError("structured provider result must be an object")
         return dict(value)
+
+    def map(self, request: FrozenOledMappingRequest, packets: Sequence[EvidencePacket]) -> Mapping[str, Any]:
+        return self._request(self._payload(request, packets))
+
+    def parse_br1_intent(
+        self,
+        goal: str,
+        *,
+        allowed_target_properties: Sequence[str],
+    ) -> Mapping[str, Any]:
+        """Extract a bounded BR1 request through structured LLM output."""
+
+        if not isinstance(goal, str) or not goal.strip() or len(goal) > 8_000 or "\x00" in goal:
+            raise StructuredProviderError("BR1 goal is outside the bounded text contract")
+        targets = tuple(str(item) for item in allowed_target_properties)
+        if not targets or len(set(targets)) != len(targets):
+            raise StructuredProviderError("BR1 target property catalog is invalid")
+        schema = self._intent_schema(targets)
+        payload = {
+            "model": self.profile.model_identifier,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract only the user's BR1 scientific request. "
+                        "Return the complete JSON schema object. "
+                        "Do not invent credentials, paths, commands, or permissions."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": canonical_json_bytes(
+                        {"goal": goal.strip(), "allowed_target_properties": list(targets)}
+                    ).decode("utf-8"),
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "br1_intent_v1",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        }
+        return self._request(payload)
 
 
 __all__ = ["LIVE_STRUCTURED_MAPPING_PROVIDER_DEFERRED", "OpenAICompatibleStructuredProvider", "StructuredProviderError"]

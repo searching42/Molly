@@ -12,7 +12,6 @@ from .artifacts import ArtifactStore
 from .errors import (
     ActionError,
     ApprovalError,
-    BudgetError,
     CoreContractError,
     ReconciliationError,
     RunBindingError,
@@ -35,7 +34,6 @@ from .ids import (
 from .ledger import LedgerEvent, RunLedger
 from .lineage import ArtifactLineage, RelationType
 from .runs import (
-    RunBudget,
     RunContext,
     RunRequest,
     RunResult,
@@ -72,6 +70,7 @@ REVIEW_REQUESTED = "REVIEW_REQUESTED"
 RUN_STOPPED = "RUN_STOPPED"
 RUN_FAILED = "RUN_FAILED"
 BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+INTENT_FROZEN = "INTENT_FROZEN"
 
 EVENT_TYPES = frozenset(
     {
@@ -88,6 +87,7 @@ EVENT_TYPES = frozenset(
         RUN_STOPPED,
         RUN_FAILED,
         BUDGET_EXHAUSTED,
+        INTENT_FROZEN,
     }
 )
 
@@ -112,6 +112,18 @@ class _RunProjection:
     interrupted: bool
     waiting_review: bool
     terminal_event: LedgerEvent | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ServerRunHardLimits:
+    """Non-configurable server safety limits for one AgentLoop run."""
+
+    max_decisions: int = 12
+    max_tool_calls: int = 8
+    max_steps: int = 8
+
+
+SERVER_RUN_HARD_LIMITS = _ServerRunHardLimits()
 
 
 class AgentLoop:
@@ -407,9 +419,9 @@ class AgentLoop:
         )
 
     @staticmethod
-    def _counts(request: RunRequest, events: tuple[LedgerEvent, ...]) -> tuple[int, int, int]:
+    def _counts(events: tuple[LedgerEvent, ...]) -> tuple[int, int, int]:
         decisions = sum(event.event_type == DECISION_RECORDED for event in events)
-        calls = sum(event.event_type == TOOL_CALL_MATERIALIZED for event in events)
+        tool_calls = sum(event.event_type == TOOL_CALL_MATERIALIZED for event in events)
         steps = len(
             {
                 event.step_id
@@ -417,11 +429,89 @@ class AgentLoop:
                 if event.event_type == TOOL_CALL_MATERIALIZED and event.step_id is not None
             }
         )
-        return decisions, calls, steps
+        return decisions, tool_calls, steps
 
-    def _remaining_budget(self, request: RunRequest, events: tuple[LedgerEvent, ...]) -> RunBudget:
-        decisions, calls, steps = self._counts(request, events)
-        return request.budget.remaining(decisions=decisions, tool_calls=calls, steps=steps)
+    @staticmethod
+    def _effective_hard_limits(request: RunRequest) -> _ServerRunHardLimits:
+        """Apply the strictest limit when resuming a legacy request.
+
+        The removed request-level budget is retained only as a compatibility
+        binding. It must never expand the current server safety ceiling, but a
+        persisted lower value remains part of the authority of that old run.
+        """
+
+        legacy = getattr(request, "_legacy_budget", None)
+        if legacy is None:
+            return SERVER_RUN_HARD_LIMITS
+        return _ServerRunHardLimits(
+            max_decisions=min(SERVER_RUN_HARD_LIMITS.max_decisions, legacy["max_decisions"]),
+            max_tool_calls=min(SERVER_RUN_HARD_LIMITS.max_tool_calls, legacy["max_tool_calls"]),
+            max_steps=min(SERVER_RUN_HARD_LIMITS.max_steps, legacy["max_steps"]),
+        )
+
+    def _hard_limit_reason(
+        self,
+        request: RunRequest,
+        events: tuple[LedgerEvent, ...],
+        *,
+        pending_execution: bool = False,
+    ) -> tuple[str, tuple[int, int, int]] | None:
+        """Return a server-limit reason without consulting new request input.
+
+        A materialized call already admitted before the cap is allowed to
+        finish, including after approval. The strict pre-provider check
+        prevents another model decision or tool materialization; the relaxed
+        pending-execution check only rejects legacy/corrupt states that are
+        already over the effective server ceiling.
+        """
+
+        counts = self._counts(events)
+        decisions, tool_calls, steps = counts
+        limits = self._effective_hard_limits(request)
+        if pending_execution:
+            if decisions > limits.max_decisions:
+                return "server decision safety limit exceeded", counts
+            if tool_calls > limits.max_tool_calls:
+                return "server tool-call safety limit exceeded", counts
+            if steps > limits.max_steps:
+                return "server step safety limit exceeded", counts
+            return None
+        if decisions >= limits.max_decisions:
+            return "server decision safety limit reached", counts
+        if tool_calls >= limits.max_tool_calls:
+            return "server tool-call safety limit reached", counts
+        if steps >= limits.max_steps:
+            return "server step safety limit reached", counts
+        return None
+
+    def _append_hard_limit(
+        self,
+        request: RunRequest,
+        reason: str,
+        counts: tuple[int, int, int],
+    ) -> None:
+        events = self.ledger.for_run(request.run_id)
+        if any(event.event_type == BUDGET_EXHAUSTED for event in events):
+            return
+        limits = self._effective_hard_limits(request)
+        self._append(
+            request,
+            BUDGET_EXHAUSTED,
+            status="EXHAUSTED",
+            metadata={
+                "reason": reason,
+                "counts": {
+                    "decisions": counts[0],
+                    "tool_calls": counts[1],
+                    "steps": counts[2],
+                },
+                "server_limits": {
+                    "max_decisions": limits.max_decisions,
+                    "max_tool_calls": limits.max_tool_calls,
+                    "max_steps": limits.max_steps,
+                },
+            },
+        )
 
     def _visible_artifacts(
         self, request: RunRequest, events: tuple[LedgerEvent, ...]
@@ -480,7 +570,6 @@ class AgentLoop:
             run_id=request.run_id,
             status=status,
             visible_artifact_ids=self._visible_artifacts(request, events),
-            remaining_budget=self._remaining_budget(request, events),
             last_event_id=events[-1].event_id if events else None,
             pending_call=pending,
             message=message,
@@ -496,7 +585,6 @@ class AgentLoop:
                 run_id=run_id,
                 status=RunStatus.NEW,
                 visible_artifact_ids=(),
-                remaining_budget=RunBudget(),
             )
         start = next((event for event in events if event.event_type == RUN_STARTED), None)
         if start is None or not isinstance(start.metadata.get("request"), Mapping):
@@ -533,7 +621,11 @@ class AgentLoop:
             goal=request.goal,
             visible_artifact_ids=self._visible_artifacts(request, events),
             initial_artifact_ids=request.input_artifact_ids,
-            remaining_budget=self._remaining_budget(request, events),
+            request_metadata={
+                key: request.metadata[key]
+                for key in ("llm_profile_ref", "llm_profile_digest")
+                if key in request.metadata
+            },
             recent_events=self._recent_events(events),
             previous_tool_outcome=previous,
         )
@@ -868,20 +960,6 @@ class AgentLoop:
                 raise
             raise ActionError("DecisionProvider returned an invalid action") from exc
 
-    def _budget_exhausted(self, request: RunRequest, events: tuple[LedgerEvent, ...]) -> bool:
-        decisions, calls, steps = self._counts(request, events)
-        return (
-            decisions >= request.budget.max_decisions
-            or calls >= request.budget.max_tool_calls
-            or steps >= request.budget.max_steps
-        )
-
-    def _append_budget_exhausted(self, request: RunRequest) -> None:
-        events = self.ledger.for_run(request.run_id)
-        if any(event.event_type == BUDGET_EXHAUSTED for event in events):
-            return
-        self._append(request, BUDGET_EXHAUSTED, status="EXHAUSTED")
-
     def run(
         self, request: RunRequest, *, approval: ApprovalRecord | None = None
     ) -> RunResult:
@@ -938,11 +1016,14 @@ class AgentLoop:
             if projection.waiting_review:
                 return self._result(request, projection=projection)
 
-            if self._budget_exhausted(request, events):
-                self._append_budget_exhausted(request)
-                return self._result(request)
-
             if projection.pending_execution is not None:
+                hard_limit = self._hard_limit_reason(
+                    request, events, pending_execution=True
+                )
+                if hard_limit is not None:
+                    reason, counts = hard_limit
+                    self._append_hard_limit(request, reason, counts)
+                    return self._result(request)
                 approval_resume = approval_resume or (
                     projection.pending_execution.approval is not None
                     and projection.pending_execution.approval.decision
@@ -952,6 +1033,12 @@ class AgentLoop:
                 if approval_resume:
                     return self._result(request)
                 continue
+
+            hard_limit = self._hard_limit_reason(request, events)
+            if hard_limit is not None:
+                reason, counts = hard_limit
+                self._append_hard_limit(request, reason, counts)
+                return self._result(request)
 
             context = self._context(request, events)
             try:
@@ -1014,10 +1101,12 @@ __all__ = [
     "BUDGET_EXHAUSTED",
     "DECISION_RECORDED",
     "EVENT_TYPES",
+    "INTENT_FROZEN",
     "REVIEW_REQUESTED",
     "RUN_FAILED",
     "RUN_STARTED",
     "RUN_STOPPED",
+    "SERVER_RUN_HARD_LIMITS",
     "RunEngine",
     "TOOL_CALL_MATERIALIZED",
     "TOOL_CALL_REJECTED",

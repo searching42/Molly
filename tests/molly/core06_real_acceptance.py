@@ -28,7 +28,6 @@ from molly.core import (
     AgentLoop,
     ArtifactLineage,
     ArtifactStore,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStatus,
@@ -757,7 +756,6 @@ def run_acceptance(config: HostConfig) -> dict[str, Any]:
         request = RunRequest.create(
             goal="CORE-06C fresh-real BR1 parity acceptance",
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=8, max_tool_calls=6, max_steps=8),
             input_artifact_ids=(dataset_record.artifact_id,),
             metadata={"acceptance_id": "core06-br1-v2-real-20260831"},
         )

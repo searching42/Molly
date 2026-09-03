@@ -22,8 +22,8 @@ from molly.core import (
     MaterializedToolCall,
     RelationType,
     RequestReviewAction,
+    RunInspector,
     RunBindingError,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStateError,
@@ -51,7 +51,7 @@ from molly.core.agent_loop import (
     TOOL_EXECUTION_STARTED,
     TOOL_EXECUTION_SUCCEEDED,
 )
-from molly.core.ids import canonical_json_bytes, sha256_bytes
+from molly.core.ids import canonical_json_bytes, sha256_bytes, utc_timestamp
 
 
 pytestmark = pytest.mark.unit
@@ -71,6 +71,15 @@ class ScriptedProvider:
         if not self.actions:
             raise StopIteration
         return self.actions.pop(0)
+
+
+class EndlessProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def next_action(self, context, model_visible_tools):
+        self.calls += 1
+        return ToolCallProposal("emit", {"value": self.calls})
 
 
 def _spec(*, name: str = "emit", version: str = "1", approval: bool = False) -> ToolSpec:
@@ -137,7 +146,6 @@ def _environment(
     request = RunRequest.create(
         goal="run deterministic CORE-02 fixture",
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=8, max_tool_calls=4, max_steps=4),
     )
     return loop, request, store, ledger, lineage, registry, spec, policy
 
@@ -173,7 +181,6 @@ def test_run_request_is_server_owned_digest_bound_and_restartable(tmp_path: Path
         goal="changed goal",
         input_artifact_ids=request.input_artifact_ids,
         tool_policy_digest=request.tool_policy_digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -186,7 +193,6 @@ def test_run_request_is_server_owned_digest_bound_and_restartable(tmp_path: Path
         goal=request.goal,
         input_artifact_ids=request.input_artifact_ids,
         tool_policy_digest=other_policy.digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -266,6 +272,112 @@ def test_invalid_tool_output_is_not_a_success_or_publication(tmp_path: Path) -> 
     assert tuple((tmp_path / "artifacts" / "objects").rglob("*")) == ()
 
 
+def test_server_hard_limit_stops_an_endless_provider(tmp_path: Path) -> None:
+    provider = EndlessProvider()
+    loop, request, _, ledger, _, _, _, _ = _environment(tmp_path, provider=provider)
+
+    result = loop.run(request)
+
+    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
+    assert provider.calls == 8
+    assert len(_events(ledger, TOOL_CALL_MATERIALIZED)) == 8
+    assert len(_events(ledger, BUDGET_EXHAUSTED)) == 1
+    assert _events(ledger, BUDGET_EXHAUSTED)[0].metadata["server_limits"] == {
+        "max_decisions": 12,
+        "max_tool_calls": 8,
+        "max_steps": 8,
+    }
+
+
+def test_legacy_v2_request_and_terminal_are_read_without_digest_drift(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    ledger = RunLedger(tmp_path / "events.jsonl")
+    lineage = ArtifactLineage(tmp_path / "lineage.jsonl")
+    policy = ToolPolicy(allowed_tools=(), allowed_side_effect_classes=())
+    raw_request = {
+        "run_id": "run_legacy_v2",
+        "goal": "legacy request",
+        "input_artifact_ids": [],
+        "tool_policy_digest": policy.digest,
+        "budget": {"max_decisions": 12, "max_tool_calls": 8, "max_steps": 8},
+        "created_at": utc_timestamp(),
+        "metadata": {},
+    }
+    request_digest = sha256_bytes(canonical_json_bytes(raw_request))
+    ledger.append(
+        event_id="evt_legacy_start",
+        run_id=raw_request["run_id"],
+        event_type="RUN_STARTED",
+        status="STARTED",
+        timestamp=raw_request["created_at"],
+        metadata={
+            "request": raw_request,
+            "request_digest": request_digest,
+            "policy_digest": policy.digest,
+            "initial_artifact_ids": [],
+        },
+    )
+    ledger.append(
+        event_id="evt_legacy_exhausted",
+        run_id=raw_request["run_id"],
+        event_type=BUDGET_EXHAUSTED,
+        status="EXHAUSTED",
+        timestamp=utc_timestamp(),
+    )
+
+    reconstructed = RunRequest.from_dict(raw_request)
+    assert reconstructed.request_sha256 == request_digest
+    inspector = RunInspector(store=store, ledger=ledger, lineage=lineage)
+    assert inspector.inspect_run(raw_request["run_id"]).status == RunStatus.BUDGET_EXHAUSTED.value
+
+
+def test_legacy_active_request_resume_uses_the_lower_persisted_limit(tmp_path: Path) -> None:
+    provider = EndlessProvider()
+    loop, _, _, ledger, _, _, _, policy = _environment(tmp_path, provider=provider)
+    raw_request = {
+        "run_id": "run_legacy_active",
+        "goal": "legacy active request",
+        "input_artifact_ids": [],
+        "tool_policy_digest": policy.digest,
+        "budget": {"max_decisions": 1, "max_tool_calls": 1, "max_steps": 1},
+        "created_at": utc_timestamp(),
+        "metadata": {},
+    }
+    request = RunRequest.from_dict(raw_request)
+    ledger.append(
+        event_id="evt_legacy_active_start",
+        run_id=request.run_id,
+        event_type="RUN_STARTED",
+        status="STARTED",
+        timestamp=request.created_at,
+        metadata={
+            "request": raw_request,
+            "request_digest": request.request_sha256,
+            "policy_digest": policy.digest,
+            "initial_artifact_ids": [],
+        },
+    )
+    ledger.append(
+        event_id="evt_legacy_active_decision",
+        run_id=request.run_id,
+        event_type=DECISION_RECORDED,
+        status="PROPOSED",
+        timestamp=utc_timestamp(),
+        metadata={"action": StopAction("historical decision").to_dict()},
+    )
+
+    result = loop.run(request)
+
+    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
+    assert provider.calls == 0
+    assert len(_events(ledger, TOOL_CALL_MATERIALIZED)) == 0
+    assert _events(ledger, BUDGET_EXHAUSTED)[0].metadata["server_limits"] == {
+        "max_decisions": 1,
+        "max_tool_calls": 1,
+        "max_steps": 1,
+    }
+
+
 def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
     parent = store.put(b"parent", media_type="text/plain")
@@ -297,7 +409,6 @@ def test_local_tool_execution_integrates_artifacts_ledger_and_lineage(tmp_path: 
         goal=request.goal,
         input_artifact_ids=(parent.artifact_id,),
         tool_policy_digest=request.tool_policy_digest,
-        budget=request.budget,
         created_at=request.created_at,
         metadata=request.metadata,
     )
@@ -372,7 +483,6 @@ def test_parameterized_output_changes_with_materialized_arguments(tmp_path: Path
         request = RunRequest.create(
             goal=f"multiply {value}",
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=2, max_tool_calls=2, max_steps=2),
         )
         assert loop.run(request).status == RunStatus.ACTIVE.value
 
@@ -608,7 +718,6 @@ def test_artifact_visibility_is_run_scoped_and_explicit_cross_run_inputs_work(
         goal=explicit_request.goal,
         input_artifact_ids=(external.artifact_id,),
         tool_policy_digest=policy.digest,
-        budget=explicit_request.budget,
         created_at=explicit_request.created_at,
         metadata=explicit_request.metadata,
     )
@@ -632,7 +741,10 @@ def test_identical_outputs_across_runs_keep_distinct_occurrences(tmp_path: Path)
 
     requests = []
     for run_name in ("A", "B"):
-        provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
+        provider = ScriptedProvider(
+            ToolCallProposal("emit", {"value": 1}),
+            StopAction("done"),
+        )
         loop = AgentLoop(
             store=store,
             ledger=ledger,
@@ -644,10 +756,9 @@ def test_identical_outputs_across_runs_keep_distinct_occurrences(tmp_path: Path)
         request = RunRequest.create(
             goal=f"run {run_name}",
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=1, max_tool_calls=1, max_steps=1),
         )
         requests.append(request)
-        assert loop.run(request).status == RunStatus.BUDGET_EXHAUSTED.value
+        assert loop.run(request).status == RunStatus.STOPPED.value
 
     successes = _events(ledger, TOOL_EXECUTION_SUCCEEDED)
     assert len(successes) == 2
@@ -850,36 +961,34 @@ def test_interrupted_started_call_stops_without_reexecution(tmp_path: Path) -> N
     assert not _events(ledger, TOOL_EXECUTION_SUCCEEDED)
 
 
-def test_budget_is_reconstructed_after_restart(tmp_path: Path) -> None:
-    provider = ScriptedProvider(ToolCallProposal("emit", {"value": 1}))
-    loop, request, store, ledger, lineage, registry, _, policy = _environment(
+def test_run_continues_until_provider_stops(tmp_path: Path) -> None:
+    provider = ScriptedProvider(
+        ToolCallProposal("emit", {"value": 1}),
+        StopAction("done"),
+    )
+    loop, request, _, ledger, _, _, _, _ = _environment(
         tmp_path, provider=provider
     )
-    request = RunRequest(
-        run_id=request.run_id,
-        goal=request.goal,
-        input_artifact_ids=(),
-        tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=1, max_tool_calls=1, max_steps=1),
-        created_at=request.created_at,
-    )
-    result = loop.run(request)
-    assert result.status == RunStatus.BUDGET_EXHAUSTED.value
-    assert result.remaining_budget == RunBudget(0, 0, 0)
-    assert len(_events(ledger, BUDGET_EXHAUSTED)) == 1
 
-    resumed_provider = ScriptedProvider(StopAction("must not run"))
-    resumed = AgentLoop(
-        store=ArtifactStore(store.root),
-        ledger=RunLedger(ledger.path),
-        lineage=ArtifactLineage(lineage.path),
-        registry=registry,
-        policy=policy,
-        decision_provider=resumed_provider,
-    ).run(request)
-    assert resumed.status == RunStatus.BUDGET_EXHAUSTED.value
-    assert resumed.remaining_budget == RunBudget(0, 0, 0)
-    assert resumed_provider.calls == 0
+    result = loop.run(request)
+
+    assert result.status == RunStatus.STOPPED.value
+    assert set(request.to_dict()) == {
+        "run_id",
+        "goal",
+        "input_artifact_ids",
+        "tool_policy_digest",
+        "created_at",
+        "metadata",
+    }
+    assert set(result.to_dict()) == {
+        "run_id",
+        "status",
+        "visible_artifact_ids",
+        "last_event_id",
+        "pending_call",
+        "message",
+    }
 
 
 def test_stop_review_and_unknown_actions_are_closed(tmp_path: Path) -> None:

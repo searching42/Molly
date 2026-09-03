@@ -16,7 +16,7 @@ const state = {
 const content = document.getElementById("app-content");
 const topbarContext = document.getElementById("topbar-context");
 const toast = document.getElementById("toast");
-const localSessionToken = document.querySelector('meta[name="molly-local-token"]')?.content || "";
+const localSessionToken = document.querySelector('meta[name="local-session-token"]')?.content || "";
 
 const html = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
@@ -43,7 +43,6 @@ const formatBytes = (size) => {
 const statusClass = (status) => `status-${String(status || "").toLowerCase()}`;
 
 const operationLabels = {
-  create_demo_result: "生成演示结果",
   br1_prepare_dataset: "清洗并标准化数据集",
   br1_applicability_preflight: "检查数据集适用性",
   br1_train_unimol: "训练 Uni-Mol 模型",
@@ -65,7 +64,7 @@ const executionLabel = (status) => executionLabels[status] || "处理中";
 
 const request = async (path, options = {}) => {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
-  headers["X-Molly-Local-Token"] = localSessionToken;
+  headers["X-Local-Session-Token"] = localSessionToken;
   const response = await fetch(path, {
     ...options,
     headers,
@@ -204,7 +203,7 @@ const renderNew = () => {
     : '<option value="">暂无可用运行配置</option>';
   const noProfile = !profiles.length;
   const modelProfiles = state.bootstrap?.model_profiles || [];
-  const modelOptions = `<option value="">不指定（使用固定任务解析）</option>${modelProfiles.map((profile) => `<option value="${html(profile.profile_ref)}">${html(profile.name)} · ${html(profile.model_identifier)}</option>`).join("")}`;
+  const modelOptions = `<option value="">请选择解析模型</option>${modelProfiles.map((profile) => `<option value="${html(profile.profile_ref)}">${html(profile.name)} · ${html(profile.model_identifier)}</option>`).join("")}`;
   const br1 = profiles.find((profile) => profile.workflow === "br1");
   const br1Hint = br1
     ? "BR1 会按服务器端登记的资源配置，在需要确认的阶段暂停。"
@@ -212,16 +211,16 @@ const renderNew = () => {
   return `
     <div class="page-heading">
       <div>
-        <div class="eyebrow">MOLLY / 开始</div>
+        <div class="eyebrow">科学任务 / 开始</div>
         <h1>你想完成什么任务？</h1>
-        <p class="lead">写下目标，Molly 会按服务器端允许的范围执行，并把每一步留下可查看的记录。</p>
+        <p class="lead">写下目标，系统会按服务器端允许的范围执行，并把每一步留下可查看的记录。</p>
       </div>
       <button class="secondary-button" data-view="providers" type="button">管理模型服务</button>
     </div>
     ${noProfile ? `
       <div class="notice mb-20">
         <div class="notice-icon" aria-hidden="true">ⓘ</div>
-        <div><strong>当前没有可执行的运行配置</strong>普通模式需要由服务器端注册运行配置。想先体验完整界面，可以用 <code>molly web --demo</code> 启动本地演示。</div>
+        <div><strong>当前没有可执行的运行配置</strong>请先由服务器端登记运行配置，再开始任务。</div>
       </div>
     ` : ""}
     <div class="layout-two">
@@ -243,9 +242,9 @@ const renderNew = () => {
         </div>
         <div class="field-row">
           <div class="field">
-            <label class="field-label" for="llm-profile">自然语言解析服务 <span class="optional-label">（可选）</span></label>
+            <label class="field-label" for="llm-profile">自然语言解析模型服务</label>
             <select id="llm-profile">${modelOptions}</select>
-            <span class="field-hint">当前 BR1 关键参数仍由服务器端规则校验；此项只记录所选服务。</span>
+            <span class="field-hint">任务目标必须经过已配置的结构化 LLM 解析；API Key 只由本机服务端读取。</span>
           </div>
           <div class="field">
             <label class="field-label">资源选择</label>
@@ -262,14 +261,6 @@ const renderNew = () => {
           </div>
           <div class="file-list" id="file-list">${renderFiles()}</div>
         </div>
-        <details class="advanced">
-          <summary>运行限额 <span>使用默认值即可</span></summary>
-          <div class="advanced-fields">
-            <div class="field"><label class="field-hint" for="max-decisions">判断次数</label><input id="max-decisions" type="number" min="0" max="1000" value="12" /></div>
-            <div class="field"><label class="field-hint" for="max-tool-calls">系统操作数</label><input id="max-tool-calls" type="number" min="0" max="1000" value="8" /></div>
-            <div class="field"><label class="field-hint" for="max-steps">步骤数</label><input id="max-steps" type="number" min="0" max="1000" value="8" /></div>
-          </div>
-        </details>
         <div class="form-actions">
           <button class="primary-button" type="submit" ${noProfile ? "disabled" : ""}>开始任务</button>
           <span class="field-hint">开始后仍可在需要时确认关键操作。</span>
@@ -287,7 +278,7 @@ const renderNew = () => {
         </div>
         <div class="card side-card">
           <div class="side-title">密钥安全</div>
-          <p class="side-copy">模型密钥由本机服务器读取，网页不会接收、保存或转发密钥。你只需要在“模型与服务”中管理非敏感配置。</p>
+          <p class="side-copy">模型密钥由本机服务端保存和读取。网页输入后只发送到本机服务端，不写入浏览器存储；模型请求再由本机服务端按已保存的服务配置发送。</p>
         </div>
       </div>
     </div>
@@ -330,7 +321,7 @@ const renderPendingAction = (detail) => {
   return `
     <div class="action-card">
       <h3>这一步需要你的确认</h3>
-      <p class="action-copy">Molly 已经准备好执行下面的系统操作。确认后才会真正执行；长时间计算会在后台运行，页面会自动刷新。</p>
+      <p class="action-copy">系统已经准备好执行下面的操作。确认后才会真正执行；长时间计算会在后台运行，页面会自动刷新。</p>
       <div class="operation-name">系统操作：${html(operationLabel(pending.tool_name))}</div>
       <div class="operation-args"><pre>${pretty(pending.arguments)}</pre></div>
       <details class="call-technical"><summary>查看技术标识</summary><code>${html(pending.tool_name)}@${html(pending.tool_version)}</code></details>
@@ -414,7 +405,7 @@ const providerSlug = (name) => {
 
 const renderProviderCards = () => {
   const profiles = state.bootstrap?.model_profiles || [];
-  if (!profiles.length) return '<div class="empty-state"><h3>还没有模型服务</h3><p>在右侧添加一个服务的非敏感配置，然后用本机终端写入密钥。</p></div>';
+  if (!profiles.length) return '<div class="empty-state"><h3>还没有模型服务</h3><p>在右侧添加服务并在本页输入 API Key，密钥只会保存到本机服务端。</p></div>';
   return `<div class="provider-list">${profiles.map((profile) => `
     <div class="provider-card">
       <div class="provider-card-head">
@@ -432,9 +423,8 @@ const renderProviders = () => {
   const editing = state.editingProvider;
   return `
     <div class="page-heading">
-      <div><div class="eyebrow">MOLLY / 设置</div><h1>模型与服务</h1><p class="lead">网页只管理地址、模型和超时等非敏感配置。密钥由本机服务器单独保存。</p></div>
+      <div><div class="eyebrow">科学任务 / 设置</div><h1>模型与服务</h1><p class="lead">网页可配置地址、模型、超时和 API Key；密钥只保存到本机服务端，不会返回到页面。</p></div>
     </div>
-    <div class="notice mb-20"><div class="notice-icon" aria-hidden="true">♢</div><div><strong>密钥不会经过网页</strong>这里没有密钥输入框。保存服务后，在本机终端执行下面的命令，系统会隐藏输入内容并把密钥写到服务器端。</div></div>
     <div class="provider-grid">
       <div>${renderProviderCards()}</div>
       <form class="card provider-form stack" id="provider-form">
@@ -443,7 +433,7 @@ const renderProviders = () => {
         <div class="field"><label class="field-label" for="provider-endpoint">服务地址</label><input id="provider-endpoint" type="text" required value="${html(editing?.endpoint || "https://api.example.com/v1")}" placeholder="https://..." /><span class="field-hint">必须是 HTTPS 地址。</span></div>
         <div class="field"><label class="field-label" for="provider-model">模型名称</label><input id="provider-model" type="text" required value="${html(editing?.model_identifier || "")}" placeholder="例如：model-name" /></div>
         <div class="field"><label class="field-label" for="provider-timeout">请求超时（秒）</label><input id="provider-timeout" type="number" min="1" max="300" value="${html(editing?.timeout_seconds || 30)}" /></div>
-        <div class="provider-key-note"><strong>密钥状态</strong>${editing ? html(editing.credential_status) : "保存后可在本机终端配置"}${editing ? `<div class="command-box">molly config set-key --profile ${html(editing.profile_ref)}</div>` : ""}</div>
+        ${editing ? `<div class="provider-key-note"><strong>API Key</strong><span>当前状态：${html(editing.credential_status)}</span><span class="field-hint">输入内容只发送到本机服务端，保存后不会回显、写入任务记录或保存到浏览器。</span><div class="provider-key-form"><input id="provider-api-key" type="password" autocomplete="new-password" placeholder="输入 API Key" /><button class="secondary-button" data-save-provider-key="${html(editing.profile_ref)}" type="button">保存 API Key</button></div></div>` : '<div class="provider-key-note"><strong>API Key</strong><span>先保存服务，再在这里输入 API Key。</span></div>'}
         <div class="form-actions"><button class="primary-button" type="submit">保存服务</button>${editing ? '<button class="secondary-button" data-clear-provider="true" type="button">取消编辑</button>' : ""}</div>
         ${editing ? '<div class="provider-check" id="provider-check"></div>' : ""}
       </form>
@@ -454,7 +444,7 @@ const renderProviders = () => {
 const render = () => {
   if (!state.bootstrap) return;
   const labels = { new: "新建任务", runs: "任务记录", providers: "模型与服务" };
-  topbarContext.textContent = labels[state.view] || "Molly";
+  topbarContext.textContent = labels[state.view] || "科学任务工作台";
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
   if (state.view === "new") content.innerHTML = renderNew();
   if (state.view === "runs") content.innerHTML = renderRuns();
@@ -489,7 +479,8 @@ const bindPageEvents = () => {
     event.preventDefault();
     const goal = document.getElementById("goal").value.trim();
     const profileId = document.getElementById("profile-id").value;
-    if (!goal || !profileId) return showToast("请先填写任务目标并选择运行配置", true);
+    const llmProfileRef = document.getElementById("llm-profile")?.value || "";
+    if (!goal || !profileId || !llmProfileRef) return showToast("请填写任务目标并选择运行配置和解析模型", true);
     try {
       setBusy(true);
       const result = await request("/api/runs", {
@@ -497,13 +488,8 @@ const bindPageEvents = () => {
           body: JSON.stringify({
           goal,
           profile_id: profileId,
-            input_artifact_ids: state.files.map((file) => file.artifact_id),
-            llm_profile_ref: document.getElementById("llm-profile")?.value || null,
-          budget: {
-            max_decisions: Number(document.getElementById("max-decisions").value),
-            max_tool_calls: Number(document.getElementById("max-tool-calls").value),
-            max_steps: Number(document.getElementById("max-steps").value),
-          },
+          input_artifact_ids: state.files.map((file) => file.artifact_id),
+          llm_profile_ref: llmProfileRef,
         }),
       });
       state.selectedRunId = result.run_id;
@@ -616,6 +602,24 @@ const bindPageEvents = () => {
       showToast(result.message, !result.ready);
     } catch (error) { showToast(error.message, true); } finally { setBusy(false); }
   }));
+
+  document.querySelectorAll("[data-save-provider-key]").forEach((button) => button.addEventListener("click", async () => {
+    const input = document.getElementById("provider-api-key");
+    const apiKey = input?.value || "";
+    if (!apiKey.trim()) return showToast("请输入 API Key", true);
+    try {
+      setBusy(true);
+      await request(`/api/model-profiles/${encodeURIComponent(button.dataset.saveProviderKey)}/credential`, {
+        method: "POST",
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      if (input) input.value = "";
+      await loadBootstrap();
+      state.editingProvider = state.bootstrap.model_profiles.find((profile) => profile.profile_ref === button.dataset.saveProviderKey) || null;
+      render();
+      showToast("API Key 已保存到本机服务端");
+    } catch (error) { showToast(error.message, true); } finally { setBusy(false); }
+  }));
 };
 
 const applyTheme = (theme) => {
@@ -626,7 +630,7 @@ const applyTheme = (theme) => {
 
 document.getElementById("theme-toggle").addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  localStorage.setItem("molly-theme", next);
+  localStorage.setItem("workbench-theme", next);
   applyTheme(next);
 });
 
@@ -635,7 +639,7 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
   catch (error) { showToast(error.message, true); }
 });
 
-applyTheme(localStorage.getItem("molly-theme") || "light");
+applyTheme(localStorage.getItem("workbench-theme") || "light");
 loadBootstrap().catch((error) => {
   content.innerHTML = `<div class="empty-state"><h3>本机服务暂不可用</h3><p>${html(error.message)}</p></div>`;
 });

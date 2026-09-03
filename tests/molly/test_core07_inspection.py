@@ -11,7 +11,6 @@ import pytest
 from molly.core import (
     ArtifactDraft,
     ArtifactStore,
-    RunBudget,
     RunStatus,
     SideEffectClass,
     StopAction,
@@ -115,7 +114,6 @@ def _run(tmp_path: Path, *, provider_factory, **kwargs):
     result = service.start_run(
         profile_id=profile.profile_id,
         goal="inspect one deterministic run",
-        budget=RunBudget(max_decisions=4, max_tool_calls=2, max_steps=2),
     )
     return service, profile, result
 
@@ -181,9 +179,8 @@ def test_inspection_fails_closed_for_corrupt_ledger_and_missing_initial_artifact
         profile_id=profile.profile_id,
         goal="inspect missing initial input",
         input_artifact_ids=(input_artifact.artifact_id,),
-        budget=RunBudget(max_decisions=1, max_tool_calls=0, max_steps=0),
     )
-    assert input_result.status == RunStatus.BUDGET_EXHAUSTED.value
+    assert input_result.status == RunStatus.STOPPED.value
     digest = input_artifact.sha256
     (tmp_path / "input-runtime" / "artifacts" / "objects" / digest[:2] / digest).unlink()
     with pytest.raises(InspectionIntegrityError):
@@ -346,7 +343,6 @@ def test_inspection_represents_core06_and_scientific_intake_artifacts_without_do
         profile_id=profile.profile_id,
         goal="inspect generic scientific intake and BR1 stage artifacts",
         input_artifact_ids=(dataset.artifact_id,),
-        budget=RunBudget(max_decisions=6, max_tool_calls=6, max_steps=6),
     )
     assert result.status == RunStatus.STOPPED.value
     inspection = service.inspect_run(result.run_id)

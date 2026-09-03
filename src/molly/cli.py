@@ -37,9 +37,6 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--profile", required=True, dest="profile_id")
     start.add_argument("--goal", required=True)
     start.add_argument("--input-artifact", action="append", default=())
-    start.add_argument("--max-decisions", type=int, default=12)
-    start.add_argument("--max-tool-calls", type=int, default=8)
-    start.add_argument("--max-steps", type=int, default=8)
     resume = run_commands.add_parser("resume", help="resume an existing run")
     resume.add_argument("run_id")
 
@@ -82,11 +79,6 @@ def _parser() -> argparse.ArgumentParser:
 
     web = commands.add_parser("web", help="start the local Molly browser interface")
     web.add_argument("--port", type=int, default=8765)
-    web.add_argument(
-        "--demo",
-        action="store_true",
-        help="enable an explicit deterministic profile for trying the UI",
-    )
     return parser
 
 
@@ -167,24 +159,17 @@ def main(
             from molly.web import create_application, serve
 
             return serve(
-                create_application(Path(args.state_root), demo=args.demo),
+                create_application(Path(args.state_root)),
                 port=args.port,
             )
         active_service = service or RuntimeService(
             Path(args.state_root), profiles=RuntimeProfileRegistry()
         )
         if args.command == "run" and args.run_command == "start":
-            from molly.core.runs import RunBudget
-
             result = active_service.start_run(
                 profile_id=args.profile_id,
                 goal=args.goal,
                 input_artifact_ids=tuple(args.input_artifact),
-                budget=RunBudget(
-                    max_decisions=args.max_decisions,
-                    max_tool_calls=args.max_tool_calls,
-                    max_steps=args.max_steps,
-                ),
             )
             payload = result.to_dict()
         elif args.command == "run" and args.run_command == "resume":

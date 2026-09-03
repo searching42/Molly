@@ -1,6 +1,6 @@
 """Minimal production contracts for Molly Core v2 CORE-01 and CORE-02."""
 
-from .agent_loop import AgentLoop, RunEngine
+from .agent_loop import BUDGET_EXHAUSTED, INTENT_FROZEN, AgentLoop, RunEngine
 from .approvals import ApprovalDecision, ApprovalRecord
 from .artifacts import ArtifactRecord, ArtifactStore
 from .errors import (
@@ -10,7 +10,6 @@ from .errors import (
     ArtifactError,
     ArtifactIntegrityError,
     ArtifactNotFoundError,
-    BudgetError,
     CoreContractError,
     InspectionError,
     InspectionIntegrityError,
@@ -37,7 +36,7 @@ from .ledger import LedgerEvent, RunLedger
 from .lineage import ArtifactLineage, LineageRelation, RelationType
 from .inspection import ArtifactInspection, RunInspection, RunInspector, ToolCallInspection
 from .reviews import ReviewDecision, ReviewRecord
-from .runs import RunBudget, RunContext, RunRequest, RunResult, RunStatus
+from .runs import RunContext, RunRequest, RunResult, RunStatus
 from .tools import (
     ArtifactDraft,
     DecisionProvider,
@@ -74,10 +73,11 @@ __all__ = [
     "ArtifactRecord",
     "ArtifactStore",
     "ArtifactDraft",
-    "BudgetError",
+    "BUDGET_EXHAUSTED",
     "CoreContractError",
     "InspectionError",
     "InspectionIntegrityError",
+    "INTENT_FROZEN",
     "DecisionProvider",
     "LedgerCorruptionError",
     "LedgerError",
@@ -96,7 +96,6 @@ __all__ = [
     "ReviewError",
     "ReviewRecord",
     "RunBindingError",
-    "RunBudget",
     "RunContext",
     "RunEngine",
     "RunError",

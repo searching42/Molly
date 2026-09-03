@@ -1,33 +1,51 @@
-"""Server-side provider settings for the local Molly web surface.
+"""Server-side provider settings for the local browser surface.
 
-The browser can edit the non-secret provider declaration, but it never sends
-or receives a credential.  Credentials are written through the local CLI and
-kept in a file with owner-only permissions for this first local iteration.
-The file boundary is deliberately separate from Core run state so provider
-secrets cannot become part of a request, ledger event, or artifact.
+The browser can edit the non-secret provider declaration and submit a
+credential to the loopback service. Credentials are kept in a separate file
+with owner-only permissions. The file boundary is deliberately separate from
+Core run state so provider secrets cannot become part of a request, ledger
+event, or artifact.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import tempfile
 from typing import Any
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-from molly.llm import StructuredProviderProfile
-from molly.core.ids import validate_identifier
+from molly.core.ids import (
+    canonical_json_bytes,
+    validate_digest_reference,
+    validate_identifier,
+)
+from molly.llm import OpenAICompatibleStructuredProvider, StructuredProviderProfile
 
 
 PROVIDER_CONFIG_VERSION = 1
+PROVIDER_SECRET_CONFIG_VERSION = 2
+LEGACY_PROVIDER_SECRET_CONFIG_VERSION = 1
 MAX_PROVIDER_NAME_LENGTH = 80
 MAX_PROVIDER_SECRET_LENGTH = 16_384
 
 
 class ProviderConfigError(ValueError):
     """A provider setting could not be read or validated."""
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Prevent an Authorization header from following an untrusted redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_HTTP_OPENER = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +70,14 @@ class ProviderProfileView:
             ),
             "credential_configured": self.credential_configured,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderSecret:
+    """One secret bound to the exact non-secret provider profile digest."""
+
+    value: str = field(repr=False)
+    profile_digest: str | None = None
 
 
 class ProviderConfigStore:
@@ -124,19 +150,77 @@ class ProviderConfigStore:
             profiles[key] = entry
         return profiles
 
-    def _read_secrets(self) -> dict[str, str]:
-        value = self._read_json(self.secrets_path, default={"version": 1, "secrets": {}})
-        if value.get("version") != 1:
+    def _read_secrets(self) -> dict[str, _ProviderSecret]:
+        self._check_file(self.secrets_path)
+        value = self._read_json(
+            self.secrets_path,
+            default={"version": PROVIDER_SECRET_CONFIG_VERSION, "secrets": {}},
+        )
+        version = value.get("version")
+        if version not in {
+            LEGACY_PROVIDER_SECRET_CONFIG_VERSION,
+            PROVIDER_SECRET_CONFIG_VERSION,
+        }:
             raise ProviderConfigError("provider secret store version is unsupported")
         raw_secrets = value.get("secrets", {})
         if not isinstance(raw_secrets, Mapping):
             raise ProviderConfigError("provider secret store is invalid")
-        secrets: dict[str, str] = {}
-        for key, secret in raw_secrets.items():
-            if not isinstance(key, str) or not isinstance(secret, str) or not secret:
+        secrets: dict[str, _ProviderSecret] = {}
+        for key, raw_secret in raw_secrets.items():
+            if not isinstance(key, str):
                 raise ProviderConfigError("provider secret store contains an invalid entry")
-            secrets[key] = secret
+            if version == LEGACY_PROVIDER_SECRET_CONFIG_VERSION:
+                if not isinstance(raw_secret, str) or not raw_secret:
+                    raise ProviderConfigError(
+                        "provider secret store contains an invalid entry"
+                    )
+                secrets[key] = _ProviderSecret(value=raw_secret)
+                continue
+            if not isinstance(raw_secret, Mapping) or set(raw_secret) != {
+                "api_key",
+                "profile_digest",
+            }:
+                raise ProviderConfigError("provider secret store contains an invalid entry")
+            secret = raw_secret.get("api_key")
+            digest = raw_secret.get("profile_digest")
+            if not isinstance(secret, str) or not secret:
+                raise ProviderConfigError("provider secret store contains an invalid entry")
+            if digest is not None:
+                try:
+                    digest = validate_digest_reference(
+                        str(digest), field="provider secret profile digest"
+                    )
+                except Exception as exc:
+                    raise ProviderConfigError(
+                        "provider secret store contains an invalid profile digest"
+                    ) from exc
+            secrets[key] = _ProviderSecret(value=secret, profile_digest=digest)
+        if self.secrets_path.exists():
+            try:
+                os.chmod(self.secrets_path, 0o600)
+            except OSError as exc:
+                raise ProviderConfigError("provider secret store permissions are unsafe") from exc
         return secrets
+
+    @staticmethod
+    def _credential_configured(
+        profile: StructuredProviderProfile,
+        secrets: Mapping[str, _ProviderSecret],
+    ) -> bool:
+        record = secrets.get(profile.profile_ref)
+        return record is not None and record.profile_digest == profile.digest
+
+    @staticmethod
+    def _serialize_secrets(
+        secrets: Mapping[str, _ProviderSecret],
+    ) -> dict[str, dict[str, Any] | str]:
+        return {
+            profile_ref: {
+                "api_key": record.value,
+                "profile_digest": record.profile_digest,
+            }
+            for profile_ref, record in secrets.items()
+        }
 
     def _write_json(self, path: Path, value: Mapping[str, Any], *, mode: int = 0o600) -> None:
         self._ensure_root()
@@ -153,6 +237,11 @@ class ProviderConfigStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
+            directory = os.open(self.root, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -198,7 +287,7 @@ class ProviderConfigStore:
                 ProviderProfileView(
                     profile=profile,
                     display_name=display_name,
-                    credential_configured=bool(secrets.get(profile.profile_ref)),
+                    credential_configured=self._credential_configured(profile, secrets),
                 )
             )
         return tuple(result)
@@ -214,10 +303,11 @@ class ProviderConfigStore:
         except KeyError as exc:
             raise ProviderConfigError("provider profile was not found") from exc
         profile, display_name = self._profile_from_entry(entry)
+        secrets = self._read_secrets()
         return ProviderProfileView(
             profile=profile,
             display_name=display_name,
-            credential_configured=bool(self._read_secrets().get(profile.profile_ref)),
+            credential_configured=self._credential_configured(profile, secrets),
         )
 
     def upsert_profile(self, payload: Mapping[str, Any]) -> ProviderProfileView:
@@ -249,7 +339,7 @@ class ProviderConfigStore:
     def set_secret(self, profile_ref: str, secret: str) -> None:
         if not isinstance(profile_ref, str) or not profile_ref:
             raise ProviderConfigError("provider profile_ref is required")
-        self.get_profile(profile_ref)
+        view = self.get_profile(profile_ref)
         if (
             not isinstance(secret, str)
             or not secret.strip()
@@ -258,10 +348,15 @@ class ProviderConfigStore:
         ):
             raise ProviderConfigError("provider credential is invalid")
         secrets = self._read_secrets()
-        secrets[profile_ref] = secret.strip()
+        secrets[profile_ref] = _ProviderSecret(
+            value=secret.strip(), profile_digest=view.profile.digest
+        )
         self._write_json(
             self.secrets_path,
-            {"version": 1, "secrets": secrets},
+            {
+                "version": PROVIDER_SECRET_CONFIG_VERSION,
+                "secrets": self._serialize_secrets(secrets),
+            },
             mode=0o600,
         )
 
@@ -274,7 +369,10 @@ class ProviderConfigStore:
         del secrets[profile_ref]
         self._write_json(
             self.secrets_path,
-            {"version": 1, "secrets": secrets},
+            {
+                "version": PROVIDER_SECRET_CONFIG_VERSION,
+                "secrets": self._serialize_secrets(secrets),
+            },
             mode=0o600,
         )
 
@@ -283,11 +381,58 @@ class ProviderConfigStore:
 
         if not isinstance(profile, StructuredProviderProfile):
             raise ProviderConfigError("provider profile is required")
-        return self._read_secrets().get(profile.profile_ref)
+        record = self._read_secrets().get(profile.profile_ref)
+        if record is None or record.profile_digest != profile.digest:
+            return None
+        return record.value
+
+    @staticmethod
+    def _transport(profile: StructuredProviderProfile):
+        def send(
+            endpoint: str,
+            *,
+            headers: Mapping[str, str],
+            json_body: Mapping[str, Any],
+            timeout_seconds: float,
+        ) -> bytes:
+            request = Request(
+                endpoint,
+                data=canonical_json_bytes(json_body),
+                headers=dict(headers),
+                method="POST",
+            )
+            try:
+                with _HTTP_OPENER.open(request, timeout=float(timeout_seconds)) as response:
+                    if not 200 <= response.status < 300:
+                        raise ProviderConfigError("model service returned a non-success status")
+                    body = response.read(profile.max_response_bytes + 1)
+            except HTTPError as exc:
+                raise ProviderConfigError("model service request failed") from exc
+            except ProviderConfigError:
+                raise
+            except Exception as exc:
+                raise ProviderConfigError("model service request failed") from exc
+            if len(body) > profile.max_response_bytes:
+                raise ProviderConfigError("model service response exceeds the configured limit")
+            return body
+
+        return send
+
+    def create_intent_provider(self, profile_ref: str) -> OpenAICompatibleStructuredProvider:
+        """Build a server-only structured LLM adapter for request parsing."""
+
+        view = self.get_profile(profile_ref)
+        return OpenAICompatibleStructuredProvider(
+            view.profile,
+            transport=self._transport(view.profile),
+            secret_resolver=self.resolve_secret,
+        )
 
 
 __all__ = [
+    "LEGACY_PROVIDER_SECRET_CONFIG_VERSION",
     "MAX_PROVIDER_SECRET_LENGTH",
+    "PROVIDER_SECRET_CONFIG_VERSION",
     "ProviderConfigError",
     "ProviderConfigStore",
     "ProviderProfileView",

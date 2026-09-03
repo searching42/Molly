@@ -23,7 +23,7 @@ from molly.core.ids import (
 from molly.core.ledger import LedgerEvent, RunLedger
 from molly.core.lineage import ArtifactLineage
 from molly.core.reviews import ReviewDecision, ReviewRecord
-from molly.core.runs import RunBudget, RunRequest, RunResult
+from molly.core.runs import RunRequest, RunResult
 
 from .errors import RuntimeBindingError, RuntimeProfileUnavailable, RuntimeStateError
 from .profiles import RuntimeProfile, RuntimeProfileRegistry
@@ -173,7 +173,6 @@ class RuntimeService:
         profile_id: str,
         goal: str,
         input_artifact_ids: tuple[str, ...] = (),
-        budget: RunBudget | Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> RunResult:
         profile = self.profiles.resolve(profile_id)
@@ -194,7 +193,6 @@ class RuntimeService:
         request = RunRequest.create(
             goal=goal,
             tool_policy_digest=policy.digest,
-            budget=budget if budget is not None else RunBudget(),
             input_artifact_ids=input_artifact_ids,
             metadata=supplied_metadata,
             created_at=normalize_timestamp(self.clock(), field="request created_at"),

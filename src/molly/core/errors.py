@@ -67,10 +67,6 @@ class RunStateError(RunError):
     """A run's append-only facts cannot support a safe state projection."""
 
 
-class BudgetError(RunError):
-    """A run budget is invalid or exhausted."""
-
-
 class ToolError(MollyCoreError):
     """Base class for closed tool contracts and host execution failures."""
 

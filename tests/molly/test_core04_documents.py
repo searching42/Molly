@@ -28,7 +28,6 @@ from molly.core import (
     AgentLoop,
     ArtifactLineage,
     ArtifactStore,
-    RunBudget,
     RunLedger,
     RunRequest,
     RunStatus,
@@ -530,7 +529,6 @@ def test_document_tool_agentloop_publishes_document_and_projects_bounded_lineage
         goal="parse one offline CORE-04 fixture",
         input_artifact_ids=(source_record.artifact_id,),
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=4, max_tool_calls=2, max_steps=2),
     )
     result = loop.run(request)
     assert result.status == RunStatus.STOPPED.value
@@ -656,7 +654,6 @@ def test_core03_offline_full_text_artifact_flows_through_document_tool(tmp_path:
         goal="normalize offline acquired source",
         input_artifact_ids=(source_artifact_id,),
         tool_policy_digest=policy.digest,
-        budget=RunBudget(max_decisions=4, max_tool_calls=2, max_steps=2),
     )
     result = loop.run(request)
     assert result.status == RunStatus.STOPPED.value
@@ -692,9 +689,13 @@ def test_document_tool_requires_exactly_one_declared_source(tmp_path: Path) -> N
         class Provider:
             def __init__(self, declared_inputs):
                 self.declared_inputs = declared_inputs
+                self.calls = 0
 
             def next_action(self, context, tools):
-                return ToolCallProposal("document_parse", input_artifact_ids=self.declared_inputs)
+                self.calls += 1
+                if self.calls == 1:
+                    return ToolCallProposal("document_parse", input_artifact_ids=self.declared_inputs)
+                return StopAction("input boundary checked")
 
         ledger = RunLedger(tmp_path / f"boundary-{index}.jsonl")
         loop = AgentLoop(
@@ -709,9 +710,8 @@ def test_document_tool_requires_exactly_one_declared_source(tmp_path: Path) -> N
             goal="check document input boundary",
             input_artifact_ids=inputs,
             tool_policy_digest=policy.digest,
-            budget=RunBudget(max_decisions=2, max_tool_calls=1, max_steps=1),
         )
-        assert loop.run(request).status == RunStatus.BUDGET_EXHAUSTED.value
+        assert loop.run(request).status == RunStatus.STOPPED.value
         assert any(event.event_type == TOOL_EXECUTION_FAILED for event in ledger.events)
 
 

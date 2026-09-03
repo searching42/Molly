@@ -35,7 +35,12 @@ RunRequest → AgentLoop → ToolRegistry/ToolPolicy
 Current contracts cover immutable scientific content, append-only execution
 records, bounded provenance, compliant literature acquisition, deterministic
 document parsing, reviewed OLED evidence, optional BR1 inverse design,
-runtime/CLI inspection, and observer-only observability.
+runtime/CLI inspection, observer-only observability, and a loopback-only
+operator UI. BR1 request parameters are extracted through a selected,
+server-configured structured LLM; there is no rule-based parsing fallback or
+user-configurable per-run limit. The server still enforces a fixed safety
+ceiling, and legacy Core v2 request/terminal records remain readable without
+changing their persisted request digest.
 
 MinerU is an optional PDF fallback. BR1 and remote compute are optional plugin
 surfaces. Telemetry is observer-only and cannot advance scientific state.
@@ -48,7 +53,8 @@ scope and evidence:
 - validate a real literature/data-mining pipeline and its review boundary;
 - evaluate structured acquisition paths that may replace or bypass MinerU;
 - extend scientific domains and acceptance datasets;
-- add a UI or general HTTP API only if a separate authority review approves it;
+- extend the loopback-only UI or add a general HTTP API only if a separate
+  authority review approves it;
 - pursue research trajectory or error-propagation work only under a separately
   approved research proposal.
 

@@ -842,6 +842,7 @@ def remote_br1_profile(
     description: str = "在服务端登记的远程工作站执行 Uni-Mol 与 REINVENT4",
     host_preference: str = "auto",
     gpu_count: int | None = None,
+    intent_provider_resolver: Any | None = None,
 ) -> Any:
     """Build a BR1 RuntimeProfile backed by the durable remote backend."""
 
@@ -899,6 +900,7 @@ def remote_br1_profile(
             "gpu_count": selected_gpu_count,
             "walltime_sec": int(host.resource_constraints.get("walltime_sec", 7_200)),
         },
+        intent_provider_resolver=intent_provider_resolver,
         config={
             "backend_kind": "remote",
             "host_identity": host.host_identity,

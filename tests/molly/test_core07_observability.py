@@ -8,7 +8,6 @@ import pytest
 
 from molly.core import (
     ArtifactDraft,
-    RunBudget,
     SideEffectClass,
     StopAction,
     ToolCallProposal,
@@ -96,7 +95,6 @@ def _service(tmp_path: Path):
     result = service.start_run(
         profile_id=profile.profile_id,
         goal="observe a deterministic run",
-        budget=RunBudget(max_decisions=4, max_tool_calls=2, max_steps=2),
     )
     return service, profile, result
 
