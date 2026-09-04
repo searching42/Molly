@@ -208,6 +208,13 @@ persisted confirmed runtime configuration. The default scientific catalog
 fails closed when an artifact SHA-256 has not yet been entered; it never
 guesses a hash or downloads from a client-supplied URL.
 
+Production deployments provide the reviewed, owner-only fixed manifest at
+`.molly/runtime_install_manifest.json`, or set the server-side
+`MOLLY_RUNTIME_MANIFEST_PATH` variable (the same path can be passed to
+`create_application`). The manifest must contain exact HTTPS artifact URLs,
+versions, sizes, installation kind, required verification paths, and lowercase
+SHA-256 values; browser requests cannot replace it.
+
 ### BR1 real end-to-end run
 
 Normal web mode exposes only worker profiles that are complete and registered

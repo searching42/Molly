@@ -405,6 +405,9 @@ td code { white-space: nowrap; }
 .environment-install-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; color: var(--text-soft); font-size: 11px; }
 .environment-install-item { padding: 11px 12px; border-radius: 9px; background: var(--surface-soft); }
 .environment-install-list { display: grid; gap: 9px; }
+.environment-install-reuse { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; color: var(--text-soft); font-size: 12px; }
+.environment-install-reuse strong { color: var(--text); margin-right: 3px; }
+.environment-install-reuse span { padding: 5px 8px; border-radius: 7px; background: var(--surface-soft); }
 .environment-install-blockers { padding: 11px 12px; border-radius: 9px; background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); font-size: 12px; }
 .environment-install-blockers ul { margin: 7px 0 0; padding-left: 18px; }
 .environment-install-blockers li { margin: 4px 0; }

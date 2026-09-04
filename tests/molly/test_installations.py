@@ -101,13 +101,26 @@ class _FixedDetector:
         return self.report
 
 
-def _environment(tmp_path: Path, *, mode: str = "local") -> tuple[EnvironmentManager, str, EnvironmentReport]:
+def _environment(
+    tmp_path: Path,
+    *,
+    mode: str = "local",
+    ready: bool = False,
+) -> tuple[EnvironmentManager, str, EnvironmentReport]:
     root = tmp_path / "runtime"
     profile_payload: dict[str, object] = {"mode": mode, "display_name": "测试环境"}
     if mode == "ssh":
-        profile_payload.update({"ssh_target": "workstation1", "ssh_user": "tester", "ssh_port": 2222})
+        profile_payload.update({"ssh_target": "compute.example", "ssh_user": "tester", "ssh_port": 2222})
     profile = EnvironmentProfile.from_payload(profile_payload)
-    report = EnvironmentReport.from_probe(profile, _probe_payload())
+    report = EnvironmentReport.from_probe(
+        profile,
+        _probe_payload(),
+        verified_weight_records=(
+            {"/opt/unimolv1.pt": {"size_bytes": 1, "sha256": "a" * 64}}
+            if ready
+            else None
+        ),
+    )
     detector = _FixedDetector(report)
     manager = EnvironmentManager(root, detector=detector)  # type: ignore[arg-type]
     saved = manager.upsert_profile(profile_payload)
@@ -173,7 +186,9 @@ def test_approval_is_digest_bound_and_local_install_is_atomic(tmp_path: Path) ->
     config = result["runtime_config"]
     assert config["status_label"] == "已确认"
     assert (tmp_path / "runtime" / "runtimes" / plan.runtime_id / "weights" / "unimolv1.pt").read_bytes() == b"fixed model bytes"
+    assert not (tmp_path / "runtime" / "runtimes" / plan.runtime_id / ".downloads").exists()
     assert installer.runtime_public(environment_ref)["status_label"] == "已确认"
+    assert installer.build_plan(environment_ref).status == "ALREADY_CONFIRMED"
 
 
 def test_default_manifest_without_hash_is_blocked_without_side_effects(tmp_path: Path) -> None:
@@ -187,6 +202,50 @@ def test_default_manifest_without_hash_is_blocked_without_side_effects(tmp_path:
         installer.confirm(_approval(plan))
     assert not (tmp_path / "runtime" / "runtimes").exists()
     assert not (tmp_path / "runtime" / ".runtime-staging").exists()
+
+
+def test_compatible_environment_requires_one_confirmation_and_persists_runtime(
+    tmp_path: Path,
+) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+
+    plan = installer.build_plan(environment_ref)
+    assert plan.status == "READY_TO_CONFIRM"
+    assert plan.requires_confirmation is True
+    assert plan.will_execute is False
+    result = installer.confirm(_approval(plan))
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert result["runtime_config"]["status_label"] == "已确认"
+    assert not (tmp_path / "runtime" / "runtimes").exists()
+
+    repeated_plan = installer.build_plan(environment_ref)
+    assert repeated_plan.status == "ALREADY_CONFIRMED"
+    repeated = installer.confirm(_approval(repeated_plan))
+    assert repeated["installation"] is None
+    assert repeated["runtime_config"]["status_label"] == "已确认"
+    records = [
+        item
+        for item in installer.store._read_state()["installations"].values()
+        if item["environment_ref"] == environment_ref
+    ]
+    assert len(records) == 1
+
+
+def test_server_owned_manifest_file_is_a_production_loading_entry(tmp_path: Path) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"manifest-file")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    manifest = _manifest(source)
+    manifest_path = tmp_path / "runtime" / "runtime_install_manifest.json"
+    manifest_path.write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+    )
+    assert installer.manifest.digest == manifest.digest
+    assert installer.build_plan(environment_ref).status == "READY_TO_INSTALL"
 
 
 def test_tampered_fixed_source_fails_and_rolls_back(tmp_path: Path) -> None:
@@ -340,7 +399,14 @@ def test_simulated_ssh_uses_fixed_remote_transport(tmp_path: Path) -> None:
 
     def runner(argv: Sequence[str], input_bytes: bytes | None, _timeout: float) -> tuple[int, bytes]:
         calls.append((tuple(argv), input_bytes))
-        return 0, b'{"ok":true,"verified":true}'
+        assert input_bytes is not None
+        if b'"operation":"finalize"' in input_bytes:
+            return 0, b'{"ok":true,"state":"ENABLED","target_exists":true}'
+        if b'"operation":"status"' in input_bytes:
+            state = b"ENABLED" if len(calls) >= 4 else b"VERIFIED"
+            target_exists = b"true" if state == b"ENABLED" else b"false"
+            return 0, b'{"ok":true,"state":"' + state + b'","verified":true,"target_exists":' + target_exists + b'}'
+        return 0, b'{"ok":true,"verified":true,"state":"VERIFIED","target_exists":false}'
 
     executor = RestrictedInstallExecutor(runner=runner)
     installer = InstallationManager(
@@ -352,11 +418,11 @@ def test_simulated_ssh_uses_fixed_remote_transport(tmp_path: Path) -> None:
     plan = installer.build_plan(environment_ref)
     result = installer.confirm(_approval(plan))
 
-    assert result["installation"]["state"] == "CONFIRMED"
-    assert len(calls) == 2
+    assert result["installation"]["state"] == "CONFIRMED", result["installation"].get("error")
+    assert len(calls) == 4
     argv, script = calls[0]
     separator = argv.index("--")
-    assert separator < argv.index("workstation1")
+    assert separator < argv.index("compute.example")
     assert argv[-2:] == ("python3", "-")
     assert script is not None
     compile(script.decode("utf-8"), "remote-install-script", "exec")
@@ -386,6 +452,81 @@ def test_simulated_ssh_failure_has_no_runtime_config(tmp_path: Path) -> None:
     assert calls == 2  # failed install plus bounded best-effort rollback
     assert result["installation"]["state"] == "FAILED"
     assert result["runtime_config"] is None
+
+
+def test_simulated_ssh_finalize_crash_recovers_from_remote_transaction_status(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"remote-recovery")
+    environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
+    remote_state = ""
+    calls: list[str] = []
+
+    def runner(_argv: Sequence[str], input_bytes: bytes | None, _timeout: float) -> tuple[int, bytes]:
+        nonlocal remote_state
+        assert input_bytes is not None
+        if b'"operation":"install"' in input_bytes:
+            remote_state = "VERIFIED"
+            calls.append("install")
+            return 0, b'{"ok":true,"verified":true,"state":"VERIFIED","target_exists":false}'
+        if b'"operation":"finalize"' in input_bytes:
+            remote_state = "ENABLED"
+            calls.append("finalize")
+            return 0, b'{"ok":true,"state":"ENABLED","target_exists":true}'
+        if b'"operation":"status"' in input_bytes:
+            calls.append("status")
+            target_exists = "true" if remote_state == "ENABLED" else "false"
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "state": remote_state,
+                    "verified": remote_state in {"VERIFIED", "ENABLED"},
+                    "target_exists": remote_state == "ENABLED",
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        calls.append("rollback")
+        return 0, b'{"ok":true}'
+
+    base = RestrictedInstallExecutor(runner=runner)
+
+    class CrashAfterRemoteFinalize:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+            raise SystemExit("remote worker crashed after finalize")
+
+        def rollback(self, *args: object, **kwargs: object) -> None:
+            base.rollback(*args, **kwargs)  # type: ignore[arg-type]
+
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=CrashAfterRemoteFinalize(),  # type: ignore[arg-type]
+    )
+    plan = first.build_plan(environment_ref)
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ENABLING"
+    assert calls == ["install", "status", "finalize"]
+
+    resumed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=RestrictedInstallExecutor(runner=runner),
+    )
+    result = resumed.recover(record.installation_id, force=True)
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert calls == ["install", "status", "finalize", "status"]
 
 
 def test_client_cannot_expand_the_fixed_component_allowlist(tmp_path: Path) -> None:

@@ -543,6 +543,7 @@ class EnvironmentConfigStore:
         detection: Mapping[str, Any],
         *,
         expected_connection_digest: str | None = None,
+        expected_report_digest: str | None = None,
     ) -> None:
         with self._write_lock():
             try:
@@ -561,6 +562,11 @@ class EnvironmentConfigStore:
             except (TypeError, ValueError) as exc:
                 raise EnvironmentConfigError("environment detection is not JSON serializable") from exc
             reports = self._read_reports()
+            if expected_report_digest is not None:
+                current = reports.get(environment_ref)
+                current_report = current.get("report") if isinstance(current, Mapping) else None
+                if not isinstance(current_report, Mapping) or current_report.get("report_digest") != expected_report_digest:
+                    raise EnvironmentConfigError("environment report changed during verification")
             reports[environment_ref] = dict(detection)
             self._write_json(
                 self.reports_path,

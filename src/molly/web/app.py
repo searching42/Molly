@@ -277,6 +277,7 @@ class MollyWebApplication:
         provider_store: ProviderConfigStore,
         environment_manager: EnvironmentManager | None = None,
         installation_manager: InstallationManager | None = None,
+        installation_manifest_path: Path | str | None = None,
         static_root: Path | None = None,
     ) -> None:
         if not isinstance(service, RuntimeService):
@@ -290,9 +291,12 @@ class MollyWebApplication:
         self.environment_manager = environment_manager or EnvironmentManager(service.root)
         if installation_manager is not None and not isinstance(installation_manager, InstallationManager):
             raise TypeError("installation_manager must be an InstallationManager")
+        if installation_manager is not None and installation_manifest_path is not None:
+            raise ValueError("installation_manifest_path cannot accompany installation_manager")
         self.installation_manager = installation_manager or InstallationManager(
             service.root,
             environment_manager=self.environment_manager,
+            manifest_path=installation_manifest_path,
         )
         self.static_root = static_root or Path(__file__).with_name("static")
         self._local_session_token = secrets.token_urlsafe(32)
@@ -516,7 +520,9 @@ class MollyWebApplication:
                 return 200, self._environment_detail(route[2])
         if len(route) == 4 and route[:2] == ["api", "environments"]:
             if method == "POST" and route[3] == "detect":
-                return 200, self.environment_manager.detect(route[2])
+                value = self.environment_manager.detect(route[2])
+                value["runtime_config"] = self.installation_manager.runtime_public(route[2])
+                return 200, value
         if len(route) == 5 and route[:2] == ["api", "environments"]:
             environment_ref, resource, action = route[2], route[3], route[4]
             if resource == "install" and method == "POST" and action == "plan":
@@ -1206,15 +1212,28 @@ class MollyWebApplication:
         result = []
         for profile in self.environment_manager.list_public():
             value = dict(profile)
-            value["runtime_config"] = self.installation_manager.runtime_public(
+            runtime = self.installation_manager.runtime_public(
                 profile["environment_ref"]
             )
+            value["runtime_config"] = runtime
+            if runtime and runtime.get("status_label") == "已确认":
+                value["status"] = "CONFIRMED"
+                value["selected_device"] = runtime.get("selected_device") or value.get("selected_device")
             result.append(value)
         return result
 
     def _environment_detail(self, environment_ref: str) -> dict[str, Any]:
         value = self.environment_manager.get_public(environment_ref)
-        value["runtime_config"] = self.installation_manager.runtime_public(environment_ref)
+        runtime = self.installation_manager.runtime_public(environment_ref)
+        value["runtime_config"] = runtime
+        if isinstance(value.get("detection"), Mapping):
+            value["detection"] = {**value["detection"], "runtime_config": runtime}
+        if runtime and isinstance(value.get("environment"), Mapping):
+            value["environment"] = {
+                **value["environment"],
+                "status": "CONFIRMED",
+                "selected_device": runtime.get("selected_device") or value["environment"].get("selected_device"),
+            }
         return value
 
     def _build_environment_install_plan(
@@ -1515,6 +1534,7 @@ def create_application(
     provider_store: ProviderConfigStore | None = None,
     environment_manager: EnvironmentManager | None = None,
     installation_manager: InstallationManager | None = None,
+    installation_manifest_path: Path | str | None = None,
 ) -> MollyWebApplication:
     """Create the local web app from server-owned runtime profiles."""
 
@@ -1534,6 +1554,7 @@ def create_application(
         provider_store=configured_provider_store,
         environment_manager=environment_manager,
         installation_manager=installation_manager,
+        installation_manifest_path=installation_manifest_path,
     )
 
 

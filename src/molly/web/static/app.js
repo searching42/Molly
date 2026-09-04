@@ -620,11 +620,13 @@ const renderProviderCards = () => {
 const environmentStatusLabels = {
   UNDETECTED: "尚未检测",
   READY: "可直接复用",
+  CONFIRMED: "已确认",
   PLAN_REQUIRED: "需要安装计划",
   BLOCKED: "需要处理",
 };
 
 const environmentStatusClass = (status) => {
+  if (status === "CONFIRMED") return "status-stopped";
   if (status === "READY") return "status-stopped";
   if (status === "BLOCKED") return "status-failed";
   if (status === "PLAN_REQUIRED") return "status-waiting_approval";
@@ -652,6 +654,7 @@ const renderEnvironmentCards = () => {
 const renderEnvironmentInstallPlan = (detection) => {
   const environmentRef = detection.environment?.environment_ref || state.editingEnvironment?.environment_ref || "";
   const plan = state.environmentInstallPlan;
+  const existingRuntime = detection.runtime_config || state.editingEnvironment?.runtime_config;
   if (plan?.installation) {
     const installation = plan.installation;
     if (installation.state === "CONFIRMED") {
@@ -662,11 +665,11 @@ const renderEnvironmentInstallPlan = (detection) => {
     }
     return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
   }
+  if (plan?.status === "ALREADY_CONFIRMED" || existingRuntime?.status_label === "已确认") {
+    return '<div class="environment-install-card environment-install-success"><strong>运行环境已确认</strong><span>当前连接已有已验证运行配置，后续任务会复用它；如连接或固定清单变化，系统会要求重新确认。</span></div>';
+  }
   if (!plan) {
-    if ((detection.match || {}).status === "READY") {
-      return '<div class="environment-install-card environment-install-success"><strong>已有兼容环境</strong><span>当前连接已匹配现有环境，无需安装。</span></div>';
-    }
-    return `<div class="environment-install-card"><div><strong>受限安装</strong><span>先生成服务端固定清单方案；这一步只读取配置，不下载或安装。</span></div><button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">生成安装计划</button></div>`;
+    return `<div class="environment-install-card"><div><strong>${(detection.match || {}).status === "READY" ? "确认现有兼容环境" : "受限安装"}</strong><span>先生成服务端固定清单方案；这一步只读取配置，不下载或安装。</span></div><button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">${(detection.match || {}).status === "READY" ? "生成确认方案" : "生成安装计划"}</button></div>`;
   }
   const items = (plan.items || []).map((item) => `<div class="environment-install-item">
     <div class="environment-plan-item-head"><strong>${html(item.name || item.component_id)}</strong><span>${html(item.version || "—")}</span></div>
@@ -674,13 +677,16 @@ const renderEnvironmentInstallPlan = (detection) => {
     ${item.requires_license ? '<div class="environment-plan-warning">许可证或凭据缺失时会暂停，不会自动绕过。</div>' : ""}
   </div>`).join("") || '<div class="environment-empty">当前没有需要安装的组件。</div>';
   const blockers = (plan.blockers || []).map((item) => `<li>${html(item)}</li>`).join("");
-  const blocked = plan.status !== "READY_TO_INSTALL";
+  const reused = (plan.reused_components || []).map((item) => `<span>${html(item.name || item.component_id)}${item.version ? ` · ${html(item.version)}` : ""}${item.environment?.name ? `（${html(item.environment.name)}）` : ""}</span>`).join("") || "无";
+  const blocked = !["READY_TO_INSTALL", "READY_TO_CONFIRM"].includes(plan.status);
+  const reuseOnly = plan.status === "READY_TO_CONFIRM";
   return `<div class="environment-install-card ${blocked ? "is-blocked" : ""}">
-    <div class="environment-install-head"><div><strong>${blocked ? "安装已暂停" : "安装前一次确认"}</strong><span>${blocked ? "固定清单、许可证或资源约束尚未满足。" : "确认后才会下载和安装；所有内容只进入新的隔离目录。"}</span></div><span class="status-pill ${blocked ? "status-failed" : "status-waiting_approval"}">${blocked ? "需要处理" : "待确认"}</span></div>
+    <div class="environment-install-head"><div><strong>${blocked ? "安装已暂停" : reuseOnly ? "复用环境前一次确认" : "安装前一次确认"}</strong><span>${blocked ? "固定清单、许可证或资源约束尚未满足。" : reuseOnly ? "确认后会重新探测并登记当前兼容环境；不会下载或安装。" : "确认后才会下载和安装；所有内容只进入新的隔离目录。"}</span></div><span class="status-pill ${blocked ? "status-failed" : "status-waiting_approval"}">${blocked ? "需要处理" : "待确认"}</span></div>
     <div class="environment-install-summary"><span>运行位置：${html(detection.environment?.target_label || "当前连接")}</span><span>设备：${html(plan.selected_device || "CPU")}</span><span>预计下载：${formatBytes(plan.estimated_download_bytes || 0)}</span><span>预计磁盘：${formatBytes(plan.estimated_disk_bytes || 0)}</span><span>预计耗时：${formatDuration(plan.estimated_duration_seconds || 0)}</span><span>目标目录：${html(plan.target_directory || "—")}</span></div>
+    ${reuseOnly ? `<div class="environment-install-reuse"><strong>将复用</strong>${reused}</div>` : ""}
     <div class="environment-install-list">${items}</div>
-    ${blockers ? `<div class="environment-install-blockers"><strong>风险与暂停原因</strong><ul>${blockers}</ul></div>` : '<div class="environment-install-risk">风险：安装过程有超时、大小上限、SHA-256 校验、临时目录和原子启用保护，不覆盖已有环境。</div>'}
-    ${blocked ? `<button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">重新生成安装计划</button>` : `<label class="environment-install-confirm"><input id="environment-install-confirm" type="checkbox" />我已确认运行位置、固定版本、来源、许可、资源估算和隔离目标目录</label><div class="environment-install-actions"><button class="primary-button" data-confirm-environment-install type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>确认并安装</button></div>`}
+    ${blockers ? `<div class="environment-install-blockers"><strong>风险与暂停原因</strong><ul>${blockers}</ul></div>` : `<div class="environment-install-risk">${reuseOnly ? "风险：确认只登记重新探测到的现有兼容环境，不下载或修改环境。" : "风险：安装过程有超时、大小上限、SHA-256 校验、临时目录和原子启用保护，不覆盖已有环境。"}</div>`}
+    ${blocked ? `<button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">重新生成安装计划</button>` : `<label class="environment-install-confirm"><input id="environment-install-confirm" type="checkbox" />我已确认运行位置、固定版本、来源、许可、资源估算和${reuseOnly ? "当前兼容环境" : "隔离目标目录"}</label><div class="environment-install-actions"><button class="primary-button" data-confirm-environment-install type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>${reuseOnly ? "确认并登记" : "确认并安装"}</button></div>`}
   </div>`;
 };
 
