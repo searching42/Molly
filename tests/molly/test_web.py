@@ -14,6 +14,7 @@ import pytest
 from molly.core import StopAction, ToolPolicy, ToolRegistry
 from molly.core.artifacts import ArtifactStore
 from molly.web import MollyHTTPRequestHandler, ProviderConfigStore, create_application
+from molly.web.environments import EnvironmentDetector, EnvironmentManager
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
 from molly.plugins.br1_inverse_design.errors import Br1IntegrityError
 from molly.plugins.br1_inverse_design.workflow import br1_profile
@@ -103,6 +104,81 @@ def test_provider_secret_is_bound_to_the_profile_endpoint_digest(tmp_path: Path)
     store.set_secret("provider:test", "new-endpoint-secret")
     assert store.get_profile("provider:test").credential_configured is True
     assert store.resolve_secret(changed.profile) == "new-endpoint-secret"
+
+
+def test_environment_api_reports_read_only_detection_and_install_preview(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    calls: list[tuple[str, ...]] = []
+    raw_report = {
+        "system": {"os": "Linux", "release": "6.8", "architecture": "x86_64"},
+        "disk": {
+            "path": "/srv/molly/runtimes",
+            "exists": True,
+            "writable": True,
+            "parent_writable": True,
+            "total_bytes": 10_000_000,
+            "available_bytes": 9_000_000,
+        },
+        "gpu": {
+            "available": True,
+            "devices": [{"name": "A10", "memory_mib": 24_576, "driver_version": "550"}],
+            "cuda": {"available": True, "version": "12.4"},
+        },
+        "python": {
+            "executable": "/opt/python",
+            "version": "3.11.9",
+            "implementation": "CPython",
+            "managers": {"conda": {"available": True, "version": "conda 24", "path": "/opt/conda"}},
+        },
+        "unimol": {"installed": True, "importable": True, "package": "unimol-tools", "version": "0.1.5"},
+        "reinvent4": {
+            "installed": True,
+            "importable": True,
+            "package": "reinvent4",
+            "version": "4.7.15",
+            "repositories": [{"path": "/opt/REINVENT4", "exists": True, "git": True, "config": True}],
+            "license_present": True,
+        },
+        "weights": {"entries": [{"name": "unimolv1.pt", "path": "/opt/unimolv1.pt", "size_bytes": 1}], "total_bytes": 1},
+    }
+
+    def runner(argv, _input, _timeout):
+        calls.append(tuple(argv))
+        return 0, json.dumps(raw_report).encode("utf-8")
+
+    manager = EnvironmentManager(
+        root,
+        detector=EnvironmentDetector(runner=runner, local_run_directory=root / "runtimes"),
+    )
+    app = create_application(root, environment_manager=manager)
+    try:
+        status, saved = app.dispatch(
+            "POST",
+            "/api/environments",
+            {
+                "mode": "local",
+                "display_name": "本地探测",
+            },
+        )
+        assert status == 201
+        environment_ref = saved["environment"]["environment_ref"]
+
+        status, listed = app.dispatch("GET", "/api/environments")
+        assert status == 200
+        assert listed["environments"][0]["target_label"] == "本地"
+
+        status, detected = app.dispatch(
+            "POST", f"/api/environments/{environment_ref}/detect", {}
+        )
+        assert status == 200
+        assert detected["read_only"] is True
+        assert detected["match"]["status"] == "READY"
+        assert detected["match"]["plan"]["will_execute"] is False
+        assert detected["report"]["system"]["architecture"] == "x86_64"
+        assert calls
+        assert (root / "environment_reports.json").is_file()
+    finally:
+        app.close()
 
 
 def test_legacy_unbound_provider_secret_is_not_used_for_a_profile(tmp_path: Path) -> None:
@@ -415,8 +491,12 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     script = app.static_file("/static/app.js")
     assert script is not None
     _, script_content, _ = script
-    assert "网页不会接收" not in script_content.decode("utf-8")
-    assert "只发送到本机服务端" in script_content.decode("utf-8")
+    script_text = script_content.decode("utf-8")
+    assert "网页不会接收" not in script_text
+    assert "只发送到本机服务端" in script_text
+    assert "运行环境" in script_text
+    assert "检测环境" in script_text
+    assert "apply_install_plan" not in script_text
 
 
 def test_http_write_surface_requires_loopback_origin_token_and_json(tmp_path: Path) -> None:
