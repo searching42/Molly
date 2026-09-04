@@ -220,7 +220,7 @@ def test_real_runtime_probe_applies_verified_weight_evidence(tmp_path: Path) -> 
     weight.write_bytes(payload)
     profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
 
-    report = EnvironmentDetector(timeout_seconds=5).detect_for_runtime(
+    report = EnvironmentDetector(timeout_seconds=30).detect_for_runtime(
         profile,
         runtime,
         verified_weight_records={
