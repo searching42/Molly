@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ import zipfile
 
 import pytest
 
-from molly.core.ids import sha256_bytes
+from molly.core.ids import canonical_json_bytes, sha256_bytes
 from molly.web import create_application
 from molly.web.environments import EnvironmentDetector, EnvironmentManager, EnvironmentProfile, EnvironmentReport
 from molly.web.installations import (
@@ -22,8 +23,10 @@ from molly.web.installations import (
     InstallationConfigError,
     InstallationConflictError,
     InstallationManager,
+    MAX_PERSISTED_RUNTIME_CONFIGS,
     MAX_PERSISTED_PLANS,
     RestrictedInstallExecutor,
+    RuntimeConfig,
 )
 
 
@@ -480,6 +483,29 @@ def test_compatible_confirmation_recovery_reuses_persisted_config_digest(
     assert recovered.config_digest == saved.config_digest
 
 
+def test_compatible_confirmation_reconciles_config_after_durable_write_error(
+    tmp_path: Path,
+) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+    plan = installer.build_plan(environment_ref)
+    original_save = installer.store.save_runtime_config
+
+    def save_then_raise(config: object) -> None:
+        original_save(config)  # type: ignore[arg-type]
+        raise OSError("runtime config directory fsync failed after replace")
+
+    installer.store.save_runtime_config = save_then_raise  # type: ignore[method-assign]
+    result = installer.confirm(_approval(plan))
+
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert result["runtime_config"]["status_label"] == "已确认"
+    record = installer.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "CONFIRMED"
+    saved = installer.store.get_runtime_config(environment_ref)
+    assert saved is not None and saved.state == "CONFIRMED"
+
+
 def test_config_persist_error_after_replace_keeps_enabled_runtime(
     tmp_path: Path,
 ) -> None:
@@ -549,6 +575,63 @@ def test_recovery_revalidates_confirmed_runtime_weights_after_crash(
     assert result["installation"]["state"] == "FAILED"
     assert result["runtime_config"]["status_label"] == "已失效"
     assert not Path(saved.target_directory).exists()
+
+
+def test_enabling_recovery_integrity_failure_rolls_back_without_config(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"recover-without-config")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    base = RestrictedInstallExecutor()
+
+    class CrashAfterEnable:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+            raise SystemExit("crashed before runtime config commit")
+
+        def rollback(self, *args: object, **kwargs: object) -> bool:
+            return bool(base.rollback(*args, **kwargs))  # type: ignore[arg-type]
+
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=CrashAfterEnable(),  # type: ignore[arg-type]
+    )
+    plan = first.build_plan(environment_ref)
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ENABLING"
+    assert first.store.get_runtime_config(environment_ref) is None
+
+    target_file = (
+        tmp_path
+        / "runtime"
+        / "runtimes"
+        / plan.runtime_id
+        / "weights"
+        / "unimolv1.pt"
+    )
+    target_file.write_bytes(b"recover-without-tamper")
+
+    resumed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    result = resumed.recover(record.installation_id, force=True)
+
+    assert result["installation"]["state"] == "FAILED"
+    assert result["runtime_config"] is None
+    assert not target_file.exists()
 
 
 def test_failed_config_commit_clears_report_for_removed_runtime_target(
@@ -780,6 +863,44 @@ def test_plan_store_compacts_unreferenced_history_at_capacity(tmp_path: Path) ->
     state = json.loads((tmp_path / "runtime" / "runtime_installations.json").read_text())
     assert len(state["plans"]) == MAX_PERSISTED_PLANS
     assert installer.store.get_plan(plans[-1].plan_id).plan_id == plans[-1].plan_id
+
+
+def test_runtime_config_history_is_compacted_before_read_limit(
+    tmp_path: Path,
+) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+    plan = installer.build_plan(environment_ref)
+    assert installer.confirm(_approval(plan))["installation"]["state"] == "CONFIRMED"
+    base = installer.store.get_runtime_config(environment_ref)
+    assert base is not None
+
+    def clone(index: int, *, state: str) -> RuntimeConfig:
+        candidate = replace(
+            base,
+            runtime_id=f"runtime-history-{index}",
+            installation_id=f"installation-history-{index}",
+            state=state,
+            config_digest="",
+        )
+        return replace(
+            candidate,
+            config_digest=sha256_bytes(canonical_json_bytes(candidate._payload())),
+        )
+
+    state = installer.store._read_state()
+    state["runtime_configs"] = {
+        candidate.runtime_id: candidate.to_dict()
+        for candidate in (clone(index, state="INVALIDATED") for index in range(193))
+    }
+    installer.store._write_state(state)
+    assert len(json.loads(installer.store.state_path.read_text())["runtime_configs"]) == 193
+
+    installer.store.save_runtime_config(clone(999, state="CONFIRMED"))
+    persisted = json.loads(installer.store.state_path.read_text())
+
+    assert len(persisted["runtime_configs"]) <= MAX_PERSISTED_RUNTIME_CONFIGS
+    assert installer.store.get_runtime_config(environment_ref) is not None
 
 
 def test_server_owned_manifest_file_is_a_production_loading_entry(tmp_path: Path) -> None:
@@ -1071,6 +1192,81 @@ def test_ssh_rollback_failure_stays_recoverable_until_retry(
     assert recovered["installation"]["state"] == "FAILED"
     assert recovered["installation"]["rollback_completed"] is True
     assert calls == ["install", "rollback", "rollback"]
+
+
+def test_ssh_finalize_response_loss_removes_remote_enabled_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"remote-finalize-response-loss")
+    environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
+    remote_state = ""
+    target_exists = False
+    calls: list[str] = []
+    evidence = {
+        "component_id": "unimol-weights",
+        "path": "/remote/runtime/weights/unimolv1.pt",
+        "size_bytes": len(source.read_bytes()),
+        "sha256": sha256_bytes(source.read_bytes()),
+    }
+
+    def runner(
+        _argv: Sequence[str], input_bytes: bytes | None, _timeout: float
+    ) -> tuple[int, bytes]:
+        nonlocal remote_state, target_exists
+        assert input_bytes is not None
+        if b'"operation":"install"' in input_bytes:
+            remote_state = "VERIFIED"
+            target_exists = False
+            calls.append("install")
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "verified": True,
+                    "state": "VERIFIED",
+                    "target_exists": False,
+                    "verified_files": [evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        if b'"operation":"status"' in input_bytes:
+            calls.append("status")
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "state": remote_state,
+                    "verified": remote_state in {"VERIFIED", "ENABLED"},
+                    "target_exists": target_exists,
+                    "verified_files": [evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        if b'"operation":"finalize"' in input_bytes:
+            remote_state = "ENABLED"
+            target_exists = True
+            calls.append("finalize")
+            raise OSError("SSH response lost after remote finalize")
+        calls.append("rollback")
+        assert remote_state == "ENABLED"
+        assert b'"finalized":true' in input_bytes
+        remote_state = "ROLLED_BACK"
+        target_exists = False
+        return 0, b'{"ok":true}'
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=RestrictedInstallExecutor(runner=runner),
+    )
+    plan = installer.build_plan(environment_ref)
+    result = installer.confirm(_approval(plan))
+
+    assert result["installation"]["state"] == "FAILED"
+    assert result["installation"]["rollback_completed"] is True
+    assert result["runtime_config"] is None
+    assert target_exists is False
+    assert calls == ["install", "status", "finalize", "rollback"]
 
 
 def test_simulated_ssh_finalize_crash_recovers_from_remote_transaction_status(

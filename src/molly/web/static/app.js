@@ -623,12 +623,14 @@ const environmentStatusLabels = {
   CONFIRMED: "已确认",
   PLAN_REQUIRED: "需要安装计划",
   BLOCKED: "需要处理",
+  ROLLING_BACK: "正在回滚",
 };
 
 const environmentStatusClass = (status) => {
   if (status === "CONFIRMED") return "status-stopped";
   if (status === "READY") return "status-stopped";
   if (status === "BLOCKED") return "status-failed";
+  if (status === "ROLLING_BACK") return "status-failed";
   if (status === "PLAN_REQUIRED") return "status-waiting_approval";
   return "status-new";
 };
@@ -640,13 +642,17 @@ const renderEnvironmentCards = () => {
   }
   return `<div class="environment-list">${profiles.map((profile) => {
     const status = profile.status || "UNDETECTED";
+    const installation = profile.installation || null;
+    const recoveryAction = installation?.state === "ROLLING_BACK"
+      ? `<button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(profile.environment_ref)}" type="button">继续清理</button>`
+      : "";
     return `<article class="environment-card">
       <div class="environment-card-head">
         <div><div class="environment-name">${html(profile.name)}</div><div class="environment-target">${html(profile.target_label)}</div></div>
         <span class="status-pill ${environmentStatusClass(status)}">${html(environmentStatusLabels[status] || status)}</span>
       </div>
       <div class="environment-card-meta"><span>${html(profile.mode_label)}</span><span>${profile.selected_device ? `优先设备：${html(profile.selected_device)}` : "尚未选择设备"}</span></div>
-      <div class="environment-actions"><button class="secondary-button" data-edit-environment="${html(profile.environment_ref)}" type="button">编辑</button><button class="secondary-button" data-detect-environment="${html(profile.environment_ref)}" type="button">检测环境</button></div>
+      <div class="environment-actions"><button class="secondary-button" data-edit-environment="${html(profile.environment_ref)}" type="button">编辑</button><button class="secondary-button" data-detect-environment="${html(profile.environment_ref)}" type="button">检测环境</button>${recoveryAction}</div>
     </article>`;
   }).join("")}</div>`;
 };
@@ -655,8 +661,8 @@ const renderEnvironmentInstallPlan = (detection) => {
   const environmentRef = detection.environment?.environment_ref || state.editingEnvironment?.environment_ref || "";
   const plan = state.environmentInstallPlan;
   const existingRuntime = detection.runtime_config || state.editingEnvironment?.runtime_config;
-  if (plan?.installation) {
-    const installation = plan.installation;
+  const installation = plan?.installation || detection.installation || state.editingEnvironment?.installation;
+  if (installation) {
     if (installation.state === "CONFIRMED") {
       return `<div class="environment-install-card environment-install-success"><strong>运行环境已确认</strong><span>固定版本已验证并原子启用；后续新建任务会自动匹配该环境。</span></div>`;
     }
@@ -664,7 +670,7 @@ const renderEnvironmentInstallPlan = (detection) => {
       return `<div class="environment-install-card environment-install-failure"><strong>安装失败，隔离目录已回滚</strong><span>${html(installation.error || "请重新检测并生成安装计划")}</span></div>`;
     }
     if (installation.state === "ROLLING_BACK") {
-      return '<div class="environment-install-card environment-install-failure"><strong>正在回滚，运行环境暂不可用</strong><span>清理尚未完成；系统会在下一次恢复时继续处理，完成前不会登记为可用环境。</span></div>';
+      return `<div class="environment-install-card environment-install-failure"><strong>正在回滚，运行环境暂不可用</strong><span>清理尚未完成；完成前不会登记为可用环境。</span><button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(environmentRef)}" type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>继续清理</button></div>`;
     }
     return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
   }
@@ -1193,6 +1199,36 @@ const bindPageEvents = () => {
     }
   };
 
+  const recoverEnvironmentInstall = async (environmentRef, installationId) => {
+    if (!environmentRef || !installationId || state.environmentInstallInFlight) return;
+    state.environmentError = "";
+    state.environmentInstallInFlight = true;
+    render({ force: true, preserveInteractive: true });
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(environmentRef)}/install/recover`, {
+        method: "POST",
+        body: JSON.stringify({ installation_id: installationId }),
+      });
+      const currentPlan = state.environmentInstallPlan || {};
+      state.environmentInstallPlan = { ...currentPlan, environment_ref: environmentRef, installation: result.installation, runtime_config: result.runtime_config };
+      await loadBootstrap();
+      const detail = await request(`/api/environments/${encodeURIComponent(environmentRef)}`);
+      state.editingEnvironment = state.bootstrap.environments.find((item) => item.environment_ref === environmentRef) || state.editingEnvironment;
+      state.environmentDetection = detail.detection;
+      render({ force: true, preserveInteractive: true });
+      showToast(result.installation?.state === "FAILED" ? "回滚已完成" : "回滚状态已更新");
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally {
+      state.environmentInstallInFlight = false;
+      setBusy(false);
+      render({ force: true, preserveInteractive: true });
+    }
+  };
+
   const saveEnvironment = async ({ detect = false } = {}) => {
     state.environmentError = "";
     const value = readEnvironmentForm();
@@ -1233,6 +1269,9 @@ const bindPageEvents = () => {
   }));
   document.querySelectorAll("[data-confirm-environment-install]").forEach((button) => button.addEventListener("click", async () => {
     await confirmEnvironmentInstall();
+  }));
+  document.querySelectorAll("[data-recover-environment-install]").forEach((button) => button.addEventListener("click", async () => {
+    await recoverEnvironmentInstall(button.dataset.recoverEnvironment, button.dataset.recoverEnvironmentInstall);
   }));
   document.querySelectorAll("[data-edit-environment]").forEach((button) => button.addEventListener("click", async () => {
     const profile = state.bootstrap?.environments?.find((item) => item.environment_ref === button.dataset.editEnvironment);

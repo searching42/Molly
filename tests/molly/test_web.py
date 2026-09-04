@@ -500,6 +500,8 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     assert "selected_unimol_environment" in script_text
     assert "selected_reinvent4_environment" in script_text
     assert '["READY_TO_INSTALL", "READY_TO_CONFIRM"].includes(plan.status)' in script_text
+    assert "install/recover" in script_text
+    assert "ROLLING_BACK" in script_text
     assert "apply_install_plan" not in script_text
 
 

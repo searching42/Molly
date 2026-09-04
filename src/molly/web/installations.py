@@ -72,9 +72,15 @@ MAX_INSTALL_OUTPUT_BYTES = 512 * 1024
 MAX_INSTALL_ENTRIES = 32
 MAX_EXTRACTED_FILE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_PERSISTED_PLANS = 128
-MAX_STATE_RECORDS_ON_READ = MAX_PERSISTED_PLANS + 64
+MAX_PERSISTED_RUNTIME_CONFIGS = 128
+# Allow one bounded compaction window when reading a state file produced by an
+# older version that did not compact runtime-config history.
+MAX_STATE_RECORDS_ON_READ = max(MAX_PERSISTED_PLANS, MAX_PERSISTED_RUNTIME_CONFIGS) * 2
 RUNTIME_MANIFEST_ENV = "MOLLY_RUNTIME_MANIFEST_PATH"
 _STORE_THREAD_LOCK = threading.RLock()
+_ACTIVE_INSTALLATION_STATES = frozenset(
+    {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "ROLLING_BACK"}
+)
 
 
 class InstallationError(RuntimeError):
@@ -1243,6 +1249,7 @@ class RuntimeInstallationStore:
         value: dict[str, Any],
         *,
         maximum_plans: int = MAX_PERSISTED_PLANS,
+        maximum_runtime_configs: int = MAX_PERSISTED_RUNTIME_CONFIGS,
     ) -> dict[str, Any]:
         """Drop only unreferenced/terminal records before the bounded store grows.
 
@@ -1258,6 +1265,7 @@ class RuntimeInstallationStore:
         installations = value["installations"]
         runtime_configs = value["runtime_configs"]
         maximum_plans = max(0, int(maximum_plans))
+        maximum_runtime_configs = max(0, int(maximum_runtime_configs))
 
         def created_key(raw: Mapping[str, Any]) -> str:
             return str(raw.get("created_at", ""))
@@ -1302,6 +1310,20 @@ class RuntimeInstallationStore:
             _, installation_id, plan_id = min(terminal)
             del installations[installation_id]
             plans.pop(plan_id, None)
+
+        while len(runtime_configs) > maximum_runtime_configs:
+            invalidated = [
+                (str(raw.get("verified_at", raw.get("created_at", ""))), runtime_id)
+                for runtime_id, raw in runtime_configs.items()
+                if isinstance(raw, Mapping) and raw.get("state") == "INVALIDATED"
+            ]
+            if not invalidated:
+                # Confirmed configurations are live pointers and cannot be
+                # evicted silently.  The write path will reject a new config
+                # when no invalidated history is available for compaction.
+                break
+            _, runtime_id = min(invalidated)
+            del runtime_configs[runtime_id]
         return value
 
     def _read_state(self) -> dict[str, Any]:
@@ -1371,7 +1393,11 @@ class RuntimeInstallationStore:
                 raise InstallationConflictError("install plan ID is already bound to different content")
             if existing is not None:
                 return
-            self._compact_state(value, maximum_plans=MAX_PERSISTED_PLANS - 1)
+            self._compact_state(
+                value,
+                maximum_plans=MAX_PERSISTED_PLANS - 1,
+                maximum_runtime_configs=MAX_PERSISTED_RUNTIME_CONFIGS - 1,
+            )
             if len(value["plans"]) >= MAX_PERSISTED_PLANS:
                 raise InstallationConflictError("installation plan store is at capacity")
             value["plans"][plan.plan_id] = plan.to_dict(public=False)
@@ -1398,6 +1424,22 @@ class RuntimeInstallationStore:
                 return InstallationRecord.from_dict(raw)
         return None
 
+    def get_installation_for_environment(
+        self,
+        environment_ref: str,
+    ) -> InstallationRecord | None:
+        _safe_id(environment_ref, field="environment_ref")
+        candidates = [
+            InstallationRecord.from_dict(raw)
+            for raw in self._read_state()["installations"].values()
+            if isinstance(raw, Mapping)
+            and raw.get("environment_ref") == environment_ref
+            and raw.get("state") in _ACTIVE_INSTALLATION_STATES
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.updated_at)
+
     def claim_approval(self, plan: InstallPlan) -> tuple[InstallationRecord, bool]:
         """Atomically create the one approval record, or return its owner."""
 
@@ -1406,13 +1448,7 @@ class RuntimeInstallationStore:
             for raw in value["installations"].values():
                 if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
                     return InstallationRecord.from_dict(raw), False
-            active_states = {
-                "APPROVED",
-                "INSTALLING",
-                "VERIFYING",
-                "ENABLING",
-                "ROLLING_BACK",
-            }
+            active_states = _ACTIVE_INSTALLATION_STATES
             confirmed_runtime_keys = {
                 (raw.get("runtime_id"), raw.get("installation_id"))
                 for raw in value["runtime_configs"].values()
@@ -1566,6 +1602,12 @@ class RuntimeInstallationStore:
                 raise InstallationConflictError(
                     "当前连接已有另一个已确认运行配置"
                 )
+            self._compact_state(
+                value,
+                maximum_runtime_configs=MAX_PERSISTED_RUNTIME_CONFIGS - 1,
+            )
+            if len(value["runtime_configs"]) >= MAX_PERSISTED_RUNTIME_CONFIGS:
+                raise InstallationConflictError("runtime config store is at capacity")
             value["runtime_configs"][config.runtime_id] = config.to_dict()
             self._write_state(value)
 
@@ -1997,7 +2039,16 @@ def main(request):
         print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
         return
     if operation == "rollback":
-        if request.get("finalized") and state.get("state") == "ENABLED" and target.is_dir() and not target.is_symlink():
+        # ``finalize`` can finish the atomic rename and state write before
+        # the SSH response reaches the caller.  The durable remote state is
+        # authoritative; do not let the caller's stale finalized flag leave
+        # an enabled target behind.  The VERIFIED/stage-missing case is the
+        # same rename window before the state write.
+        remote_state = state.get("state")
+        if (
+            remote_state == "ENABLED"
+            or (remote_state == "VERIFIED" and not stage.exists())
+        ) and target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         if stage.is_dir() and not stage.is_symlink():
             shutil.rmtree(stage)
@@ -3108,6 +3159,19 @@ class InstallationManager:
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
+            committed = self._reconcile_committed_existing_environment(
+                record,
+                plan,
+                profile,
+            )
+            if committed is not None:
+                config = self.store.get_runtime_config(plan.environment_ref)
+                if config is not None:
+                    return {
+                        "installation": committed.to_dict(public=True),
+                        "runtime_config": config.to_dict(public=True),
+                        "idempotent_replay": True,
+                    }
             failed = self._fail_record(
                 record,
                 plan,
@@ -3253,6 +3317,8 @@ class InstallationManager:
             isinstance(current.verification, Mapping)
             and current.verification.get("rollback_finalized")
         )
+        if current.stage_directory and profile is None:
+            return current
         if profile is not None and current.stage_directory:
             rollback_result = self.executor.rollback(
                 profile,
@@ -3302,12 +3368,15 @@ class InstallationManager:
         record: InstallationRecord,
         plan: InstallPlan,
     ) -> dict[str, Any]:
-        """Finish the tiny window between atomic enable and config persistence."""
-
         try:
-            profile, report, _ = self._current_binding(plan.environment_ref)
-        except InstallationError as exc:
-            profile = self.environment_manager.store.get_profile(plan.environment_ref)
+            return self._recover_enabling_checked(record, plan)
+        except Exception as exc:
+            try:
+                profile: EnvironmentProfile | None = self.environment_manager.store.get_profile(
+                    plan.environment_ref
+                )
+            except InstallationError:
+                profile = None
             rolling_back = self._enter_rollback(
                 record,
                 plan,
@@ -3315,6 +3384,15 @@ class InstallationManager:
                 finalized=True,
             )
             return self._rollback_result(rolling_back, plan, profile=profile)
+
+    def _recover_enabling_checked(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+    ) -> dict[str, Any]:
+        """Finish the tiny window between atomic enable and config persistence."""
+
+        profile, report, _ = self._current_binding(plan.environment_ref)
         allowed_report_digests = {record.report_digest}
         if isinstance(record.verification, Mapping):
             for key in ("reprobe", "final_reprobe"):
@@ -3484,6 +3562,7 @@ class InstallationManager:
         stage_directory = ""
         target_was_absent = False
         finalized = False
+        finalize_attempted = False
         try:
             profile, _report, _match = self._current_binding(plan.environment_ref)
             stage_directory = record.stage_directory or _runtime_stage(profile, plan.runtime_id, record.installation_id)
@@ -3578,6 +3657,7 @@ class InstallationManager:
             if latest_report.report_digest not in allowed_report_digests:
                 raise InstallationConflictError("探测报告在安装期间变化，已取消启用")
             current = self._update(current, state="ENABLING", verification=verification)
+            finalize_attempted = True
             self.executor.finalize(
                 profile,
                 plan,
@@ -3653,7 +3733,7 @@ class InstallationManager:
             # BaseException intentionally includes a process-style test crash
             # only after the last durable update.  We do not try to mutate the
             # state on KeyboardInterrupt/SystemExit; the recovery API can
-            # resume the APPROVED/INSTALLING transaction from its stage.
+            # resume the APPROVED/INSTALLING/ENABLING transaction from its stage.
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             if profile is not None:
@@ -3672,6 +3752,10 @@ class InstallationManager:
                 profile=profile,
                 stage_directory=stage_directory,
                 finalized=finalized or (
+                    profile is not None
+                    and profile.mode == "ssh"
+                    and finalize_attempted
+                ) or (
                     profile is not None
                     and profile.mode == "local"
                     and target_was_absent
@@ -3832,6 +3916,63 @@ class InstallationManager:
             )
         return current
 
+    def _reconcile_committed_existing_environment(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        profile: EnvironmentProfile,
+    ) -> InstallationRecord | None:
+        """Complete a compatible-environment confirmation after an ambiguous write.
+
+        The compatible path has no isolated target to roll back.  If the
+        RuntimeConfig replacement reached durable storage but the following
+        filesystem operation reported an error, only a matching config and
+        matching persisted re-probe may promote the installation to CONFIRMED.
+        """
+
+        try:
+            config = self.store.get_runtime_config(plan.environment_ref)
+            if config is None or config.state != "CONFIRMED":
+                return None
+            if (
+                config.runtime_id != plan.runtime_id
+                or config.installation_id != record.installation_id
+                or config.plan_digest != plan.plan_digest
+                or config.connection_digest != plan.connection_digest
+                or config.catalog_digest != plan.catalog_digest
+            ):
+                return None
+            current = self.store.get_installation(record.installation_id)
+            reprobe = (
+                current.verification.get("reprobe")
+                if isinstance(current.verification, Mapping)
+                else None
+            )
+            if (
+                not isinstance(reprobe, Mapping)
+                or config.report_digest != reprobe.get("report_digest")
+                or config.target_directory != current.target_directory
+            ):
+                return None
+            current_profile, current_report, _ = self._current_binding(
+                plan.environment_ref
+            )
+            if (
+                current_profile.connection_digest != profile.connection_digest
+                or current_report.report_digest != config.report_digest
+            ):
+                return None
+            if current.state != "CONFIRMED":
+                current = self._update(
+                    current,
+                    state="CONFIRMED",
+                    side_effects_started=False,
+                    worker_pid=0,
+                )
+            return current
+        except (InstallationConfigError, InstallationIntegrityError, InstallationConflictError):
+            return None
+
     def _fail_record(
         self,
         record: InstallationRecord,
@@ -3897,6 +4038,10 @@ class InstallationManager:
         config = self.runtime_for_environment(environment_ref)
         return config.to_dict(public=True) if config else None
 
+    def installation_public(self, environment_ref: str) -> dict[str, Any] | None:
+        record = self.store.get_installation_for_environment(environment_ref)
+        return record.to_dict(public=True) if record is not None else None
+
 
 def _safe_install_error(exc: BaseException) -> str:
     if isinstance(exc, InstallationIntegrityError):
@@ -3921,6 +4066,7 @@ __all__ = [
     "InstallationManager",
     "InstallationRecord",
     "MAX_PERSISTED_PLANS",
+    "MAX_PERSISTED_RUNTIME_CONFIGS",
     "INSTALLATION_RECOVERY_STALE_SECONDS",
     "INSTALLATION_STATE_VERSION",
     "INSTALLATION_TIMEOUT_SECONDS",

@@ -523,6 +523,7 @@ class MollyWebApplication:
             if method == "POST" and route[3] == "detect":
                 value = self.environment_manager.detect(route[2])
                 value["runtime_config"] = self.installation_manager.runtime_public(route[2])
+                value["installation"] = self.installation_manager.installation_public(route[2])
                 return 200, value
         if len(route) == 5 and route[:2] == ["api", "environments"]:
             environment_ref, resource, action = route[2], route[3], route[4]
@@ -531,7 +532,7 @@ class MollyWebApplication:
             if resource == "install" and method == "POST" and action == "confirm":
                 return 200, self._confirm_environment_install(body)
             if resource == "install" and method == "POST" and action == "recover":
-                return 200, self._recover_environment_install(body)
+                return 200, self._recover_environment_install(environment_ref, body)
         if len(route) == 4 and route[:2] == ["api", "environments"]:
             if method == "GET" and route[3] == "runtime":
                 return 200, {"runtime_config": self.installation_manager.runtime_public(route[2])}
@@ -1217,6 +1218,12 @@ class MollyWebApplication:
                 profile["environment_ref"]
             )
             value["runtime_config"] = runtime
+            installation = self.installation_manager.installation_public(
+                profile["environment_ref"]
+            )
+            value["installation"] = installation
+            if installation is not None and installation.get("state") == "ROLLING_BACK":
+                value["status"] = "ROLLING_BACK"
             if runtime and runtime.get("status_label") == "已确认":
                 value["status"] = "CONFIRMED"
                 value["selected_device"] = runtime.get("selected_device") or value.get("selected_device")
@@ -1227,8 +1234,13 @@ class MollyWebApplication:
         value = self.environment_manager.get_public(environment_ref)
         runtime = self.installation_manager.runtime_public(environment_ref)
         value["runtime_config"] = runtime
+        value["installation"] = self.installation_manager.installation_public(environment_ref)
         if isinstance(value.get("detection"), Mapping):
-            value["detection"] = {**value["detection"], "runtime_config": runtime}
+            value["detection"] = {
+                **value["detection"],
+                "runtime_config": runtime,
+                "installation": value["installation"],
+            }
         if runtime and isinstance(value.get("environment"), Mapping):
             value["environment"] = {
                 **value["environment"],
@@ -1260,10 +1272,17 @@ class MollyWebApplication:
     def _confirm_environment_install(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self.installation_manager.confirm(payload)
 
-    def _recover_environment_install(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _recover_environment_install(
+        self,
+        environment_ref: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
         allowed = {"installation_id"}
         if set(payload) - allowed or not isinstance(payload.get("installation_id"), str):
             raise WebRequestError(400, "INVALID_INSTALLATION", "需要有效的安装记录标识")
+        record = self.installation_manager.store.get_installation(payload["installation_id"])
+        if record.environment_ref != environment_ref:
+            raise WebRequestError(409, "INSTALLATION_BINDING_CHANGED", "安装记录不属于当前运行环境")
         return self.installation_manager.recover(payload["installation_id"])
 
     def _save_environment_profile(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1277,6 +1296,7 @@ class MollyWebApplication:
         detection = self.environment_manager.store.get_detection(profile.environment_ref)
         return {
             "environment": profile.to_public_dict(detection=detection),
+            "installation": self.installation_manager.installation_public(profile.environment_ref),
             "message": "运行环境连接配置已保存；请点击“检测环境”进行只读探测",
         }
 
