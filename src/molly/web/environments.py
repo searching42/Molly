@@ -573,19 +573,41 @@ class EnvironmentConfigStore:
                 {"version": ENVIRONMENT_REPORT_VERSION, "reports": reports},
             )
 
-    def clear_detection(self, environment_ref: str) -> None:
+    def clear_detection(
+        self,
+        environment_ref: str,
+        *,
+        expected_report_digest: str | None = None,
+    ) -> bool:
         with self._write_lock():
-            self._clear_detection_unlocked(environment_ref)
+            return self._clear_detection_unlocked(
+                environment_ref,
+                expected_report_digest=expected_report_digest,
+            )
 
-    def _clear_detection_unlocked(self, environment_ref: str) -> None:
+    def _clear_detection_unlocked(
+        self,
+        environment_ref: str,
+        *,
+        expected_report_digest: str | None = None,
+    ) -> bool:
         reports = self._read_reports()
-        if environment_ref not in reports:
-            return
+        current = reports.get(environment_ref)
+        if current is None:
+            return False
+        if expected_report_digest is not None:
+            current_report = current.get("report") if isinstance(current, Mapping) else None
+            if (
+                not isinstance(current_report, Mapping)
+                or current_report.get("report_digest") != expected_report_digest
+            ):
+                return False
         del reports[environment_ref]
         self._write_json(
             self.reports_path,
             {"version": ENVIRONMENT_REPORT_VERSION, "reports": reports},
         )
+        return True
 
 
 CommandRunner = Callable[[Sequence[str], bytes | None, float], tuple[int, bytes]]

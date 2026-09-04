@@ -6,8 +6,10 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 from pathlib import Path
+import stat
 import threading
 import time
+import zipfile
 
 import pytest
 
@@ -216,6 +218,61 @@ def _approval(plan: object) -> dict[str, object]:
         "connection_digest": value["connection_digest"],
         "report_digest": value["report_digest"],
     }
+
+
+def test_python_runtime_install_preserves_executable_mode_for_files_and_archives(
+    tmp_path: Path,
+) -> None:
+    script = b"#!/bin/sh\nexit 0\n"
+    python_file = tmp_path / "python-source.bin"
+    python_file.write_bytes(script)
+    archive = tmp_path / "python.zip"
+    info = zipfile.ZipInfo("bin/python")
+    info.create_system = 3
+    info.external_attr = 0o100755 << 16
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr(info, script)
+
+    file_entry = InstallManifestEntry(
+        component_id="python",
+        name="Python file",
+        version="3.11",
+        source="test",
+        source_url=python_file.as_uri(),
+        estimated_download_bytes=len(script),
+        estimated_disk_bytes=len(script),
+        estimated_duration_seconds=1,
+        install_subdirectory="python-file",
+        sha256=sha256_bytes(script),
+        install_kind="file",
+        install_filename="python",
+        max_download_bytes=len(script),
+        required_paths=("python",),
+    )
+    archive_payload = archive.read_bytes()
+    archive_entry = InstallManifestEntry(
+        component_id="python",
+        name="Python archive",
+        version="3.11",
+        source="test",
+        source_url=archive.as_uri(),
+        estimated_download_bytes=len(archive_payload),
+        estimated_disk_bytes=len(script),
+        estimated_duration_seconds=1,
+        install_subdirectory="python-archive",
+        sha256=sha256_bytes(archive_payload),
+        install_kind="zip",
+        max_download_bytes=len(archive_payload),
+        required_paths=("bin/python",),
+    )
+    executor = RestrictedInstallExecutor()
+
+    for entry in (file_entry, archive_entry):
+        stage = tmp_path / ("stage-" + entry.install_subdirectory)
+        executor._install_entry(entry, stage, time.monotonic() + 30)
+        relative = entry.required_paths[0]
+        installed = stage / entry.install_subdirectory / relative
+        assert stat.S_IMODE(installed.stat().st_mode) & stat.S_IXUSR
 
 
 def test_approval_is_digest_bound_and_local_install_is_atomic(tmp_path: Path) -> None:
@@ -430,6 +487,32 @@ def test_config_persist_error_after_replace_keeps_enabled_runtime(
     saved = first.store.get_runtime_config(environment_ref)
     assert saved is not None and saved.state == "CONFIRMED"
     assert saved.target_directory == str(target.absolute())
+
+
+def test_failed_config_commit_clears_report_for_removed_runtime_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"persist-before-enable")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = installer.build_plan(environment_ref)
+
+    def fail_before_save(_config: object) -> None:
+        raise OSError("config fsync failed before commit")
+
+    installer.store.save_runtime_config = fail_before_save  # type: ignore[method-assign]
+    result = installer.confirm(_approval(plan))
+
+    assert result["installation"]["state"] == "FAILED"
+    assert result["runtime_config"] is None
+    assert environment_manager.store.get_detection(environment_ref) is None
+    with pytest.raises(InstallationConfigError):
+        installer.build_plan(environment_ref)
 
 
 def test_invalidated_runtime_allows_a_new_confirmation_transaction(tmp_path: Path) -> None:
@@ -922,6 +1005,122 @@ def test_simulated_ssh_finalize_crash_recovers_from_remote_transaction_status(
     assert calls == ["install", "status", "finalize", "status"]
 
 
+def test_ssh_enabling_recovery_uses_final_target_evidence(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"remote-final-evidence")
+    environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
+    remote_state = ""
+    calls: list[str] = []
+    stage_evidence = {
+        "component_id": "unimol-weights",
+        "path": "/remote/stage/weights/unimolv1.pt",
+        "size_bytes": len(source.read_bytes()),
+        "sha256": sha256_bytes(source.read_bytes()),
+    }
+    target_evidence = {
+        **stage_evidence,
+        "path": "/remote/target/weights/unimolv1.pt",
+    }
+
+    def runner(
+        _argv: Sequence[str], input_bytes: bytes | None, _timeout: float
+    ) -> tuple[int, bytes]:
+        nonlocal remote_state
+        assert input_bytes is not None
+        if b'"operation":"install"' in input_bytes:
+            remote_state = "VERIFIED"
+            calls.append("install")
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "verified": True,
+                    "state": "VERIFIED",
+                    "target_exists": False,
+                    "verified_files": [stage_evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        if b'"operation":"finalize"' in input_bytes:
+            remote_state = "ENABLED"
+            calls.append("finalize")
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "state": "ENABLED",
+                    "target_exists": True,
+                    "verified_files": [target_evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        if b'"operation":"status"' in input_bytes:
+            calls.append("status")
+            enabled = remote_state == "ENABLED"
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "state": remote_state,
+                    "verified": remote_state in {"VERIFIED", "ENABLED"},
+                    "target_exists": enabled,
+                    "verified_files": [target_evidence if enabled else stage_evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        calls.append("rollback")
+        return 0, b'{"ok":true}'
+
+    base = RestrictedInstallExecutor(runner=runner)
+
+    class CrashBeforeRemoteFinalize:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            raise SystemExit("crashed before remote finalize")
+
+        def rollback(self, *args: object, **kwargs: object) -> None:
+            base.rollback(*args, **kwargs)  # type: ignore[arg-type]
+
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=CrashBeforeRemoteFinalize(),  # type: ignore[arg-type]
+    )
+    plan = first.build_plan(environment_ref)
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ENABLING"
+    assert calls == ["install", "status"]
+
+    resumed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=RestrictedInstallExecutor(runner=runner),
+    )
+    observed: list[Mapping[str, object]] = []
+    original_verified = resumed._verified_weight_records
+
+    def capture_verified(*args: object, **kwargs: object) -> dict[str, dict[str, object]]:
+        result = args[3]
+        assert isinstance(result, Mapping)
+        observed.append(result)
+        return original_verified(*args, **kwargs)  # type: ignore[arg-type]
+
+    resumed._verified_weight_records = capture_verified  # type: ignore[method-assign]
+    result = resumed.recover(record.installation_id, force=True)
+
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert calls == ["install", "status", "status", "finalize", "status"]
+    assert observed[-1]["verified_files"][0]["path"] == target_evidence["path"]
+
+
 def test_client_cannot_expand_the_fixed_component_allowlist(tmp_path: Path) -> None:
     source = tmp_path / "unimolv1.pt"
     source.write_bytes(b"allowlist")
@@ -948,6 +1147,9 @@ def test_connection_or_catalog_change_invalidates_confirmed_runtime(tmp_path: Pa
     )
     plan = installer.build_plan(environment_ref)
     assert installer.confirm(_approval(plan))["installation"]["state"] == "CONFIRMED"
+    original_config = installer.store.get_runtime_config(environment_ref)
+    assert original_config is not None
+    original_target = original_config.target_directory
 
     changed = InstallManifest(
         catalog_version="test-2",
@@ -959,6 +1161,14 @@ def test_connection_or_catalog_change_invalidates_confirmed_runtime(tmp_path: Pa
         manifest=changed,
     )
     assert changed_installer.runtime_public(environment_ref)["status_label"] == "已失效"
+    changed_plan = changed_installer.build_plan(environment_ref)
+    assert changed_plan.status == "READY_TO_CONFIRM"
+    changed_result = changed_installer.confirm(_approval(changed_plan))
+    assert changed_result["installation"]["state"] == "CONFIRMED"
+    changed_config = changed_installer.store.get_runtime_config(environment_ref)
+    assert changed_config is not None
+    assert changed_config.catalog_digest == changed.digest
+    assert changed_config.target_directory == original_target
 
 
 def test_environment_install_http_surface_exposes_one_digest_bound_confirmation(

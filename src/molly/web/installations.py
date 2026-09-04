@@ -1778,6 +1778,8 @@ def safe_extract(archive, destination, kind, disk_limit, deadline):
                     while block := input_file.read(64 * 1024):
                         check_deadline(deadline)
                         output.write(block)
+                member_mode = (member.external_attr >> 16) & 0o777
+                os.chmod(target, 0o700 if member_mode & 0o111 else 0o600)
     else:
         with tarfile.open(archive, "r:*") as source:
             for member in source.getmembers():
@@ -1802,6 +1804,7 @@ def safe_extract(archive, destination, kind, disk_limit, deadline):
                     while block := input_file.read(64 * 1024):
                         check_deadline(deadline)
                         output.write(block)
+                os.chmod(target, 0o700 if member.mode & 0o111 else 0o600)
 
 def component_complete(stage, item):
     destination = (stage / safe_rel(item["install_subdirectory"])).resolve()
@@ -1816,6 +1819,38 @@ def component_complete(stage, item):
             for path in required
         )
     return any(path.is_file() and not path.is_symlink() for path in destination.rglob("*"))
+
+def python_component_is_executable(stage, item):
+    if item.get("component_id") != "python":
+        return True
+    destination = (pathlib.Path(stage) / safe_rel(item["install_subdirectory"])).resolve()
+    if not destination.is_dir() or destination.is_symlink():
+        return False
+    required = item.get("required_paths", [])
+    candidates = []
+    for raw_path in required:
+        candidate = (destination / safe_rel(raw_path)).resolve()
+        name = candidate.name.casefold()
+        if name == "python" or name.startswith("python3") or name == "python.exe":
+            candidates.append(candidate)
+    if not candidates:
+        candidates = [
+            path for path in destination.rglob("*")
+            if path.is_file()
+            and (
+                path.name.casefold() == "python"
+                or path.name.casefold().startswith("python3")
+                or path.name.casefold() == "python.exe"
+            )
+        ]
+    return any(
+        path.is_file()
+        and not path.is_symlink()
+        and path.is_relative_to(destination)
+        and bool(path.stat().st_mode & 0o111)
+        and os.access(path, os.X_OK)
+        for path in candidates
+    )
 
 def digest_file(path):
     digest = hashlib.sha256()
@@ -1895,6 +1930,7 @@ def main(request):
                     ):
                         raise ValueError("file exceeds fixed disk estimate")
                     shutil.copyfile(downloaded, output)
+                    os.chmod(output, 0o700 if item.get("component_id") == "python" else 0o600)
                 else:
                     safe_extract(downloaded, destination, item["install_kind"], item["estimated_disk_bytes"], deadline)
             finally:
@@ -1902,7 +1938,7 @@ def main(request):
                     os.unlink(downloaded)
                 except FileNotFoundError:
                     pass
-            if not component_complete(stage, item):
+            if not component_complete(stage, item) or not python_component_is_executable(stage, item):
                 raise ValueError("required runtime file is missing")
             completed.add(item["component_id"])
             write_state(transaction_id, {"state": "INSTALLING", "plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": request.get("stage_directory"), "target_directory": request.get("target_directory"), "completed_component_ids": sorted(completed)})
@@ -2123,7 +2159,7 @@ class RestrictedInstallExecutor:
             if entry.estimated_disk_bytes <= 0 or entry.estimated_download_bytes > entry.estimated_disk_bytes:
                 raise InstallationIntegrityError(f"{entry.name} exceeds its fixed disk estimate")
             shutil.copyfile(download_path, output)
-            os.chmod(output, 0o600)
+            os.chmod(output, 0o700 if entry.component_id == "python" else 0o600)
         else:
             _safe_extract_archive(
                 download_path,
@@ -2134,6 +2170,8 @@ class RestrictedInstallExecutor:
             )
         if not _component_is_complete(stage, entry):
             raise InstallationIntegrityError(f"{entry.name} 安装后未通过固定文件验证")
+        if entry.component_id == "python" and not _python_component_is_executable(stage, entry):
+            raise InstallationIntegrityError("Python runtime 安装后不可执行")
         return {
             "component_id": entry.component_id,
             "version": entry.version,
@@ -2358,7 +2396,8 @@ def _safe_extract_archive(
                             if deadline is not None and time.monotonic() > deadline:
                                 raise InstallationExecutionError("安装解压超过固定超时时间")
                             output.write(block)
-                    os.chmod(target, 0o600)
+                    member_mode = (member.external_attr >> 16) & 0o777
+                    os.chmod(target, 0o700 if member_mode & 0o111 else 0o600)
         else:
             with tarfile.open(archive, "r:*") as source:
                 for member in source.getmembers():
@@ -2385,11 +2424,51 @@ def _safe_extract_archive(
                             if deadline is not None and time.monotonic() > deadline:
                                 raise InstallationExecutionError("安装解压超过固定超时时间")
                             output.write(block)
-                    os.chmod(target, 0o600)
+                    os.chmod(target, 0o700 if member.mode & 0o111 else 0o600)
     except (InstallationError, OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
         if isinstance(exc, InstallationError):
             raise
         raise InstallationIntegrityError("固定安装包无法安全解压") from exc
+
+
+def _python_component_is_executable(
+    stage: Path,
+    entry: InstallManifestEntry,
+) -> bool:
+    destination = (stage / entry.install_subdirectory).resolve()
+    if not destination.is_dir() or destination.is_symlink():
+        return False
+    relative_paths = entry.required_paths
+    if not relative_paths and entry.install_kind == "file":
+        relative_paths = (entry.install_filename,)
+    candidates = [
+        (destination / relative).resolve()
+        for relative in relative_paths
+        if (
+            PurePosixPath(relative).name.casefold() == "python"
+            or PurePosixPath(relative).name.casefold().startswith("python3")
+            or PurePosixPath(relative).name.casefold() == "python.exe"
+        )
+    ]
+    if not candidates:
+        candidates = [
+            item
+            for item in destination.rglob("*")
+            if item.is_file()
+            and (
+                item.name.casefold() == "python"
+                or item.name.casefold().startswith("python3")
+                or item.name.casefold() == "python.exe"
+            )
+        ]
+    return any(
+        candidate.is_file()
+        and not candidate.is_symlink()
+        and candidate.is_relative_to(destination)
+        and bool(candidate.stat().st_mode & stat.S_IXUSR)
+        and os.access(candidate, os.X_OK)
+        for candidate in candidates
+    )
 
 
 def _component_is_complete(stage: Path, entry: InstallManifestEntry) -> bool:
@@ -2674,6 +2753,7 @@ class InstallationManager:
         result: Mapping[str, Any],
         *,
         expected_records: Mapping[str, Mapping[str, Any]] | None = None,
+        entries: Sequence[InstallManifestEntry] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Build trusted weight evidence for the target-aware re-probe.
 
@@ -2686,7 +2766,9 @@ class InstallationManager:
 
         records: dict[str, dict[str, Any]] = {}
         weight_entries = [
-            entry for entry in plan.entries if entry.component_id == "unimol-weights"
+            entry
+            for entry in (entries if entries is not None else plan.entries)
+            if entry.component_id == "unimol-weights"
         ]
         if profile.mode == "local":
             base = Path(runtime_directory).absolute().resolve()
@@ -2851,7 +2933,6 @@ class InstallationManager:
             persisted_config is not None
             and persisted_config.state == "INVALIDATED"
             and persisted_config.connection_digest == profile.connection_digest
-            and persisted_config.catalog_digest == self.manifest.digest
             and persisted_config.target_directory
         ):
             previous_runtime_directory = persisted_config.target_directory
@@ -2889,6 +2970,7 @@ class InstallationManager:
                     previous_runtime_directory,
                     previous_result,
                     expected_records=expected_records,
+                    entries=self.manifest.entries,
                 )
             except InstallationError:
                 previous_weight_records = {}
@@ -3118,6 +3200,7 @@ class InstallationManager:
                     (record.verification.get("install_result", {}) if isinstance(record.verification, Mapping) else {}),
                     transaction_id=record.installation_id,
                 )
+                final_result = remote_verification
             if remote_verification.get("remote_state") != "ENABLED" or not remote_verification.get("target_exists"):
                 raise InstallationIntegrityError("恢复后远端 runtime 未确认启用")
         if existing_confirmed:
@@ -3558,6 +3641,31 @@ class InstallationManager:
         stage_directory: str,
         finalized: bool,
     ) -> InstallationRecord:
+        latest: InstallationRecord | None = None
+        try:
+            latest = self.store.get_installation(record.installation_id)
+        except InstallationError:
+            pass
+        # A final target probe is persisted before the runtime config.  If
+        # the later commit fails and rollback removes that target, the probe
+        # is no longer a valid existing-environment report.  Clear it with a
+        # report-digest CAS so a concurrent fresh detection is never erased;
+        # the next plan must explicitly discover the host again.
+        if latest is not None and isinstance(latest.verification, Mapping):
+            final_reprobe = latest.verification.get("final_reprobe")
+            final_report_digest = (
+                final_reprobe.get("report_digest")
+                if isinstance(final_reprobe, Mapping)
+                else None
+            )
+            if isinstance(final_report_digest, str):
+                try:
+                    self.environment_manager.store.clear_detection(
+                        plan.environment_ref,
+                        expected_report_digest=final_report_digest,
+                    )
+                except Exception:
+                    pass
         if profile is not None and stage_directory:
             try:
                 self.executor.rollback(
@@ -3570,7 +3678,7 @@ class InstallationManager:
             except Exception:
                 pass
         try:
-            latest = self.store.get_installation(record.installation_id)
+            latest = latest or self.store.get_installation(record.installation_id)
             return self._update(
                 latest,
                 state="FAILED",
