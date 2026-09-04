@@ -396,6 +396,26 @@ td code { white-space: nowrap; }
 .environment-plan-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 10px; margin-top: 8px; }
 .environment-plan-grid code { color: var(--text-soft); overflow-wrap: anywhere; }
 .environment-plan-warning { margin-top: 9px; color: var(--amber); }
+.environment-install-card { display: grid; gap: 14px; margin-top: 16px; padding: 16px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface); }
+.environment-install-card.is-blocked, .environment-install-failure { border-color: color-mix(in srgb, var(--red) 36%, var(--line)); }
+.environment-install-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+.environment-install-head > div, .environment-install-card > div:first-child { display: grid; gap: 4px; }
+.environment-install-head strong, .environment-install-card > div:first-child strong { color: var(--text); font-size: 13px; }
+.environment-install-head span, .environment-install-card > div:first-child span { color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.environment-install-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; color: var(--text-soft); font-size: 11px; }
+.environment-install-item { padding: 11px 12px; border-radius: 9px; background: var(--surface-soft); }
+.environment-install-list { display: grid; gap: 9px; }
+.environment-install-blockers { padding: 11px 12px; border-radius: 9px; background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); font-size: 12px; }
+.environment-install-blockers ul { margin: 7px 0 0; padding-left: 18px; }
+.environment-install-blockers li { margin: 4px 0; }
+.environment-install-risk { color: var(--text-soft); font-size: 12px; line-height: 1.6; }
+.environment-install-confirm { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 12px; line-height: 1.55; }
+.environment-install-confirm input { width: 16px; height: 16px; margin-top: 1px; flex: 0 0 auto; accent-color: var(--brand); }
+.environment-install-actions { display: flex; gap: 8px; }
+.environment-install-success { color: var(--green); }
+.environment-install-success strong { color: var(--green); }
+.environment-install-failure { color: var(--red); }
+.environment-install-failure strong { color: var(--red); }
 
 .toast { position: fixed; right: 24px; bottom: 24px; max-width: 360px; padding: 11px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transform: translateY(10px); transition: opacity .2s ease, transform .2s ease; font-size: 13px; }
 .toast.is-visible { opacity: 1; transform: translateY(0); }
@@ -407,6 +427,11 @@ td code { white-space: nowrap; }
   .page { width: min(100% - 48px, 760px); padding-top: 34px; }
   .layout-two, .provider-grid, .environment-layout { grid-template-columns: 1fr; }
   .side-card { display: block; }
+}
+
+@media (max-width: 600px) {
+  .environment-install-summary { grid-template-columns: 1fr 1fr; }
+  .environment-install-head { display: grid; }
 }
 
 @media (max-width: 640px) {

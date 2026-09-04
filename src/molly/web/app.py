@@ -53,6 +53,14 @@ from .environments import (
     EnvironmentDetectionError,
     EnvironmentManager,
 )
+from .installations import (
+    InstallationConfigError,
+    InstallationConflictError,
+    InstallationError,
+    InstallationExecutionError,
+    InstallationIntegrityError,
+    InstallationManager,
+)
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
 from molly.plugins.br1_inverse_design.intent import Br1Intent, parse_br1_request
 from molly.plugins.br1_inverse_design.schema import Br1PluginConfig
@@ -188,6 +196,31 @@ def _safe_exception_response(exc: BaseException) -> tuple[int, dict[str, Any]]:
             "error_type": "ENVIRONMENT_DETECTION_FAILED",
             "message": "环境检测失败，请检查本机或 SSH 连接配置",
         }
+    if isinstance(exc, InstallationConfigError):
+        return 400, {
+            "error_type": "INSTALLATION_CONFIG_INVALID",
+            "message": "安装计划或确认信息无效",
+        }
+    if isinstance(exc, InstallationConflictError):
+        return 409, {
+            "error_type": "INSTALLATION_CONFLICT",
+            "message": "安装计划、连接或运行目录已变化，请重新检测",
+        }
+    if isinstance(exc, InstallationIntegrityError):
+        return 502, {
+            "error_type": "INSTALLATION_INTEGRITY_FAILED",
+            "message": "固定来源或安装内容校验失败，隔离目录已回滚",
+        }
+    if isinstance(exc, InstallationExecutionError):
+        return 502, {
+            "error_type": "INSTALLATION_EXECUTION_FAILED",
+            "message": "受限安装工具执行失败，隔离目录已回滚",
+        }
+    if isinstance(exc, InstallationError):
+        return 409, {
+            "error_type": "INSTALLATION_REJECTED",
+            "message": "安装没有完成",
+        }
     if isinstance(exc, ProviderConfigError):
         return 400, {
             "error_type": "PROVIDER_CONFIG_INVALID",
@@ -243,6 +276,7 @@ class MollyWebApplication:
         service: RuntimeService,
         provider_store: ProviderConfigStore,
         environment_manager: EnvironmentManager | None = None,
+        installation_manager: InstallationManager | None = None,
         static_root: Path | None = None,
     ) -> None:
         if not isinstance(service, RuntimeService):
@@ -254,6 +288,12 @@ class MollyWebApplication:
         if environment_manager is not None and not isinstance(environment_manager, EnvironmentManager):
             raise TypeError("environment_manager must be an EnvironmentManager")
         self.environment_manager = environment_manager or EnvironmentManager(service.root)
+        if installation_manager is not None and not isinstance(installation_manager, InstallationManager):
+            raise TypeError("installation_manager must be an InstallationManager")
+        self.installation_manager = installation_manager or InstallationManager(
+            service.root,
+            environment_manager=self.environment_manager,
+        )
         self.static_root = static_root or Path(__file__).with_name("static")
         self._local_session_token = secrets.token_urlsafe(32)
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="molly-run")
@@ -468,15 +508,26 @@ class MollyWebApplication:
                 return 201, self._save_provider_profile(body)
         if route == ["api", "environments"]:
             if method == "GET":
-                return 200, {"environments": self.environment_manager.list_public()}
+                return 200, {"environments": self._environment_list()}
             if method == "POST":
                 return 201, self._save_environment_profile(body)
         if len(route) == 3 and route[:2] == ["api", "environments"]:
             if method == "GET":
-                return 200, self.environment_manager.get_public(route[2])
+                return 200, self._environment_detail(route[2])
         if len(route) == 4 and route[:2] == ["api", "environments"]:
             if method == "POST" and route[3] == "detect":
                 return 200, self.environment_manager.detect(route[2])
+        if len(route) == 5 and route[:2] == ["api", "environments"]:
+            environment_ref, resource, action = route[2], route[3], route[4]
+            if resource == "install" and method == "POST" and action == "plan":
+                return 200, self._build_environment_install_plan(environment_ref, body)
+            if resource == "install" and method == "POST" and action == "confirm":
+                return 200, self._confirm_environment_install(body)
+            if resource == "install" and method == "POST" and action == "recover":
+                return 200, self._recover_environment_install(body)
+        if len(route) == 4 and route[:2] == ["api", "environments"]:
+            if method == "GET" and route[3] == "runtime":
+                return 200, {"runtime_config": self.installation_manager.runtime_public(route[2])}
         if len(route) == 4 and route[:2] == ["api", "model-profiles"]:
             profile_ref, action = route[2], route[3]
             if method == "POST" and action == "credential":
@@ -496,7 +547,7 @@ class MollyWebApplication:
                 _runtime_profile_view(profile) for profile in self.service.profiles.profiles
             ],
             "model_profiles": self._provider_profiles(),
-            "environments": self.environment_manager.list_public(),
+            "environments": self._environment_list(),
             "runs": self._run_summaries(),
             "workflow_profiles": [
                 {
@@ -1151,8 +1202,58 @@ class MollyWebApplication:
     def _provider_profiles(self) -> list[dict[str, Any]]:
         return [view.to_public_dict() for view in self.provider_store.list_profiles()]
 
+    def _environment_list(self) -> list[dict[str, Any]]:
+        result = []
+        for profile in self.environment_manager.list_public():
+            value = dict(profile)
+            value["runtime_config"] = self.installation_manager.runtime_public(
+                profile["environment_ref"]
+            )
+            result.append(value)
+        return result
+
+    def _environment_detail(self, environment_ref: str) -> dict[str, Any]:
+        value = self.environment_manager.get_public(environment_ref)
+        value["runtime_config"] = self.installation_manager.runtime_public(environment_ref)
+        return value
+
+    def _build_environment_install_plan(
+        self,
+        environment_ref: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        allowed = {"selected_component_ids"}
+        if set(payload) - allowed:
+            raise WebRequestError(400, "INVALID_INSTALL_PLAN", "安装计划请求包含不支持的字段")
+        selected = payload.get("selected_component_ids")
+        if selected is not None and (
+            not isinstance(selected, list)
+            or any(not isinstance(item, str) for item in selected)
+        ):
+            raise WebRequestError(400, "INVALID_INSTALL_PLAN", "组件选择必须是字符串列表")
+        plan = self.installation_manager.build_plan(
+            environment_ref,
+            selected_component_ids=selected,
+        )
+        return {"plan": plan.to_dict(public=True)}
+
+    def _confirm_environment_install(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self.installation_manager.confirm(payload)
+
+    def _recover_environment_install(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        allowed = {"installation_id"}
+        if set(payload) - allowed or not isinstance(payload.get("installation_id"), str):
+            raise WebRequestError(400, "INVALID_INSTALLATION", "需要有效的安装记录标识")
+        return self.installation_manager.recover(payload["installation_id"])
+
     def _save_environment_profile(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        previous_ref = payload.get("environment_ref")
+        previous_runtime = None
+        if isinstance(previous_ref, str) and previous_ref:
+            previous_runtime = self.installation_manager.store.get_runtime_config(previous_ref)
         profile = self.environment_manager.upsert_profile(payload)
+        if previous_runtime is not None and profile.environment_ref != previous_ref:
+            self.installation_manager.store.mark_runtime_invalidated(previous_runtime.runtime_id)
         detection = self.environment_manager.store.get_detection(profile.environment_ref)
         return {
             "environment": profile.to_public_dict(detection=detection),
@@ -1413,6 +1514,7 @@ def create_application(
     service: RuntimeService | None = None,
     provider_store: ProviderConfigStore | None = None,
     environment_manager: EnvironmentManager | None = None,
+    installation_manager: InstallationManager | None = None,
 ) -> MollyWebApplication:
     """Create the local web app from server-owned runtime profiles."""
 
@@ -1431,6 +1533,7 @@ def create_application(
         service=service,
         provider_store=configured_provider_store,
         environment_manager=environment_manager,
+        installation_manager=installation_manager,
     )
 
 

@@ -1,0 +1,2386 @@
+"""Restricted, server-owned runtime installation.
+
+The discovery layer in :mod:`molly.web.environments` is deliberately read
+only.  This module is the next, separate boundary: it accepts only a plan
+created from a server-owned compatibility manifest and performs installation
+inside a newly allocated runtime directory.  Neither a browser nor an LLM
+can provide a command, package version, URL, or destination path.
+
+The implementation uses ordinary files and Python's standard library so the
+same state machine can be exercised with a local fixture and with a simulated
+SSH transport.  The default scientific manifest intentionally contains no
+invented hashes; entries without a hash are displayed as blocked and cannot
+be approved.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import tarfile
+import tempfile
+import threading
+import time
+from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit
+import urllib.request
+import zipfile
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    fcntl = None
+
+from molly.core.ids import (
+    canonical_json_bytes,
+    new_server_id,
+    normalize_timestamp,
+    sha256_bytes,
+    thaw_json,
+    utc_timestamp,
+    validate_identifier,
+    validate_sha256,
+)
+
+from .environments import (
+    COMPATIBILITY_CATALOG,
+    COMPATIBILITY_CATALOG_VERSION,
+    CompatibilityEntry,
+    EnvironmentManager,
+    EnvironmentProfile,
+    EnvironmentReport,
+    _default_runner,
+)
+
+
+INSTALLATION_STATE_VERSION = 1
+RUNTIME_CONFIG_VERSION = 1
+INSTALLATION_TIMEOUT_SECONDS = 3_600.0
+INSTALLATION_RECOVERY_STALE_SECONDS = 300.0
+MAX_INSTALL_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_INSTALL_DISK_BYTES = 4 * 1024 * 1024 * 1024
+MAX_INSTALL_OUTPUT_BYTES = 512 * 1024
+MAX_INSTALL_ENTRIES = 32
+MAX_EXTRACTED_FILE_BYTES = 4 * 1024 * 1024 * 1024
+_STORE_THREAD_LOCK = threading.RLock()
+
+
+class InstallationError(RuntimeError):
+    """Base class for expected installation failures."""
+
+
+class InstallationConfigError(InstallationError, ValueError):
+    """A manifest, plan, binding, or persisted installation is invalid."""
+
+
+class InstallationIntegrityError(InstallationError):
+    """A fixed source, hash, archive, or staged runtime failed validation."""
+
+
+class InstallationConflictError(InstallationError):
+    """A concurrent writer or already-used runtime prevented a safe change."""
+
+
+class InstallationExecutionError(InstallationError):
+    """A bounded local or SSH installation operation failed."""
+
+
+def _bounded_text(value: Any, *, field: str, maximum: int = 512) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise InstallationConfigError(f"{field} is invalid")
+    if any(char in value for char in "\x00\r\n"):
+        raise InstallationConfigError(f"{field} contains a control character")
+    return value
+
+
+def _bounded_int(value: Any, *, field: str, minimum: int = 0, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise InstallationConfigError(f"{field} is invalid")
+    return value
+
+
+def _timestamp(value: Any, *, field: str) -> str:
+    try:
+        return normalize_timestamp(value, field=field)
+    except Exception as exc:
+        raise InstallationConfigError(f"{field} is invalid") from exc
+
+
+def _relative_path(value: Any, *, field: str, allow_empty: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > 255:
+        raise InstallationConfigError(f"{field} is invalid")
+    if not value and allow_empty:
+        return ""
+    if not value or "\\" in value or "\x00" in value or value.startswith(("/", "~")):
+        raise InstallationConfigError(f"{field} is invalid")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise InstallationConfigError(f"{field} is invalid")
+    return str(path)
+
+
+def _source_url(value: Any) -> str:
+    result = _bounded_text(value, field="manifest source_url", maximum=2_048)
+    parsed = urlsplit(result)
+    # ``file://`` is useful only for server-owned test fixtures.  A browser
+    # payload never reaches this constructor.  Production entries are HTTPS.
+    if parsed.scheme not in {"https", "file"} or parsed.username or parsed.password:
+        raise InstallationConfigError("manifest source_url must be HTTPS or a server-owned file URL")
+    if parsed.scheme == "https" and not parsed.hostname:
+        raise InstallationConfigError("manifest source_url must have a host")
+    if parsed.scheme == "file" and not parsed.path:
+        raise InstallationConfigError("manifest file URL is invalid")
+    return result
+
+
+def _safe_id(value: Any, *, field: str) -> str:
+    try:
+        return validate_identifier(value, field=field)
+    except Exception as exc:
+        raise InstallationConfigError(f"{field} is invalid") from exc
+
+
+def _public_hash_safe(value: Any) -> Any:
+    """Hide artifact SHA fields from ordinary API projections."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: _public_hash_safe(item)
+            for key, item in value.items()
+            if key != "sha256"
+        }
+    if isinstance(value, (list, tuple)):
+        return [_public_hash_safe(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class InstallManifestEntry:
+    """One immutable, allow-listed installable component."""
+
+    component_id: str
+    name: str
+    version: str
+    source: str
+    source_url: str
+    estimated_download_bytes: int
+    estimated_disk_bytes: int
+    estimated_duration_seconds: int
+    install_subdirectory: str
+    requires_license: bool = False
+    license_name: str = ""
+    sha256: str | None = None
+    install_kind: str = "archive"
+    install_filename: str = ""
+    max_download_bytes: int = MAX_INSTALL_DOWNLOAD_BYTES
+    required_paths: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "component_id", _safe_id(self.component_id, field="component_id"))
+        object.__setattr__(self, "name", _bounded_text(self.name, field="component name", maximum=160))
+        object.__setattr__(self, "version", _bounded_text(self.version, field="component version", maximum=160))
+        object.__setattr__(self, "source", _bounded_text(self.source, field="component source", maximum=512))
+        object.__setattr__(self, "source_url", _source_url(self.source_url))
+        object.__setattr__(
+            self,
+            "estimated_download_bytes",
+            _bounded_int(
+                self.estimated_download_bytes,
+                field="estimated_download_bytes",
+                maximum=MAX_INSTALL_DOWNLOAD_BYTES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "estimated_disk_bytes",
+            _bounded_int(
+                self.estimated_disk_bytes,
+                field="estimated_disk_bytes",
+                maximum=MAX_INSTALL_DISK_BYTES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "estimated_duration_seconds",
+            _bounded_int(
+                self.estimated_duration_seconds,
+                field="estimated_duration_seconds",
+                maximum=7 * 24 * 60 * 60,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "install_subdirectory",
+            _relative_path(self.install_subdirectory, field="install_subdirectory"),
+        )
+        if not isinstance(self.requires_license, bool):
+            raise InstallationConfigError("requires_license is invalid")
+        object.__setattr__(
+            self,
+            "license_name",
+            _bounded_text(self.license_name, field="license_name", maximum=160)
+            if self.license_name
+            else "",
+        )
+        if self.sha256 is not None:
+            try:
+                object.__setattr__(self, "sha256", validate_sha256(self.sha256, field="manifest sha256"))
+            except Exception as exc:
+                raise InstallationConfigError("manifest sha256 is invalid") from exc
+        if self.install_kind not in {"archive", "zip", "tar", "file"}:
+            raise InstallationConfigError("install_kind is not allow-listed")
+        filename = self.install_filename
+        if filename:
+            filename = _relative_path(filename, field="install_filename")
+        elif self.install_kind == "file":
+            filename = "payload.bin"
+        object.__setattr__(self, "install_filename", filename)
+        object.__setattr__(
+            self,
+            "max_download_bytes",
+            _bounded_int(
+                self.max_download_bytes,
+                field="max_download_bytes",
+                minimum=1,
+                maximum=MAX_INSTALL_DOWNLOAD_BYTES,
+            ),
+        )
+        if self.estimated_download_bytes > self.max_download_bytes:
+            raise InstallationConfigError("manifest download estimate exceeds its fixed limit")
+        if isinstance(self.required_paths, (str, bytes, bytearray)):
+            raise InstallationConfigError("required_paths must be a sequence")
+        normalized_paths: list[str] = []
+        for item in self.required_paths:
+            normalized = _relative_path(item, field="required_paths")
+            if normalized not in normalized_paths:
+                normalized_paths.append(normalized)
+        object.__setattr__(self, "required_paths", tuple(normalized_paths))
+
+    @property
+    def installable(self) -> bool:
+        return bool(self.sha256)
+
+    def to_dict(self, *, include_internal: bool = True) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "component_id": self.component_id,
+            "name": self.name,
+            "version": self.version,
+            "source": self.source,
+            "source_url": self.source_url,
+            "estimated_download_bytes": self.estimated_download_bytes,
+            "estimated_disk_bytes": self.estimated_disk_bytes,
+            "estimated_duration_seconds": self.estimated_duration_seconds,
+            "install_subdirectory": self.install_subdirectory,
+            "requires_license": self.requires_license,
+            "license_name": self.license_name,
+            "install_kind": self.install_kind,
+            "install_filename": self.install_filename,
+            "max_download_bytes": self.max_download_bytes,
+            "required_paths": list(self.required_paths),
+        }
+        if include_internal:
+            value["sha256"] = self.sha256
+        return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "InstallManifestEntry":
+        if not isinstance(value, Mapping):
+            raise InstallationConfigError("manifest entry must be an object")
+        allowed = {
+            "component_id",
+            "name",
+            "version",
+            "source",
+            "source_url",
+            "estimated_download_bytes",
+            "estimated_disk_bytes",
+            "estimated_duration_seconds",
+            "install_subdirectory",
+            "requires_license",
+            "license_name",
+            "sha256",
+            "install_kind",
+            "install_filename",
+            "max_download_bytes",
+            "required_paths",
+        }
+        if set(value) - allowed:
+            raise InstallationConfigError("manifest entry contains unsupported fields")
+        paths = value.get("required_paths", ())
+        if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes, bytearray)):
+            raise InstallationConfigError("manifest required_paths must be a list")
+        return cls(
+            component_id=value.get("component_id"),
+            name=value.get("name"),
+            version=value.get("version"),
+            source=value.get("source"),
+            source_url=value.get("source_url"),
+            estimated_download_bytes=value.get("estimated_download_bytes"),
+            estimated_disk_bytes=value.get("estimated_disk_bytes"),
+            estimated_duration_seconds=value.get("estimated_duration_seconds"),
+            install_subdirectory=value.get("install_subdirectory"),
+            requires_license=value.get("requires_license", False),
+            license_name=value.get("license_name", ""),
+            sha256=value.get("sha256"),
+            install_kind=value.get("install_kind", "archive"),
+            install_filename=value.get("install_filename", ""),
+            max_download_bytes=value.get("max_download_bytes", MAX_INSTALL_DOWNLOAD_BYTES),
+            required_paths=tuple(paths),
+        )
+
+    @classmethod
+    def from_compatibility_entry(cls, entry: CompatibilityEntry) -> "InstallManifestEntry":
+        return cls(
+            component_id=entry.component_id,
+            name=entry.name,
+            version=entry.version,
+            source=entry.source,
+            source_url=entry.source_url,
+            estimated_download_bytes=entry.estimated_download_bytes,
+            estimated_disk_bytes=entry.estimated_disk_bytes,
+            estimated_duration_seconds=entry.estimated_duration_seconds,
+            install_subdirectory=entry.install_subdirectory,
+            requires_license=entry.requires_license,
+            license_name="REINVENT4 license / credentials" if entry.requires_license else "",
+            sha256=None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InstallManifest:
+    """A server-owned compatibility catalog and its resource limits."""
+
+    catalog_version: str
+    entries: tuple[InstallManifestEntry, ...]
+    max_total_download_bytes: int = MAX_INSTALL_DOWNLOAD_BYTES
+    max_total_disk_bytes: int = MAX_INSTALL_DISK_BYTES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "catalog_version", _safe_id(self.catalog_version, field="catalog_version"))
+        object.__setattr__(self, "entries", tuple(self.entries))
+        if not self.entries or len(self.entries) > MAX_INSTALL_ENTRIES:
+            raise InstallationConfigError("install manifest has an invalid entry count")
+        seen: set[str] = set()
+        for entry in self.entries:
+            if not isinstance(entry, InstallManifestEntry):
+                raise InstallationConfigError("install manifest accepts fixed entries only")
+            if entry.component_id in seen:
+                raise InstallationConfigError("install manifest contains a duplicate component")
+            seen.add(entry.component_id)
+        object.__setattr__(
+            self,
+            "max_total_download_bytes",
+            _bounded_int(
+                self.max_total_download_bytes,
+                field="max_total_download_bytes",
+                minimum=1,
+                maximum=MAX_INSTALL_DOWNLOAD_BYTES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "max_total_disk_bytes",
+            _bounded_int(
+                self.max_total_disk_bytes,
+                field="max_total_disk_bytes",
+                minimum=1,
+                maximum=MAX_INSTALL_DISK_BYTES,
+            ),
+        )
+
+    @classmethod
+    def from_compatibility_catalog(
+        cls,
+        catalog: Sequence[CompatibilityEntry] = COMPATIBILITY_CATALOG,
+        *,
+        catalog_version: str = COMPATIBILITY_CATALOG_VERSION,
+    ) -> "InstallManifest":
+        return cls(
+            catalog_version=catalog_version,
+            entries=tuple(InstallManifestEntry.from_compatibility_entry(item) for item in catalog),
+        )
+
+    @property
+    def entry_map(self) -> Mapping[str, InstallManifestEntry]:
+        return {entry.component_id: entry for entry in self.entries}
+
+    @property
+    def digest(self) -> str:
+        return sha256_bytes(canonical_json_bytes(self.to_dict()))
+
+    def get(self, component_id: str) -> InstallManifestEntry | None:
+        return self.entry_map.get(component_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "catalog_version": self.catalog_version,
+            "max_total_download_bytes": self.max_total_download_bytes,
+            "max_total_disk_bytes": self.max_total_disk_bytes,
+            "entries": [entry.to_dict(include_internal=True) for entry in self.entries],
+        }
+
+
+def default_install_manifest() -> InstallManifest:
+    """Return the production manifest without fabricating artifact hashes."""
+
+    return InstallManifest.from_compatibility_catalog()
+
+
+def _runtime_target(profile: EnvironmentProfile, runtime_id: str) -> str:
+    if profile.mode == "local":
+        return f".molly/runtimes/{runtime_id}"
+    return f"~/.local/share/molly/runtimes/{runtime_id}"
+
+
+def _runtime_stage(profile: EnvironmentProfile, runtime_id: str, installation_id: str) -> str:
+    if profile.mode == "local":
+        return f".molly/.runtime-staging/{runtime_id}-{installation_id}"
+    return f"~/.local/share/molly/runtimes/.staging/{runtime_id}-{installation_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class InstallPlan:
+    """A digest-bound, non-executable installation proposal."""
+
+    plan_id: str
+    runtime_id: str
+    environment_ref: str
+    connection_digest: str
+    report_digest: str
+    catalog_version: str
+    catalog_digest: str
+    selected_device: str
+    target_directory: str
+    entries: tuple[InstallManifestEntry, ...]
+    directory_required: bool
+    blockers: tuple[str, ...]
+    reasons: Mapping[str, str]
+    created_at: str
+    status: str
+    plan_digest: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "plan_id", _safe_id(self.plan_id, field="plan_id"))
+        object.__setattr__(self, "runtime_id", _safe_id(self.runtime_id, field="runtime_id"))
+        object.__setattr__(self, "environment_ref", _safe_id(self.environment_ref, field="environment_ref"))
+        for value, field in (
+            (self.connection_digest, "connection_digest"),
+            (self.report_digest, "report_digest"),
+            (self.catalog_digest, "catalog_digest"),
+            (self.plan_digest, "plan_digest"),
+        ):
+            try:
+                validate_sha256(value, field=field)
+            except Exception as exc:
+                raise InstallationConfigError(f"{field} is invalid") from exc
+        object.__setattr__(self, "catalog_version", _safe_id(self.catalog_version, field="catalog_version"))
+        if self.selected_device not in {"CPU", "GPU"}:
+            raise InstallationConfigError("selected_device is invalid")
+        object.__setattr__(self, "target_directory", _bounded_text(self.target_directory, field="target_directory", maximum=512))
+        if self.status not in {"NO_INSTALL_REQUIRED", "READY_TO_INSTALL", "BLOCKED"}:
+            raise InstallationConfigError("install plan status is invalid")
+        object.__setattr__(self, "created_at", _timestamp(self.created_at, field="plan created_at"))
+        object.__setattr__(self, "blockers", tuple(_bounded_text(item, field="plan blocker", maximum=512) for item in self.blockers))
+        object.__setattr__(self, "reasons", {str(key): str(value) for key, value in self.reasons.items()})
+        if len(self.entries) > MAX_INSTALL_ENTRIES:
+            raise InstallationConfigError("install plan has too many entries")
+        if self.plan_digest != sha256_bytes(
+            canonical_json_bytes(self._payload(include_internal=True))
+        ):
+            raise InstallationIntegrityError("install plan digest does not match its content")
+
+    @property
+    def requires_confirmation(self) -> bool:
+        return self.status != "NO_INSTALL_REQUIRED"
+
+    @property
+    def will_execute(self) -> bool:
+        return self.status == "READY_TO_INSTALL"
+
+    @property
+    def estimated_download_bytes(self) -> int:
+        return sum(item.estimated_download_bytes for item in self.entries)
+
+    @property
+    def estimated_disk_bytes(self) -> int:
+        return sum(item.estimated_disk_bytes for item in self.entries)
+
+    @property
+    def estimated_duration_seconds(self) -> int:
+        return sum(item.estimated_duration_seconds for item in self.entries)
+
+    @property
+    def component_ids(self) -> tuple[str, ...]:
+        return tuple(entry.component_id for entry in self.entries)
+
+    def _payload(self, *, include_internal: bool) -> dict[str, Any]:
+        items = []
+        for entry in self.entries:
+            item = entry.to_dict(include_internal=include_internal)
+            item.update(
+                {
+                    "action": "install_in_isolated_directory",
+                    "install_location": f"{self.target_directory}/{entry.install_subdirectory}",
+                    "reason": self.reasons.get(entry.component_id, "缺少兼容组件"),
+                }
+            )
+            items.append(item)
+        if self.directory_required:
+            items.append(
+                {
+                    "component_id": "runtime-directory",
+                    "name": "可写运行目录",
+                    "version": "server-owned",
+                    "source": "服务端隔离目录策略",
+                    "source_url": "server-owned",
+                    "estimated_download_bytes": 0,
+                    "estimated_disk_bytes": 0,
+                    "estimated_duration_seconds": 0,
+                    "install_subdirectory": "",
+                    "action": "prepare_isolated_directory",
+                    "install_location": self.target_directory,
+                    "reason": self.reasons.get("runtime-directory", "隔离运行目录尚未确认可写"),
+                    "requires_license": False,
+                    "license_name": "",
+                }
+            )
+        return {
+            "version": INSTALLATION_STATE_VERSION,
+            "plan_id": self.plan_id,
+            "runtime_id": self.runtime_id,
+            "environment_ref": self.environment_ref,
+            "connection_digest": self.connection_digest,
+            "report_digest": self.report_digest,
+            "catalog_version": self.catalog_version,
+            "catalog_digest": self.catalog_digest,
+            "selected_device": self.selected_device,
+            "target_directory": self.target_directory,
+            "status": self.status,
+            "blockers": list(self.blockers),
+            "directory_required": self.directory_required,
+            "created_at": self.created_at,
+            "items": items,
+        }
+
+    def to_dict(self, *, public: bool = True) -> dict[str, Any]:
+        value = self._payload(include_internal=not public)
+        value["plan_digest"] = self.plan_digest
+        value["estimated_download_bytes"] = self.estimated_download_bytes
+        value["estimated_disk_bytes"] = self.estimated_disk_bytes
+        value["estimated_duration_seconds"] = self.estimated_duration_seconds
+        value["requires_confirmation"] = self.requires_confirmation
+        value["will_execute"] = self.will_execute
+        value["integrity_policy"] = "固定清单 SHA-256、大小上限、隔离目录和原子启用"
+        value["risk"] = list(self.blockers) or ["只写入新的隔离目录，不覆盖已有环境"]
+        return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "InstallPlan":
+        if not isinstance(value, Mapping):
+            raise InstallationConfigError("install plan must be an object")
+        if value.get("version") != INSTALLATION_STATE_VERSION:
+            raise InstallationConfigError("install plan version is unsupported")
+        items = value.get("items", ())
+        if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+            raise InstallationConfigError("install plan items must be a list")
+        entries: list[InstallManifestEntry] = []
+        reasons: dict[str, str] = {}
+        directory_required = bool(value.get("directory_required", False))
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise InstallationConfigError("install plan item is invalid")
+            component_id = item.get("component_id")
+            if component_id == "runtime-directory":
+                directory_required = True
+                reasons["runtime-directory"] = str(item.get("reason", ""))
+                continue
+            entries.append(
+                InstallManifestEntry.from_dict(
+                    {
+                        key: item[key]
+                        for key in {
+                            "component_id",
+                            "name",
+                            "version",
+                            "source",
+                            "source_url",
+                            "estimated_download_bytes",
+                            "estimated_disk_bytes",
+                            "estimated_duration_seconds",
+                            "install_subdirectory",
+                            "requires_license",
+                            "license_name",
+                            "sha256",
+                            "install_kind",
+                            "install_filename",
+                            "max_download_bytes",
+                            "required_paths",
+                        }
+                        if key in item
+                    }
+                )
+            )
+            reasons[str(component_id)] = str(item.get("reason", ""))
+        raw_blockers = value.get("blockers", ())
+        if not isinstance(raw_blockers, Sequence) or isinstance(raw_blockers, (str, bytes, bytearray)):
+            raise InstallationConfigError("install plan blockers are invalid")
+        return cls(
+            plan_id=value.get("plan_id"),
+            runtime_id=value.get("runtime_id"),
+            environment_ref=value.get("environment_ref"),
+            connection_digest=value.get("connection_digest"),
+            report_digest=value.get("report_digest"),
+            catalog_version=value.get("catalog_version"),
+            catalog_digest=value.get("catalog_digest"),
+            selected_device=value.get("selected_device"),
+            target_directory=value.get("target_directory"),
+            entries=tuple(entries),
+            directory_required=directory_required,
+            blockers=tuple(str(item) for item in raw_blockers),
+            reasons=reasons,
+            created_at=value.get("created_at"),
+            status=value.get("status"),
+            plan_digest=value.get("plan_digest"),
+        )
+
+    @classmethod
+    def build(
+        cls,
+        profile: EnvironmentProfile,
+        report: EnvironmentReport,
+        match: Mapping[str, Any],
+        manifest: InstallManifest,
+        *,
+        selected_component_ids: Sequence[str] | None = None,
+    ) -> "InstallPlan":
+        if not isinstance(match, Mapping):
+            raise InstallationConfigError("environment match is invalid")
+        missing = match.get("missing", ())
+        if not isinstance(missing, Sequence) or isinstance(missing, (str, bytes, bytearray)):
+            raise InstallationConfigError("environment missing-component list is invalid")
+        missing_by_id: dict[str, Mapping[str, Any]] = {}
+        for item in missing:
+            if not isinstance(item, Mapping):
+                raise InstallationConfigError("environment missing-component entry is invalid")
+            component_id = _safe_id(item.get("component_id"), field="missing component_id")
+            missing_by_id[component_id] = item
+
+        if selected_component_ids is None:
+            selected = tuple(component_id for component_id in missing_by_id if component_id != "runtime-directory")
+        else:
+            if not isinstance(selected_component_ids, Sequence) or isinstance(
+                selected_component_ids, (str, bytes, bytearray)
+            ):
+                raise InstallationConfigError("selected_component_ids must be a list")
+            selected = tuple(_safe_id(item, field="selected component_id") for item in selected_component_ids)
+            if len(selected) != len(set(selected)):
+                raise InstallationConfigError("selected_component_ids must be unique")
+        allowed = set(missing_by_id) - {"runtime-directory"}
+        unknown = set(selected) - allowed
+        if unknown:
+            raise InstallationConfigError("LLM or client selected a component outside the current plan")
+        omitted = allowed - set(selected)
+        entries: list[InstallManifestEntry] = []
+        blockers: list[str] = [str(item) for item in match.get("blockers", ()) if isinstance(item, str)]
+        reasons = {
+            component_id: str(item.get("reason", "缺少兼容组件"))
+            for component_id, item in missing_by_id.items()
+        }
+        for component_id in sorted(selected):
+            entry = manifest.get(component_id)
+            if entry is None:
+                blockers.append(f"固定清单没有组件 {component_id}")
+                continue
+            entries.append(entry)
+            if not entry.installable:
+                blockers.append(f"{entry.name} 尚未登记可验证的 SHA-256，安装已暂停")
+            if entry.requires_license and not bool(
+                ((report.data.get("reinvent4") if isinstance(report.data, Mapping) else {}) or {}).get(
+                    "license_present"
+                )
+            ):
+                blockers.append(f"{entry.name} 需要许可证或凭据，安装已暂停")
+        for component_id in sorted(omitted):
+            blockers.append(f"用户未确认缺失组件 {component_id}")
+        if sum(entry.estimated_download_bytes for entry in entries) > manifest.max_total_download_bytes:
+            blockers.append("安装计划超过固定下载大小上限")
+        if sum(entry.estimated_disk_bytes for entry in entries) > manifest.max_total_disk_bytes:
+            blockers.append("安装计划超过固定磁盘占用上限")
+        disk_data = report.data.get("disk", {}) if isinstance(report.data, Mapping) else {}
+        available_bytes = disk_data.get("available_bytes") if isinstance(disk_data, Mapping) else None
+        if isinstance(available_bytes, int) and sum(entry.estimated_disk_bytes for entry in entries) > available_bytes:
+            blockers.append("当前可用磁盘空间不足以容纳固定安装计划")
+        if "runtime-directory" in missing_by_id:
+            disk_writable = disk_data.get("parent_writable") if isinstance(disk_data, Mapping) else False
+            if not bool(disk_writable):
+                blockers.append("隔离运行目录及其父目录不可写")
+        if not bool(match.get("selected_device") in {"CPU", "GPU"}):
+            blockers.append("没有可用的 CPU/GPU 执行设备")
+
+        ready_existing = match.get("status") == "READY" and not missing_by_id
+        runtime_id = new_server_id("runtime")
+        plan_id = new_server_id("install-plan")
+        status = "NO_INSTALL_REQUIRED" if ready_existing else "BLOCKED" if blockers else "READY_TO_INSTALL"
+        created_at = utc_timestamp()
+        payload = {
+            "version": INSTALLATION_STATE_VERSION,
+            "plan_id": plan_id,
+            "runtime_id": runtime_id,
+            "environment_ref": profile.environment_ref,
+            "connection_digest": profile.connection_digest,
+            "report_digest": report.report_digest,
+            "catalog_version": manifest.catalog_version,
+            "catalog_digest": manifest.digest,
+            "selected_device": str(match.get("selected_device") or "CPU"),
+            "target_directory": _runtime_target(profile, runtime_id),
+            "status": status,
+            "blockers": blockers,
+            "directory_required": "runtime-directory" in missing_by_id,
+            "created_at": created_at,
+            "items": [
+                {
+                    **entry.to_dict(include_internal=True),
+                    "action": "install_in_isolated_directory",
+                    "install_location": f"{_runtime_target(profile, runtime_id)}/{entry.install_subdirectory}",
+                    "reason": reasons.get(entry.component_id, "缺少兼容组件"),
+                }
+                for entry in entries
+            ],
+        }
+        digest = sha256_bytes(canonical_json_bytes(payload))
+        return cls(
+            plan_id=plan_id,
+            runtime_id=runtime_id,
+            environment_ref=profile.environment_ref,
+            connection_digest=profile.connection_digest,
+            report_digest=report.report_digest,
+            catalog_version=manifest.catalog_version,
+            catalog_digest=manifest.digest,
+            selected_device=str(match.get("selected_device") or "CPU"),
+            target_directory=_runtime_target(profile, runtime_id),
+            entries=tuple(entries),
+            directory_required="runtime-directory" in missing_by_id,
+            blockers=tuple(blockers),
+            reasons=reasons,
+            created_at=created_at,
+            status=status,
+            plan_digest=digest,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InstallationRecord:
+    """Persisted installation transaction and its resumable progress."""
+
+    installation_id: str
+    plan_id: str
+    runtime_id: str
+    environment_ref: str
+    connection_digest: str
+    report_digest: str
+    plan_digest: str
+    catalog_version: str
+    catalog_digest: str
+    selected_device: str
+    state: str
+    revision: int
+    created_at: str
+    updated_at: str
+    stage_directory: str
+    target_directory: str
+    completed_component_ids: tuple[str, ...] = ()
+    verification: Mapping[str, Any] = None  # type: ignore[assignment]
+    error: str = ""
+    rollback_completed: bool = False
+    side_effects_started: bool = False
+    consent_at: str = ""
+    worker_pid: int = 0
+
+    def __post_init__(self) -> None:
+        for value, field in (
+            (self.installation_id, "installation_id"),
+            (self.plan_id, "plan_id"),
+            (self.runtime_id, "runtime_id"),
+            (self.environment_ref, "environment_ref"),
+            (self.catalog_version, "catalog_version"),
+        ):
+            _safe_id(value, field=field)
+        for value, field in (
+            (self.connection_digest, "connection_digest"),
+            (self.report_digest, "report_digest"),
+            (self.plan_digest, "plan_digest"),
+            (self.catalog_digest, "catalog_digest"),
+        ):
+            try:
+                validate_sha256(value, field=field)
+            except Exception as exc:
+                raise InstallationConfigError(f"{field} is invalid") from exc
+        if self.selected_device not in {"CPU", "GPU"}:
+            raise InstallationConfigError("installation selected_device is invalid")
+        if self.state not in {
+            "APPROVED",
+            "INSTALLING",
+            "VERIFYING",
+            "ENABLING",
+            "CONFIRMED",
+            "FAILED",
+            "ROLLED_BACK",
+        }:
+            raise InstallationConfigError("installation state is invalid")
+        if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
+            raise InstallationConfigError("installation revision is invalid")
+        object.__setattr__(self, "created_at", _timestamp(self.created_at, field="installation created_at"))
+        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, field="installation updated_at"))
+        object.__setattr__(
+            self,
+            "stage_directory",
+            _bounded_text(self.stage_directory, field="stage_directory", maximum=1_024)
+            if self.stage_directory
+            else "",
+        )
+        object.__setattr__(self, "target_directory", _bounded_text(self.target_directory, field="target_directory", maximum=1_024))
+        ids = tuple(_safe_id(item, field="completed component_id") for item in self.completed_component_ids)
+        if len(ids) != len(set(ids)):
+            raise InstallationConfigError("completed component IDs must be unique")
+        object.__setattr__(self, "completed_component_ids", ids)
+        object.__setattr__(self, "verification", thaw_json(self.verification or {}))
+        if self.error:
+            object.__setattr__(self, "error", _bounded_text(self.error, field="installation error", maximum=2_000))
+        if not isinstance(self.rollback_completed, bool) or not isinstance(self.side_effects_started, bool):
+            raise InstallationConfigError("installation flags are invalid")
+        if self.consent_at:
+            object.__setattr__(self, "consent_at", _timestamp(self.consent_at, field="consent_at"))
+        if isinstance(self.worker_pid, bool) or not isinstance(self.worker_pid, int) or self.worker_pid < 0:
+            raise InstallationConfigError("worker_pid is invalid")
+
+    def to_dict(self, *, public: bool = False) -> dict[str, Any]:
+        value = {
+            "version": INSTALLATION_STATE_VERSION,
+            "installation_id": self.installation_id,
+            "plan_id": self.plan_id,
+            "runtime_id": self.runtime_id,
+            "environment_ref": self.environment_ref,
+            "connection_digest": self.connection_digest,
+            "report_digest": self.report_digest,
+            "plan_digest": self.plan_digest,
+            "catalog_version": self.catalog_version,
+            "catalog_digest": self.catalog_digest,
+            "selected_device": self.selected_device,
+            "state": self.state,
+            "revision": self.revision,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "stage_directory": self.stage_directory,
+            "target_directory": self.target_directory,
+            "completed_component_ids": list(self.completed_component_ids),
+            "verification": thaw_json(self.verification),
+            "error": self.error,
+            "rollback_completed": self.rollback_completed,
+            "side_effects_started": self.side_effects_started,
+            "consent_at": self.consent_at,
+        }
+        if not public:
+            value["worker_pid"] = self.worker_pid
+        else:
+            value.pop("stage_directory")
+            value.pop("target_directory")
+            value.pop("worker_pid", None)
+            value["verification"] = _public_hash_safe(value["verification"])
+            value["binding"] = {
+                "connection_digest": self.connection_digest,
+                "report_digest": self.report_digest,
+                "plan_digest": self.plan_digest,
+                "catalog_version": self.catalog_version,
+            }
+        return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "InstallationRecord":
+        if not isinstance(value, Mapping):
+            raise InstallationConfigError("installation record must be an object")
+        if value.get("version") != INSTALLATION_STATE_VERSION:
+            raise InstallationConfigError("installation record version is unsupported")
+        completed = value.get("completed_component_ids", ())
+        if not isinstance(completed, Sequence) or isinstance(completed, (str, bytes, bytearray)):
+            raise InstallationConfigError("completed_component_ids is invalid")
+        verification = value.get("verification", {})
+        if not isinstance(verification, Mapping):
+            raise InstallationConfigError("installation verification is invalid")
+        return cls(
+            installation_id=value.get("installation_id"),
+            plan_id=value.get("plan_id"),
+            runtime_id=value.get("runtime_id"),
+            environment_ref=value.get("environment_ref"),
+            connection_digest=value.get("connection_digest"),
+            report_digest=value.get("report_digest"),
+            plan_digest=value.get("plan_digest"),
+            catalog_version=value.get("catalog_version"),
+            catalog_digest=value.get("catalog_digest"),
+            selected_device=value.get("selected_device"),
+            state=value.get("state"),
+            revision=value.get("revision"),
+            created_at=value.get("created_at"),
+            updated_at=value.get("updated_at"),
+            stage_directory=value.get("stage_directory"),
+            target_directory=value.get("target_directory"),
+            completed_component_ids=tuple(completed),
+            verification=verification,
+            error=value.get("error", ""),
+            rollback_completed=value.get("rollback_completed", False),
+            side_effects_started=value.get("side_effects_started", False),
+            consent_at=value.get("consent_at", ""),
+            worker_pid=value.get("worker_pid", 0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfig:
+    """A confirmed runtime pointer, written only after atomic enable."""
+
+    runtime_id: str
+    installation_id: str
+    environment_ref: str
+    connection_digest: str
+    report_digest: str
+    plan_digest: str
+    catalog_version: str
+    catalog_digest: str
+    selected_device: str
+    target_directory: str
+    components: tuple[Mapping[str, Any], ...]
+    created_at: str
+    verified_at: str
+    state: str = "CONFIRMED"
+    config_digest: str = ""
+
+    def __post_init__(self) -> None:
+        for value, field in (
+            (self.runtime_id, "runtime_id"),
+            (self.installation_id, "installation_id"),
+            (self.environment_ref, "environment_ref"),
+            (self.catalog_version, "catalog_version"),
+        ):
+            _safe_id(value, field=field)
+        for value, field in (
+            (self.connection_digest, "connection_digest"),
+            (self.report_digest, "report_digest"),
+            (self.plan_digest, "plan_digest"),
+            (self.catalog_digest, "catalog_digest"),
+        ):
+            try:
+                validate_sha256(value, field=field)
+            except Exception as exc:
+                raise InstallationConfigError(f"{field} is invalid") from exc
+        if self.selected_device not in {"CPU", "GPU"}:
+            raise InstallationConfigError("runtime selected_device is invalid")
+        if self.state not in {"CONFIRMED", "INVALIDATED"}:
+            raise InstallationConfigError("runtime config state is invalid")
+        object.__setattr__(self, "created_at", _timestamp(self.created_at, field="runtime created_at"))
+        object.__setattr__(self, "verified_at", _timestamp(self.verified_at, field="runtime verified_at"))
+        object.__setattr__(self, "target_directory", _bounded_text(self.target_directory, field="runtime target_directory", maximum=1_024))
+        object.__setattr__(self, "components", tuple(thaw_json(item) for item in self.components))
+        if self.config_digest:
+            try:
+                validate_sha256(self.config_digest, field="runtime config_digest")
+            except Exception as exc:
+                raise InstallationConfigError("runtime config_digest is invalid") from exc
+            if self.config_digest != sha256_bytes(canonical_json_bytes(self._payload())):
+                raise InstallationIntegrityError("runtime config digest does not match its content")
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "version": RUNTIME_CONFIG_VERSION,
+            "runtime_id": self.runtime_id,
+            "installation_id": self.installation_id,
+            "environment_ref": self.environment_ref,
+            "connection_digest": self.connection_digest,
+            "report_digest": self.report_digest,
+            "plan_digest": self.plan_digest,
+            "catalog_version": self.catalog_version,
+            "catalog_digest": self.catalog_digest,
+            "selected_device": self.selected_device,
+            "target_directory": self.target_directory,
+            "components": thaw_json(list(self.components)),
+            "created_at": self.created_at,
+            "verified_at": self.verified_at,
+            "state": self.state,
+        }
+
+    def to_dict(self, *, public: bool = False) -> dict[str, Any]:
+        value = self._payload()
+        value["config_digest"] = self.config_digest
+        if public:
+            value["components"] = _public_hash_safe(value["components"])
+            value.pop("target_directory", None)
+            value.pop("config_digest", None)
+            value["status_label"] = "已确认" if self.state == "CONFIRMED" else "已失效"
+        return value
+
+    @classmethod
+    def confirmed(
+        cls,
+        *,
+        record: InstallationRecord,
+        components: Sequence[Mapping[str, Any]],
+        verified_at: str,
+    ) -> "RuntimeConfig":
+        candidate = cls(
+            runtime_id=record.runtime_id,
+            installation_id=record.installation_id,
+            environment_ref=record.environment_ref,
+            connection_digest=record.connection_digest,
+            report_digest=record.report_digest,
+            plan_digest=record.plan_digest,
+            catalog_version=record.catalog_version,
+            catalog_digest=record.catalog_digest,
+            selected_device=record.selected_device,
+            target_directory=record.target_directory,
+            components=tuple(components),
+            created_at=record.created_at,
+            verified_at=verified_at,
+        )
+        return replace(candidate, config_digest=sha256_bytes(canonical_json_bytes(candidate._payload())))
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RuntimeConfig":
+        if not isinstance(value, Mapping) or value.get("version") != RUNTIME_CONFIG_VERSION:
+            raise InstallationConfigError("runtime config version is unsupported")
+        components = value.get("components", ())
+        if not isinstance(components, Sequence) or isinstance(components, (str, bytes, bytearray)):
+            raise InstallationConfigError("runtime components are invalid")
+        return cls(
+            runtime_id=value.get("runtime_id"),
+            installation_id=value.get("installation_id"),
+            environment_ref=value.get("environment_ref"),
+            connection_digest=value.get("connection_digest"),
+            report_digest=value.get("report_digest"),
+            plan_digest=value.get("plan_digest"),
+            catalog_version=value.get("catalog_version"),
+            catalog_digest=value.get("catalog_digest"),
+            selected_device=value.get("selected_device"),
+            target_directory=value.get("target_directory"),
+            components=tuple(components),
+            created_at=value.get("created_at"),
+            verified_at=value.get("verified_at"),
+            state=value.get("state", "CONFIRMED"),
+            config_digest=value.get("config_digest", ""),
+        )
+
+
+class RuntimeInstallationStore:
+    """Atomic, owner-only persistence with transaction-level CAS."""
+
+    def __init__(self, root: Path | str) -> None:
+        configured = Path(root)
+        if configured.is_symlink():
+            raise InstallationConfigError("installation settings root cannot be a symlink")
+        self.root = configured.absolute()
+        self.state_path = self.root / "runtime_installations.json"
+        self.lock_path = self.root / ".runtime-installations.lock"
+
+    @contextmanager
+    def _write_lock(self):
+        if self.root.is_symlink():
+            raise InstallationConfigError("installation settings root cannot be a symlink")
+        self.root.mkdir(parents=True, exist_ok=True)
+        with _STORE_THREAD_LOCK:
+            descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                os.fchmod(descriptor, 0o600)
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+
+    def _check_file(self) -> None:
+        if self.state_path.is_symlink():
+            raise InstallationConfigError("installation state file cannot be a symlink")
+        if self.state_path.exists() and not self.state_path.is_file():
+            raise InstallationConfigError("installation state file is not regular")
+
+    def _read_state(self) -> dict[str, Any]:
+        self._check_file()
+        if not self.state_path.exists():
+            return {"version": INSTALLATION_STATE_VERSION, "plans": {}, "installations": {}, "runtime_configs": {}}
+        try:
+            value = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise InstallationConfigError("installation state could not be read") from exc
+        if not isinstance(value, dict) or value.get("version") != INSTALLATION_STATE_VERSION:
+            raise InstallationConfigError("installation state version is unsupported")
+        for key in ("plans", "installations", "runtime_configs"):
+            if not isinstance(value.get(key), dict):
+                raise InstallationConfigError("installation state has an invalid shape")
+        if len(value["plans"]) > 128 or len(value["installations"]) > 128 or len(value["runtime_configs"]) > 128:
+            raise InstallationConfigError("installation state contains too many records")
+        for key, raw in value["plans"].items():
+            if not isinstance(key, str) or not isinstance(raw, Mapping) or raw.get("plan_id") != key:
+                raise InstallationConfigError("installation plan identity is inconsistent")
+            InstallPlan.from_dict(raw)
+        for key, raw in value["installations"].items():
+            if not isinstance(key, str) or not isinstance(raw, Mapping) or raw.get("installation_id") != key:
+                raise InstallationConfigError("installation record identity is inconsistent")
+            InstallationRecord.from_dict(raw)
+        for key, raw in value["runtime_configs"].items():
+            if not isinstance(key, str) or not isinstance(raw, Mapping) or raw.get("runtime_id") != key:
+                raise InstallationConfigError("runtime config identity is inconsistent")
+            RuntimeConfig.from_dict(raw)
+        return value
+
+    def _write_state(self, value: Mapping[str, Any]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._check_file()
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".runtime-installations.", suffix=".tmp", dir=str(self.root)
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=True, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.state_path)
+            directory = os.open(self.root, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def save_plan(self, plan: InstallPlan) -> None:
+        if not isinstance(plan, InstallPlan):
+            raise TypeError("save_plan accepts InstallPlan")
+        with self._write_lock():
+            value = self._read_state()
+            existing = value["plans"].get(plan.plan_id)
+            if existing is not None and existing != plan.to_dict(public=False):
+                raise InstallationConflictError("install plan ID is already bound to different content")
+            value["plans"][plan.plan_id] = plan.to_dict(public=False)
+            self._write_state(value)
+
+    def get_plan(self, plan_id: str) -> InstallPlan:
+        _safe_id(plan_id, field="plan_id")
+        value = self._read_state()["plans"].get(plan_id)
+        if value is None:
+            raise InstallationConfigError("install plan was not found")
+        return InstallPlan.from_dict(value)
+
+    def get_installation(self, installation_id: str) -> InstallationRecord:
+        _safe_id(installation_id, field="installation_id")
+        value = self._read_state()["installations"].get(installation_id)
+        if value is None:
+            raise InstallationConfigError("installation was not found")
+        return InstallationRecord.from_dict(value)
+
+    def get_installation_for_plan(self, plan_id: str) -> InstallationRecord | None:
+        _safe_id(plan_id, field="plan_id")
+        for raw in self._read_state()["installations"].values():
+            if isinstance(raw, Mapping) and raw.get("plan_id") == plan_id:
+                return InstallationRecord.from_dict(raw)
+        return None
+
+    def claim_approval(self, plan: InstallPlan) -> tuple[InstallationRecord, bool]:
+        """Atomically create the one approval record, or return its owner."""
+
+        with self._write_lock():
+            value = self._read_state()
+            for raw in value["installations"].values():
+                if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
+                    return InstallationRecord.from_dict(raw), False
+            now = utc_timestamp()
+            record = InstallationRecord(
+                installation_id=new_server_id("installation"),
+                plan_id=plan.plan_id,
+                runtime_id=plan.runtime_id,
+                environment_ref=plan.environment_ref,
+                connection_digest=plan.connection_digest,
+                report_digest=plan.report_digest,
+                plan_digest=plan.plan_digest,
+                catalog_version=plan.catalog_version,
+                catalog_digest=plan.catalog_digest,
+                selected_device=plan.selected_device,
+                state="APPROVED",
+                revision=1,
+                created_at=now,
+                updated_at=now,
+                stage_directory="",
+                target_directory=plan.target_directory,
+                consent_at=now,
+            )
+            value["installations"][record.installation_id] = record.to_dict()
+            self._write_state(value)
+            return record, True
+
+    def claim_execution(self, installation_id: str) -> tuple[InstallationRecord, bool]:
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(installation_id)
+            if raw is None:
+                raise InstallationConfigError("installation was not found")
+            current = InstallationRecord.from_dict(raw)
+            if current.state != "APPROVED":
+                return current, False
+            updated = replace(
+                current,
+                state="INSTALLING",
+                revision=current.revision + 1,
+                updated_at=utc_timestamp(),
+                worker_pid=os.getpid(),
+                side_effects_started=False,
+            )
+            value["installations"][installation_id] = updated.to_dict()
+            self._write_state(value)
+            return updated, True
+
+    def update_installation(
+        self,
+        record: InstallationRecord,
+        *,
+        expected_revision: int,
+    ) -> InstallationRecord:
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(record.installation_id)
+            if raw is None:
+                raise InstallationConflictError("installation disappeared during update")
+            current = InstallationRecord.from_dict(raw)
+            if current.revision != expected_revision:
+                raise InstallationConflictError("installation changed concurrently")
+            if record.revision != expected_revision + 1:
+                raise InstallationConflictError("installation revision is not monotonic")
+            value["installations"][record.installation_id] = record.to_dict()
+            self._write_state(value)
+            return record
+
+    def recover_stale(
+        self,
+        installation_id: str,
+        *,
+        stale_after_seconds: float = INSTALLATION_RECOVERY_STALE_SECONDS,
+        force: bool = False,
+    ) -> InstallationRecord:
+        if stale_after_seconds < 0:
+            raise InstallationConfigError("stale_after_seconds is invalid")
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(installation_id)
+            if raw is None:
+                raise InstallationConfigError("installation was not found")
+            current = InstallationRecord.from_dict(raw)
+            if current.state not in {"INSTALLING", "VERIFYING", "ENABLING"}:
+                return current
+            try:
+                age = max(0.0, time.time() - _parse_timestamp(current.updated_at))
+            except Exception:
+                age = stale_after_seconds + 1
+            if not force and (age < stale_after_seconds or _process_alive(current.worker_pid)):
+                raise InstallationConflictError("installation worker is still within its recovery lease")
+            updated = replace(
+                current,
+                state="APPROVED",
+                revision=current.revision + 1,
+                updated_at=utc_timestamp(),
+                error="",
+                worker_pid=0,
+            )
+            value["installations"][installation_id] = updated.to_dict()
+            self._write_state(value)
+            return updated
+
+    def save_runtime_config(self, config: RuntimeConfig) -> None:
+        with self._write_lock():
+            value = self._read_state()
+            existing = value["runtime_configs"].get(config.runtime_id)
+            if existing is not None:
+                current = RuntimeConfig.from_dict(existing)
+                if current.config_digest != config.config_digest:
+                    raise InstallationConflictError("runtime ID is already bound to different content")
+                return
+            value["runtime_configs"][config.runtime_id] = config.to_dict()
+            self._write_state(value)
+
+    def get_runtime_config(self, environment_ref: str) -> RuntimeConfig | None:
+        _safe_id(environment_ref, field="environment_ref")
+        for raw in self._read_state()["runtime_configs"].values():
+            if isinstance(raw, Mapping) and raw.get("environment_ref") == environment_ref:
+                return RuntimeConfig.from_dict(raw)
+        return None
+
+    def mark_runtime_invalidated(self, runtime_id: str) -> RuntimeConfig:
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["runtime_configs"].get(runtime_id)
+            if raw is None:
+                raise InstallationConfigError("runtime config was not found")
+            current = RuntimeConfig.from_dict(raw)
+            if current.state == "INVALIDATED":
+                return current
+            updated = replace(current, state="INVALIDATED", config_digest="")
+            updated = replace(
+                updated,
+                config_digest=sha256_bytes(canonical_json_bytes(updated._payload())),
+            )
+            value["runtime_configs"][runtime_id] = updated.to_dict()
+            self._write_state(value)
+            return updated
+
+
+def _parse_timestamp(value: str) -> float:
+    from datetime import datetime
+
+    raw = value[:-1] + "+00:00" if value.endswith("Z") else value
+    return datetime.fromisoformat(raw).timestamp()
+
+
+def _process_alive(process_id: int) -> bool:
+    if not process_id or process_id == os.getpid():
+        return process_id == os.getpid() and process_id != 0
+    try:
+        os.kill(process_id, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+class InstallExecutor(Protocol):
+    """Fixed transport/executor contract used by the manager and tests."""
+
+    def install(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        *,
+        completed_component_ids: Sequence[str] = (),
+        progress: Callable[[str], None] | None = None,
+        timeout_seconds: float,
+    ) -> Mapping[str, Any]: ...
+
+    def verify(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        result: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+    def finalize(self, profile: EnvironmentProfile, plan: InstallPlan, stage_directory: str) -> None: ...
+
+    def rollback(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        *,
+        finalized: bool,
+    ) -> None: ...
+
+
+def _fixed_ssh_argv(profile: EnvironmentProfile) -> tuple[str, ...]:
+    if profile.mode != "ssh" or not profile.ssh_target or not profile.ssh_user or not profile.ssh_port:
+        raise InstallationConfigError("SSH installation requires a complete connection profile")
+    # The option terminator belongs before the destination.  Everything after
+    # the destination is the fixed remote command, never client-provided text.
+    return (
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-l",
+        profile.ssh_user,
+        "-p",
+        str(profile.ssh_port),
+        "--",
+        profile.ssh_target,
+        "python3",
+        "-",
+    )
+
+
+_REMOTE_INSTALL_SCRIPT = r'''
+import hashlib, json, os, pathlib, shutil, sys, tarfile, tempfile, urllib.request, zipfile
+
+MAX_BYTES = 2 * 1024 * 1024 * 1024
+RUNTIME_BASE = (pathlib.Path.home() / ".local/share/molly/runtimes").resolve()
+
+def owned_path(value):
+    path = pathlib.Path(os.path.expanduser(value)).resolve()
+    if not path.is_relative_to(RUNTIME_BASE):
+        raise ValueError("path is outside the owned runtime area")
+    return path
+
+def safe_rel(value):
+    path = pathlib.PurePosixPath(value)
+    if not value or path.is_absolute() or "\\" in value or any(p in {"", ".", ".."} for p in path.parts):
+        raise ValueError("unsafe relative path")
+    return path
+
+def fetch(item, destination):
+    url = item["source_url"]
+    if not url.startswith("https://"):
+        raise ValueError("remote sources must be HTTPS")
+    expected = item["sha256"]
+    if not isinstance(expected, str) or len(expected) != 64:
+        raise ValueError("missing fixed SHA-256")
+    maximum = min(int(item["max_download_bytes"]), MAX_BYTES)
+    digest = hashlib.sha256()
+    size = 0
+    with urllib.request.urlopen(url, timeout=30) as response, open(destination, "wb") as output:
+        while True:
+            block = response.read(64 * 1024)
+            if not block:
+                break
+            size += len(block)
+            if size > maximum:
+                raise ValueError("download safety limit exceeded")
+            digest.update(block)
+            output.write(block)
+    if digest.hexdigest() != expected:
+        raise ValueError("download SHA-256 mismatch")
+    if int(item["estimated_download_bytes"]) and size != int(item["estimated_download_bytes"]):
+        raise ValueError("download size mismatch")
+
+def safe_extract(archive, destination, kind):
+    destination = pathlib.Path(destination).resolve()
+    total = 0
+    if kind in ("archive", "zip"):
+        with zipfile.ZipFile(archive) as source:
+            for member in source.infolist():
+                relative = safe_rel(member.filename)
+                target = (destination / relative).resolve()
+                if not target.is_relative_to(destination):
+                    raise ValueError("archive path traversal")
+                mode = (member.external_attr >> 16) & 0o170000
+                if mode == 0o120000:
+                    raise ValueError("archive symlinks are not allowed")
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                total += member.file_size
+                if total > MAX_BYTES:
+                    raise ValueError("extracted size safety limit exceeded")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source.open(member) as input_file, open(target, "wb") as output:
+                    shutil.copyfileobj(input_file, output, length=64 * 1024)
+    else:
+        with tarfile.open(archive, "r:*") as source:
+            for member in source.getmembers():
+                relative = safe_rel(member.name)
+                target = (destination / relative).resolve()
+                if not target.is_relative_to(destination) or member.issym() or member.islnk() or member.isdev():
+                    raise ValueError("unsafe tar member")
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    raise ValueError("unsupported tar member")
+                total += member.size
+                if total > MAX_BYTES:
+                    raise ValueError("extracted size safety limit exceeded")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                input_file = source.extractfile(member)
+                if input_file is None:
+                    raise ValueError("tar member could not be read")
+                with input_file, open(target, "wb") as output:
+                    shutil.copyfileobj(input_file, output, length=64 * 1024)
+
+def main(request):
+    operation = request.get("operation")
+    if operation == "install":
+        stage = owned_path(request["stage_directory"])
+        if stage.is_symlink():
+            raise ValueError("staging directory cannot be a symlink")
+        stage.mkdir(parents=True, exist_ok=True)
+        for item in request["entries"]:
+            subdir = safe_rel(item["install_subdirectory"])
+            destination = (stage / subdir).resolve()
+            if not destination.is_relative_to(stage):
+                raise ValueError("unsafe install destination")
+            destination.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(prefix=".download-", dir=stage, delete=False) as temporary:
+                downloaded = temporary.name
+            try:
+                fetch(item, downloaded)
+                if item["install_kind"] == "file":
+                    output = destination / safe_rel(item["install_filename"])
+                    shutil.copyfile(downloaded, output)
+                else:
+                    safe_extract(downloaded, destination, item["install_kind"])
+            finally:
+                try:
+                    os.unlink(downloaded)
+                except FileNotFoundError:
+                    pass
+            for required in item.get("required_paths", []):
+                required_path = (destination / safe_rel(required)).resolve()
+                if not required_path.is_file() or not required_path.is_relative_to(destination):
+                    raise ValueError("required runtime file is missing")
+        print(json.dumps({"ok": True, "verified": True}, separators=(",", ":")))
+        return
+    if operation == "finalize":
+        stage = owned_path(request["stage_directory"])
+        target = owned_path(request["target_directory"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            raise ValueError("runtime target already exists")
+        os.replace(stage, target)
+        print(json.dumps({"ok": True}, separators=(",", ":")))
+        return
+    if operation == "rollback":
+        names = ("stage_directory", "target_directory") if request.get("finalized") else ("stage_directory",)
+        for name in names:
+            raw = request.get(name)
+            if not raw:
+                continue
+            if name == "target_directory" and not request.get("finalized"):
+                continue
+            path = owned_path(raw)
+            if path.exists() and path.is_dir():
+                shutil.rmtree(path)
+        print(json.dumps({"ok": True}, separators=(",", ":")))
+        return
+    raise ValueError("unsupported fixed installation operation")
+
+'''
+
+
+class RestrictedInstallExecutor:
+    """Install fixed archives/files locally or through a fixed SSH script."""
+
+    def __init__(
+        self,
+        *,
+        runner: Callable[[Sequence[str], bytes | None, float], tuple[int, bytes]] | None = None,
+        opener: Any | None = None,
+    ) -> None:
+        self.runner = runner or _default_runner
+        self.opener = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirectHandler()
+        )
+
+    def install(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        *,
+        completed_component_ids: Sequence[str] = (),
+        progress: Callable[[str], None] | None = None,
+        timeout_seconds: float,
+    ) -> Mapping[str, Any]:
+        if profile.mode == "ssh":
+            return self._remote_call(profile, plan, stage_directory, "install", timeout_seconds)
+        stage = _owned_directory(Path(stage_directory), create=True)
+        deadline = time.monotonic() + min(float(timeout_seconds), INSTALLATION_TIMEOUT_SECONDS)
+        completed = set(completed_component_ids)
+        results: list[dict[str, Any]] = []
+        for entry in plan.entries:
+            if time.monotonic() > deadline:
+                raise InstallationExecutionError("安装超过固定超时时间")
+            if entry.component_id in completed and _component_is_complete(stage, entry):
+                results.append({"component_id": entry.component_id, "reused_stage": True})
+                continue
+            try:
+                result = self._install_entry(entry, stage, deadline)
+            except InstallationError:
+                raise
+            except Exception as exc:
+                raise InstallationExecutionError(f"安装 {entry.name} 失败") from exc
+            results.append(result)
+            if progress is not None:
+                progress(entry.component_id)
+        return {"transport": "local", "verified": True, "components": results}
+
+    def verify(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        result: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if profile.mode == "ssh":
+            if not bool(result.get("verified")):
+                raise InstallationIntegrityError("远程安装未返回验证成功")
+            return {"staged_components": list(plan.component_ids), "transport_verified": True}
+        stage = Path(stage_directory)
+        for entry in plan.entries:
+            if not _component_is_complete(stage, entry):
+                raise InstallationIntegrityError(f"{entry.name} 安装后缺少固定验证文件")
+        return {"staged_components": list(plan.component_ids), "transport_verified": True}
+
+    def finalize(self, profile: EnvironmentProfile, plan: InstallPlan, stage_directory: str) -> None:
+        if profile.mode == "ssh":
+            self._remote_call(profile, plan, stage_directory, "finalize", INSTALLATION_TIMEOUT_SECONDS)
+            return
+        stage = _owned_directory(Path(stage_directory), create=False)
+        target = _local_target_from_stage(stage, plan.runtime_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            raise InstallationConflictError("runtime target already exists")
+        os.replace(stage, target)
+
+    def rollback(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        *,
+        finalized: bool,
+    ) -> None:
+        if profile.mode == "ssh":
+            try:
+                self._remote_call(
+                    profile,
+                    plan,
+                    stage_directory,
+                    "rollback",
+                    INSTALLATION_TIMEOUT_SECONDS,
+                    finalized=finalized,
+                )
+            except Exception:
+                # The transaction remains failed; never hide the original
+                # installation error behind best-effort cleanup.
+                return
+        else:
+            stage = Path(stage_directory)
+            if _is_safe_runtime_path(stage) and (stage.exists() or stage.is_symlink()):
+                if stage.is_symlink():
+                    stage.unlink()
+                else:
+                    shutil.rmtree(stage)
+            if finalized:
+                target = _local_target_from_stage(stage, plan.runtime_id)
+                if _is_safe_runtime_path(target) and (target.exists() or target.is_symlink()):
+                    if target.is_symlink():
+                        target.unlink()
+                    else:
+                        shutil.rmtree(target)
+
+    def _install_entry(self, entry: InstallManifestEntry, stage: Path, deadline: float) -> dict[str, Any]:
+        if not entry.installable or not entry.sha256:
+            raise InstallationIntegrityError(f"{entry.name} 没有固定 SHA-256")
+        if entry.estimated_download_bytes > entry.max_download_bytes:
+            raise InstallationIntegrityError(f"{entry.name} 超过固定下载上限")
+        downloads = stage / ".downloads"
+        _owned_directory(downloads, create=True)
+        download_path = downloads / f"{entry.component_id}.payload"
+        if not _verified_file(download_path, entry.sha256, entry.estimated_download_bytes):
+            remaining = max(0.01, deadline - time.monotonic())
+            _download_fixed(self.opener, entry, download_path, remaining)
+        destination = _owned_directory(stage / entry.install_subdirectory, create=True)
+        if entry.install_kind == "file":
+            output = destination / entry.install_filename
+            if entry.estimated_disk_bytes and entry.estimated_download_bytes > entry.estimated_disk_bytes:
+                raise InstallationIntegrityError(f"{entry.name} exceeds its fixed disk estimate")
+            shutil.copyfile(download_path, output)
+            os.chmod(output, 0o600)
+        else:
+            _safe_extract_archive(
+                download_path,
+                destination,
+                entry.install_kind,
+                entry.estimated_disk_bytes,
+                deadline=deadline,
+            )
+        if not _component_is_complete(stage, entry):
+            raise InstallationIntegrityError(f"{entry.name} 安装后未通过固定文件验证")
+        return {
+            "component_id": entry.component_id,
+            "version": entry.version,
+            "sha256": entry.sha256,
+            "size_bytes": entry.estimated_download_bytes,
+        }
+
+    def _remote_call(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        stage_directory: str,
+        operation: str,
+        timeout_seconds: float,
+        *,
+        finalized: bool = False,
+    ) -> Mapping[str, Any]:
+        if operation not in {"install", "finalize", "rollback"}:
+            raise InstallationConfigError("unsupported remote installation operation")
+        request = {
+            "operation": operation,
+            "stage_directory": stage_directory,
+            "target_directory": plan.target_directory,
+            "finalized": finalized,
+            "entries": [entry.to_dict(include_internal=True) for entry in plan.entries],
+        }
+        try:
+            request_json = json.dumps(request, ensure_ascii=True, separators=(",", ":"))
+            remote_source = (
+                _REMOTE_INSTALL_SCRIPT
+                + "\ntry:\n"
+                + "    main(json.loads("
+                + repr(request_json)
+                + "))\n"
+                + "except Exception as exc:\n"
+                + "    print(json.dumps({'ok': False, 'error': str(exc)[:512]}, separators=(',', ':')))\n"
+                + "    raise SystemExit(2)\n"
+            )
+            returncode, output = self.runner(
+                _fixed_ssh_argv(profile),
+                remote_source.encode("utf-8"),
+                min(float(timeout_seconds), INSTALLATION_TIMEOUT_SECONDS),
+            )
+        except Exception as exc:
+            raise InstallationExecutionError("SSH 安装传输失败") from exc
+        if returncode != 0:
+            raise InstallationExecutionError("SSH 固定安装工具执行失败")
+        try:
+            value = json.loads(output.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise InstallationExecutionError("SSH 安装工具返回了无效结果") from exc
+        if not isinstance(value, Mapping) or not bool(value.get("ok")):
+            raise InstallationExecutionError("SSH 安装工具未确认成功")
+        return dict(value)
+
+
+def _is_safe_runtime_path(path: Path) -> bool:
+    candidate = path.absolute()
+    parts = candidate.parts
+    return len(parts) >= 2 and (".runtime-staging" in parts or "runtimes" in parts)
+
+
+def _owned_directory(path: Path, *, create: bool) -> Path:
+    if path.exists() and path.is_symlink():
+        raise InstallationIntegrityError("runtime directory cannot be a symlink")
+    if path.exists() and not path.is_dir():
+        raise InstallationIntegrityError("runtime directory is not a directory")
+    if create:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not path.is_dir() or path.is_symlink():
+        raise InstallationIntegrityError("runtime directory could not be prepared safely")
+    os.chmod(path, 0o700)
+    return path
+
+
+def _local_target_from_stage(stage: Path, runtime_id: str) -> Path:
+    root = stage.absolute()
+    marker = ".runtime-staging"
+    if marker not in root.parts:
+        raise InstallationIntegrityError("staging path is outside the owned runtime area")
+    base = Path(*root.parts[: root.parts.index(marker)])
+    return base / "runtimes" / runtime_id
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep a fixed manifest source bound to its declared authority."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        return None
+
+
+def _verified_file(path: Path, expected_sha256: str, expected_size: int) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        if expected_size and path.stat().st_size != expected_size:
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while block := handle.read(64 * 1024):
+                digest.update(block)
+        return digest.hexdigest() == expected_sha256
+    except OSError:
+        return False
+
+
+def _download_fixed(opener: Any, entry: InstallManifestEntry, destination: Path, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + min(float(timeout_seconds), INSTALLATION_TIMEOUT_SECONDS)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{entry.component_id}.", suffix=".part", dir=str(destination.parent))
+    temporary = Path(temporary_name)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        parsed = urlsplit(entry.source_url)
+        if parsed.scheme == "file":
+            source = Path(unquote(parsed.path)).absolute()
+            if source.is_symlink() or not source.is_file():
+                raise InstallationExecutionError("固定安装源文件不可读")
+            handle: Any = source.open("rb")
+        else:
+            request = urllib.request.Request(entry.source_url, method="GET")
+            handle = opener.open(request, timeout=min(30.0, max(1.0, deadline - time.monotonic())))
+        with handle, os.fdopen(descriptor, "wb") as output:
+            descriptor = -1
+            while True:
+                if time.monotonic() > deadline:
+                    raise InstallationExecutionError("固定安装源下载超时")
+                block = handle.read(64 * 1024)
+                if not block:
+                    break
+                size += len(block)
+                if size > entry.max_download_bytes or size > MAX_INSTALL_DOWNLOAD_BYTES:
+                    raise InstallationIntegrityError("下载超过固定大小上限")
+                digest.update(block)
+                output.write(block)
+            output.flush()
+            os.fsync(output.fileno())
+        if entry.estimated_download_bytes and size != entry.estimated_download_bytes:
+            raise InstallationIntegrityError("下载大小与固定清单不一致")
+        if digest.hexdigest() != entry.sha256:
+            raise InstallationIntegrityError("下载内容 SHA-256 校验失败")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
+    except (InstallationError, OSError, urllib.error.URLError) as exc:
+        if isinstance(exc, InstallationError):
+            raise
+        raise InstallationExecutionError("固定安装源下载失败") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _safe_extract_archive(
+    archive: Path,
+    destination: Path,
+    kind: str,
+    disk_limit: int,
+    *,
+    deadline: float | None = None,
+) -> None:
+    destination = _owned_directory(destination, create=True).resolve()
+    total = 0
+    try:
+        if kind in {"archive", "zip"}:
+            source = zipfile.ZipFile(archive)
+            members = source.infolist()
+            with source:
+                for member in members:
+                    if deadline is not None and time.monotonic() > deadline:
+                        raise InstallationExecutionError("安装解压超过固定超时时间")
+                    relative = _relative_path(member.filename, field="archive member")
+                    target = (destination / relative).resolve()
+                    if not target.is_relative_to(destination):
+                        raise InstallationIntegrityError("archive path traversal detected")
+                    mode = (member.external_attr >> 16) & stat.S_IFMT(0o170000)
+                    if mode == stat.S_IFLNK:
+                        raise InstallationIntegrityError("archive symlinks are not allowed")
+                    if member.is_dir():
+                        _owned_directory(target, create=True)
+                        continue
+                    total += member.file_size
+                    if total > disk_limit or total > MAX_EXTRACTED_FILE_BYTES:
+                        raise InstallationIntegrityError("extracted files exceed fixed disk limit")
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with source.open(member) as input_file, target.open("wb") as output:
+                        while block := input_file.read(64 * 1024):
+                            if deadline is not None and time.monotonic() > deadline:
+                                raise InstallationExecutionError("安装解压超过固定超时时间")
+                            output.write(block)
+                    os.chmod(target, 0o600)
+        else:
+            with tarfile.open(archive, "r:*") as source:
+                for member in source.getmembers():
+                    if deadline is not None and time.monotonic() > deadline:
+                        raise InstallationExecutionError("安装解压超过固定超时时间")
+                    relative = _relative_path(member.name, field="archive member")
+                    target = (destination / relative).resolve()
+                    if not target.is_relative_to(destination) or member.issym() or member.islnk() or member.isdev():
+                        raise InstallationIntegrityError("tar contains an unsafe member")
+                    if member.isdir():
+                        _owned_directory(target, create=True)
+                        continue
+                    if not member.isfile():
+                        raise InstallationIntegrityError("tar contains an unsupported member")
+                    total += member.size
+                    if total > disk_limit or total > MAX_EXTRACTED_FILE_BYTES:
+                        raise InstallationIntegrityError("extracted files exceed fixed disk limit")
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    input_file = source.extractfile(member)
+                    if input_file is None:
+                        raise InstallationIntegrityError("tar member could not be read")
+                    with input_file, target.open("wb") as output:
+                        while block := input_file.read(64 * 1024):
+                            if deadline is not None and time.monotonic() > deadline:
+                                raise InstallationExecutionError("安装解压超过固定超时时间")
+                            output.write(block)
+                    os.chmod(target, 0o600)
+    except (InstallationError, OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
+        if isinstance(exc, InstallationError):
+            raise
+        raise InstallationIntegrityError("固定安装包无法安全解压") from exc
+
+
+def _component_is_complete(stage: Path, entry: InstallManifestEntry) -> bool:
+    destination = (stage / entry.install_subdirectory).resolve()
+    if not destination.is_dir() or destination.is_symlink() or not destination.is_relative_to(stage.resolve()):
+        return False
+    if entry.required_paths:
+        return all(
+            (destination / relative).is_file()
+            and not (destination / relative).is_symlink()
+            and (destination / relative).resolve().is_relative_to(destination)
+            for relative in entry.required_paths
+        )
+    return any(item.is_file() and not item.is_symlink() for item in destination.rglob("*"))
+
+
+class InstallationManager:
+    """Create, approve, execute, verify, and persist fixed runtime plans."""
+
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        environment_manager: EnvironmentManager,
+        manifest: InstallManifest | None = None,
+        store: RuntimeInstallationStore | None = None,
+        executor: InstallExecutor | None = None,
+        timeout_seconds: float = INSTALLATION_TIMEOUT_SECONDS,
+    ) -> None:
+        if not isinstance(environment_manager, EnvironmentManager):
+            raise TypeError("environment_manager must be an EnvironmentManager")
+        if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or not 0 < timeout_seconds <= INSTALLATION_TIMEOUT_SECONDS:
+            raise InstallationConfigError("installation timeout is invalid")
+        configured = Path(root)
+        if configured.is_symlink():
+            raise InstallationConfigError("installation root cannot be a symlink")
+        self.root = configured.absolute()
+        self.environment_manager = environment_manager
+        self.manifest = manifest or default_install_manifest()
+        if not isinstance(self.manifest, InstallManifest):
+            raise TypeError("manifest must be an InstallManifest")
+        self.store = store or RuntimeInstallationStore(self.root)
+        self.executor = executor or RestrictedInstallExecutor()
+        self.timeout_seconds = float(timeout_seconds)
+
+    def _current_binding(self, environment_ref: str) -> tuple[EnvironmentProfile, EnvironmentReport, Mapping[str, Any]]:
+        profile = self.environment_manager.store.get_profile(environment_ref)
+        public = self.environment_manager.get_public(environment_ref)
+        detection = public.get("detection")
+        if not isinstance(detection, Mapping):
+            raise InstallationConfigError("请先完成当前连接的只读环境检测")
+        report_value = detection.get("report")
+        match = detection.get("match")
+        if not isinstance(report_value, Mapping) or not isinstance(match, Mapping):
+            raise InstallationConfigError("当前环境检测报告不完整")
+        report_payload = {
+            key: value for key, value in report_value.items() if key != "report_digest"
+        }
+        expected_report_digest = sha256_bytes(canonical_json_bytes(report_payload))
+        if report_value.get("report_digest") != expected_report_digest:
+            raise InstallationIntegrityError("当前环境检测报告摘要无效")
+        report = EnvironmentReport(
+            environment_ref=profile.environment_ref,
+            connection_digest=profile.connection_digest,
+            mode=profile.mode,
+            target_label=profile.target_label,
+            detected_at=report_value.get("detected_at"),
+            probes=tuple(report_value.get("probes", ())),
+            data={
+                key: value
+                for key, value in report_value.items()
+                if key in {"system", "disk", "gpu", "python", "unimol", "reinvent4", "weights"}
+            },
+            report_digest=report_value.get("report_digest"),
+        )
+        if report.connection_digest != profile.connection_digest:
+            raise InstallationConfigError("当前环境检测报告已绑定到其他连接")
+        return profile, report, match
+
+    def build_plan(
+        self,
+        environment_ref: str,
+        *,
+        selected_component_ids: Sequence[str] | None = None,
+    ) -> InstallPlan:
+        profile, report, match = self._current_binding(environment_ref)
+        plan = InstallPlan.build(
+            profile,
+            report,
+            match,
+            self.manifest,
+            selected_component_ids=selected_component_ids,
+        )
+        self.store.save_plan(plan)
+        return plan
+
+    def _validate_approval(self, plan: InstallPlan, payload: Mapping[str, Any]) -> None:
+        allowed = {"confirm", "plan_id", "plan_digest", "connection_digest", "report_digest"}
+        if set(payload) - allowed:
+            raise InstallationConfigError("安装确认包含不支持的字段")
+        if payload.get("confirm") is not True:
+            raise InstallationConfigError("必须明确确认一次安装计划")
+        for field in ("plan_id", "plan_digest", "connection_digest", "report_digest"):
+            if payload.get(field) != getattr(plan, field):
+                raise InstallationConflictError(f"安装确认的 {field} 与服务器计划不一致")
+        _, report, _ = self._current_binding(plan.environment_ref)
+        if report.report_digest != plan.report_digest:
+            raise InstallationConflictError("环境检测报告已变化，请重新检测并生成安装计划")
+        if self.manifest.catalog_version != plan.catalog_version or self.manifest.digest != plan.catalog_digest:
+            raise InstallationConflictError("固定兼容性清单已变化，请重新生成安装计划")
+
+    def confirm(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise InstallationConfigError("安装确认必须是 JSON 对象")
+        plan_id = payload.get("plan_id")
+        _safe_id(plan_id, field="plan_id")
+        plan = self.store.get_plan(plan_id)
+        self._validate_approval(plan, payload)
+        if plan.status == "NO_INSTALL_REQUIRED":
+            return {"installation": None, "runtime_config": self.runtime_for_environment(plan.environment_ref)}
+        if plan.status != "READY_TO_INSTALL":
+            raise InstallationConfigError("当前安装计划未通过固定清单和许可证检查")
+        existing, created = self.store.claim_approval(plan)
+        if existing.state == "CONFIRMED":
+            config = self.store.get_runtime_config(plan.environment_ref)
+            return {"installation": existing.to_dict(public=True), "runtime_config": config.to_dict(public=True) if config else None}
+        if existing.state in {"FAILED", "ROLLED_BACK"}:
+            return {
+                "installation": existing.to_dict(public=True),
+                "runtime_config": None,
+                "idempotent_replay": True,
+            }
+        if existing.state != "APPROVED":
+            return {"installation": existing.to_dict(public=True), "runtime_config": None, "idempotent_replay": True}
+        claimed, should_execute = self.store.claim_execution(existing.installation_id)
+        if not should_execute:
+            return {"installation": claimed.to_dict(public=True), "runtime_config": None, "idempotent_replay": True}
+        completed = self._execute(claimed, plan)
+        config = self.store.get_runtime_config(plan.environment_ref)
+        return {
+            "installation": completed.to_dict(public=True),
+            "runtime_config": config.to_dict(public=True) if config else None,
+            "idempotent_replay": not created,
+        }
+
+    def recover(self, installation_id: str, *, force: bool = False) -> dict[str, Any]:
+        record = self.store.get_installation(installation_id)
+        plan = self.store.get_plan(record.plan_id)
+        if record.state == "ENABLING":
+            if not force and _process_alive(record.worker_pid):
+                raise InstallationConflictError("installation worker is still active")
+            return self._recover_enabling(record, plan)
+        record = self.store.recover_stale(
+            installation_id,
+            stale_after_seconds=0,
+            force=force,
+        )
+        if record.state != "APPROVED":
+            return {"installation": record.to_dict(public=True), "runtime_config": None}
+        profile, report, _ = self._current_binding(plan.environment_ref)
+        if report.report_digest != record.report_digest or profile.connection_digest != record.connection_digest:
+            raise InstallationConflictError("恢复前连接或探测报告已变化")
+        claimed, should_execute = self.store.claim_execution(record.installation_id)
+        if not should_execute:
+            return {"installation": claimed.to_dict(public=True), "runtime_config": None}
+        completed = self._execute(claimed, plan)
+        config = self.store.get_runtime_config(plan.environment_ref)
+        return {
+            "installation": completed.to_dict(public=True),
+            "runtime_config": config.to_dict(public=True) if config else None,
+        }
+
+    def _recover_enabling(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+    ) -> dict[str, Any]:
+        """Finish the tiny window between atomic enable and config persistence."""
+
+        profile, report, _ = self._current_binding(plan.environment_ref)
+        if report.report_digest != record.report_digest or profile.connection_digest != record.connection_digest:
+            raise InstallationConflictError("恢复前连接或探测报告已变化")
+        existing = self.store.get_runtime_config(plan.environment_ref)
+        if existing is not None and (
+            existing.runtime_id != plan.runtime_id
+            or existing.plan_digest != plan.plan_digest
+            or existing.catalog_digest != plan.catalog_digest
+        ):
+            raise InstallationConflictError("运行配置已绑定到其他安装计划")
+        if profile.mode == "local":
+            target = (self.root / "runtimes" / plan.runtime_id).absolute()
+            if not target.is_dir() or target.is_symlink():
+                # The worker may have crashed after recording ENABLING but
+                # before os.replace.  Put the transaction back into the
+                # normal resumable path; never treat a missing target as
+                # successfully enabled.
+                reset = self._update(record, state="APPROVED", error="")
+                claimed, should_execute = self.store.claim_execution(reset.installation_id)
+                if not should_execute:
+                    return {"installation": claimed.to_dict(public=True), "runtime_config": None}
+                completed = self._execute(claimed, plan)
+                config = self.store.get_runtime_config(plan.environment_ref)
+                return {
+                    "installation": completed.to_dict(public=True),
+                    "runtime_config": config.to_dict(public=True) if config else None,
+                }
+            self.executor.verify(
+                profile,
+                plan,
+                str(target),
+                (record.verification.get("install_result", {}) if isinstance(record.verification, Mapping) else {}),
+            )
+        else:
+            self.executor.verify(
+                profile,
+                plan,
+                record.stage_directory,
+                (record.verification.get("install_result", {}) if isinstance(record.verification, Mapping) else {}),
+            )
+        reprobe = self.environment_manager.detector.detect(profile)
+        if not isinstance(reprobe, EnvironmentReport) or reprobe.connection_digest != profile.connection_digest:
+            raise InstallationIntegrityError("恢复时重新探测未绑定当前连接")
+        if existing is None:
+            components = [
+                {
+                    "component_id": entry.component_id,
+                    "name": entry.name,
+                    "version": entry.version,
+                    "sha256": entry.sha256,
+                    "verified": True,
+                }
+                for entry in plan.entries
+            ]
+            existing = RuntimeConfig.confirmed(
+                record=record,
+                components=components,
+                verified_at=utc_timestamp(),
+            )
+            self.store.save_runtime_config(existing)
+        current = self.store.get_installation(record.installation_id)
+        if current.state != "CONFIRMED":
+            current = self._update(
+                current,
+                state="CONFIRMED",
+                verification=current.verification,
+                side_effects_started=True,
+            )
+        return {
+            "installation": current.to_dict(public=True),
+            "runtime_config": existing.to_dict(public=True),
+        }
+
+    def _execute(self, record: InstallationRecord, plan: InstallPlan) -> InstallationRecord:
+        profile: EnvironmentProfile | None = None
+        stage_directory = ""
+        target_was_absent = False
+        finalized = False
+        try:
+            profile, _report, match = self._current_binding(plan.environment_ref)
+            stage_directory = record.stage_directory or _runtime_stage(profile, plan.runtime_id, record.installation_id)
+            if profile.mode == "local":
+                expected_stage = (self.root / ".runtime-staging" / f"{plan.runtime_id}-{record.installation_id}").absolute()
+                if stage_directory.startswith(".molly/"):
+                    stage_path = expected_stage
+                else:
+                    stage_path = Path(stage_directory).absolute()
+                if stage_path != expected_stage:
+                    raise InstallationIntegrityError("持久化安装阶段目录不属于当前运行配置")
+                # The public plan uses the stable .molly path.  The persisted local
+                # path is still derived server-side and never accepted from JSON.
+                stage_directory = str(stage_path)
+                _owned_directory(stage_path.parent, create=True)
+                target = (self.root / "runtimes" / plan.runtime_id).absolute()
+                target_was_absent = not target.exists() and not target.is_symlink()
+            current = self._update(record, stage_directory=stage_directory, side_effects_started=True)
+            result = self.executor.install(
+                profile,
+                plan,
+                stage_directory,
+                completed_component_ids=current.completed_component_ids,
+                progress=lambda component_id: self._mark_component(current, component_id),
+                timeout_seconds=self.timeout_seconds,
+            )
+            # The callback above updates the durable record.  Reload it so the
+            # following CAS uses the current revision after every component.
+            current = self.store.get_installation(record.installation_id)
+            current = self._update(
+                current,
+                state="VERIFYING",
+                verification={"install_result": thaw_json(result)},
+            )
+            verified = self.executor.verify(profile, plan, stage_directory, result)
+            reprobe = self.environment_manager.detector.detect(profile)
+            if not isinstance(reprobe, EnvironmentReport) or reprobe.connection_digest != profile.connection_digest:
+                raise InstallationIntegrityError("安装后重新探测未绑定当前连接")
+            reusable_ids = {
+                item.get("component_id")
+                for item in match.get("reusable", ())
+                if isinstance(item, Mapping)
+            }
+            verified_components = {
+                component_id: component_id in set(plan.component_ids) or component_id in reusable_ids
+                for component_id in ("python", "unimol", "reinvent4", "unimol-weights")
+            }
+            if not all(verified_components.values()):
+                raise InstallationIntegrityError("安装后 Python、Uni-Mol、REINVENT4 或模型权重未全部验证")
+            verification = {
+                **thaw_json(current.verification),
+                "staged": thaw_json(verified),
+                "reprobe": {
+                    "report_digest": reprobe.report_digest,
+                    "detected_at": reprobe.detected_at,
+                    "components": verified_components,
+                },
+            }
+            current = self._update(current, verification=verification)
+            # Re-check all approval bindings immediately before the atomic
+            # enable operation.  A changed report must never enable a stale
+            # runtime, even if the installation itself succeeded.
+            _, latest_report, _ = self._current_binding(plan.environment_ref)
+            if latest_report.report_digest != plan.report_digest:
+                raise InstallationConflictError("探测报告在安装期间变化，已取消启用")
+            current = self._update(current, state="ENABLING", verification=verification)
+            self.executor.finalize(profile, plan, stage_directory)
+            finalized = True
+            components = []
+            for entry in plan.entries:
+                components.append(
+                    {
+                        "component_id": entry.component_id,
+                        "name": entry.name,
+                        "version": entry.version,
+                        "sha256": entry.sha256,
+                        "verified": True,
+                    }
+                )
+            config = RuntimeConfig.confirmed(record=current, components=components, verified_at=utc_timestamp())
+            self.store.save_runtime_config(config)
+            current = self.store.get_installation(record.installation_id)
+            current = self._update(current, state="CONFIRMED", verification=verification, side_effects_started=True)
+            return current
+        except BaseException as exc:
+            # BaseException intentionally includes a process-style test crash
+            # only after the last durable update.  We do not try to mutate the
+            # state on KeyboardInterrupt/SystemExit; the recovery API can
+            # resume the APPROVED/INSTALLING transaction from its stage.
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return self._fail_record(
+                record,
+                plan,
+                exc,
+                profile=profile,
+                stage_directory=stage_directory,
+                finalized=finalized or (
+                    profile is not None
+                    and profile.mode == "local"
+                    and target_was_absent
+                    and (self.root / "runtimes" / plan.runtime_id).is_dir()
+                    and not (self.root / "runtimes" / plan.runtime_id).is_symlink()
+                    and not Path(stage_directory).exists()
+                ),
+            )
+
+    def _mark_component(self, record: InstallationRecord, component_id: str) -> None:
+        current = self.store.get_installation(record.installation_id)
+        if component_id in current.completed_component_ids:
+            return
+        self._update(
+            current,
+            completed_component_ids=tuple((*current.completed_component_ids, component_id)),
+            side_effects_started=True,
+        )
+
+    def _update(self, record: InstallationRecord, **changes: Any) -> InstallationRecord:
+        updated = replace(record, **changes, revision=record.revision + 1, updated_at=utc_timestamp())
+        return self.store.update_installation(updated, expected_revision=record.revision)
+
+    def _fail_record(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        exc: BaseException,
+        *,
+        profile: EnvironmentProfile | None,
+        stage_directory: str,
+        finalized: bool,
+    ) -> InstallationRecord:
+        if profile is not None and stage_directory:
+            try:
+                self.executor.rollback(profile, plan, stage_directory, finalized=finalized)
+            except Exception:
+                pass
+        try:
+            latest = self.store.get_installation(record.installation_id)
+            return self._update(
+                latest,
+                state="FAILED",
+                error=_safe_install_error(exc),
+                rollback_completed=True,
+                side_effects_started=latest.side_effects_started,
+            )
+        except Exception as update_exc:
+            raise InstallationExecutionError("安装失败且无法持久化失败状态") from update_exc
+
+    def runtime_for_environment(self, environment_ref: str) -> RuntimeConfig | None:
+        config = self.store.get_runtime_config(environment_ref)
+        if config is None:
+            return None
+        try:
+            profile, report, _ = self._current_binding(environment_ref)
+        except InstallationError:
+            return self.store.mark_runtime_invalidated(config.runtime_id)
+        if (
+            config.state != "CONFIRMED"
+            or config.connection_digest != profile.connection_digest
+            or config.report_digest != report.report_digest
+            or config.catalog_version != self.manifest.catalog_version
+            or config.catalog_digest != self.manifest.digest
+        ):
+            return self.store.mark_runtime_invalidated(config.runtime_id)
+        return config
+
+    def runtime_public(self, environment_ref: str) -> dict[str, Any] | None:
+        config = self.runtime_for_environment(environment_ref)
+        return config.to_dict(public=True) if config else None
+
+
+def _safe_install_error(exc: BaseException) -> str:
+    if isinstance(exc, InstallationIntegrityError):
+        return "固定来源或安装内容校验失败，已回滚隔离目录"
+    if isinstance(exc, InstallationConflictError):
+        return "安装期间连接、清单或运行目录发生变化，已取消并回滚"
+    if isinstance(exc, InstallationExecutionError):
+        return "安装工具执行失败，已回滚隔离目录"
+    return "安装未完成，已回滚隔离目录"
+
+
+__all__ = [
+    "InstallExecutor",
+    "InstallManifest",
+    "InstallManifestEntry",
+    "InstallPlan",
+    "InstallationConfigError",
+    "InstallationConflictError",
+    "InstallationError",
+    "InstallationExecutionError",
+    "InstallationIntegrityError",
+    "InstallationManager",
+    "InstallationRecord",
+    "INSTALLATION_RECOVERY_STALE_SECONDS",
+    "INSTALLATION_STATE_VERSION",
+    "INSTALLATION_TIMEOUT_SECONDS",
+    "MAX_INSTALL_DISK_BYTES",
+    "MAX_INSTALL_DOWNLOAD_BYTES",
+    "RestrictedInstallExecutor",
+    "RuntimeConfig",
+    "RuntimeInstallationStore",
+    "default_install_manifest",
+]

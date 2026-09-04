@@ -8,6 +8,8 @@ const state = {
   editingProvider: null,
   editingEnvironment: null,
   environmentDetection: null,
+  environmentInstallPlan: null,
+  environmentInstallInFlight: false,
   environmentError: "",
   files: [],
   goal: "",
@@ -647,6 +649,41 @@ const renderEnvironmentCards = () => {
   }).join("")}</div>`;
 };
 
+const renderEnvironmentInstallPlan = (detection) => {
+  const environmentRef = detection.environment?.environment_ref || state.editingEnvironment?.environment_ref || "";
+  const plan = state.environmentInstallPlan;
+  if (plan?.installation) {
+    const installation = plan.installation;
+    if (installation.state === "CONFIRMED") {
+      return `<div class="environment-install-card environment-install-success"><strong>运行环境已确认</strong><span>固定版本已验证并原子启用；后续新建任务会自动匹配该环境。</span></div>`;
+    }
+    if (installation.state === "FAILED") {
+      return `<div class="environment-install-card environment-install-failure"><strong>安装失败，隔离目录已回滚</strong><span>${html(installation.error || "请重新检测并生成安装计划")}</span></div>`;
+    }
+    return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
+  }
+  if (!plan) {
+    if ((detection.match || {}).status === "READY") {
+      return '<div class="environment-install-card environment-install-success"><strong>已有兼容环境</strong><span>当前连接已匹配现有环境，无需安装。</span></div>';
+    }
+    return `<div class="environment-install-card"><div><strong>受限安装</strong><span>先生成服务端固定清单方案；这一步只读取配置，不下载或安装。</span></div><button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">生成安装计划</button></div>`;
+  }
+  const items = (plan.items || []).map((item) => `<div class="environment-install-item">
+    <div class="environment-plan-item-head"><strong>${html(item.name || item.component_id)}</strong><span>${html(item.version || "—")}</span></div>
+    <div class="environment-plan-grid"><span>来源</span><span>${html(item.source || "—")}</span><span>许可</span><span>${html(item.license_name || (item.requires_license ? "需要用户提供许可证/凭据" : "按固定清单记录"))}</span><span>下载</span><span>${formatBytes(item.estimated_download_bytes || 0)}</span><span>磁盘</span><span>${formatBytes(item.estimated_disk_bytes || 0)}</span><span>目标目录</span><code>${html(item.install_location || plan.target_directory || "—")}</code></div>
+    ${item.requires_license ? '<div class="environment-plan-warning">许可证或凭据缺失时会暂停，不会自动绕过。</div>' : ""}
+  </div>`).join("") || '<div class="environment-empty">当前没有需要安装的组件。</div>';
+  const blockers = (plan.blockers || []).map((item) => `<li>${html(item)}</li>`).join("");
+  const blocked = plan.status !== "READY_TO_INSTALL";
+  return `<div class="environment-install-card ${blocked ? "is-blocked" : ""}">
+    <div class="environment-install-head"><div><strong>${blocked ? "安装已暂停" : "安装前一次确认"}</strong><span>${blocked ? "固定清单、许可证或资源约束尚未满足。" : "确认后才会下载和安装；所有内容只进入新的隔离目录。"}</span></div><span class="status-pill ${blocked ? "status-failed" : "status-waiting_approval"}">${blocked ? "需要处理" : "待确认"}</span></div>
+    <div class="environment-install-summary"><span>运行位置：${html(detection.environment?.target_label || "当前连接")}</span><span>设备：${html(plan.selected_device || "CPU")}</span><span>预计下载：${formatBytes(plan.estimated_download_bytes || 0)}</span><span>预计磁盘：${formatBytes(plan.estimated_disk_bytes || 0)}</span><span>预计耗时：${formatDuration(plan.estimated_duration_seconds || 0)}</span><span>目标目录：${html(plan.target_directory || "—")}</span></div>
+    <div class="environment-install-list">${items}</div>
+    ${blockers ? `<div class="environment-install-blockers"><strong>风险与暂停原因</strong><ul>${blockers}</ul></div>` : '<div class="environment-install-risk">风险：安装过程有超时、大小上限、SHA-256 校验、临时目录和原子启用保护，不覆盖已有环境。</div>'}
+    ${blocked ? `<button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">重新生成安装计划</button>` : `<label class="environment-install-confirm"><input id="environment-install-confirm" type="checkbox" />我已确认运行位置、固定版本、来源、许可、资源估算和隔离目标目录</label><div class="environment-install-actions"><button class="primary-button" data-confirm-environment-install type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>确认并安装</button></div>`}
+  </div>`;
+};
+
 const renderEnvironmentDetection = (detection) => {
   if (!detection) return '<div class="environment-empty">请选择一个连接并点击“检测环境”。检测只会读取环境信息，不会下载或安装任何内容。</div>';
   const report = detection.report || {};
@@ -689,7 +726,8 @@ const renderEnvironmentDetection = (detection) => {
       <div class="environment-match-head"><div><h3>环境匹配结果</h3><p class="field-hint">${html(environmentStatusLabels[status] || status)} · ${html(match.selected_device || "CPU")} · ${html(match.selected_candidate === "existing" ? "现有环境" : "隔离目录预览")}</p></div><span class="status-pill ${environmentStatusClass(status)}">${html(environmentStatusLabels[status] || status)}</span></div>
       <div class="environment-match-columns"><div><strong>可复用</strong><ul>${reusable}</ul></div><div><strong>需要准备</strong><ul>${missing}</ul></div></div>
     </div>
-    <div class="environment-plan"><div class="environment-plan-head"><div><h3>安装计划预览</h3><p class="field-hint">固定来源、版本和隔离位置仅供确认；本 PR 不执行安装。</p></div><span>${formatBytes(plan.estimated_download_bytes || 0)} 下载 · ${formatBytes(plan.estimated_disk_bytes || 0)} 磁盘 · ${formatDuration(plan.estimated_duration_seconds || 0)}</span></div><div class="environment-plan-list">${planItems}</div></div>
+    <div class="environment-plan"><div class="environment-plan-head"><div><h3>固定清单预览</h3><p class="field-hint">这里仅展示探测结果中的候选来源；真正安装前还要生成受限方案并完成一次集中确认。</p></div><span>${formatBytes(plan.estimated_download_bytes || 0)} 下载 · ${formatBytes(plan.estimated_disk_bytes || 0)} 磁盘 · ${formatDuration(plan.estimated_duration_seconds || 0)}</span></div><div class="environment-plan-list">${planItems}</div></div>
+    ${renderEnvironmentInstallPlan(detection)}
   </div>`;
 };
 
@@ -743,7 +781,7 @@ const renderProviders = () => {
 
 const render = ({ force = false, preserveInteractive = false } = {}) => {
   if (!state.bootstrap) return;
-  const fingerprint = JSON.stringify({ view: state.view, bootstrap: state.bootstrap, detail: state.detail, files: state.files, plan: state.plan, planConfirmed: state.planConfirmed, editingProvider: state.editingProvider, editingEnvironment: state.editingEnvironment, environmentDetection: state.environmentDetection });
+  const fingerprint = JSON.stringify({ view: state.view, bootstrap: state.bootstrap, detail: state.detail, files: state.files, plan: state.plan, planConfirmed: state.planConfirmed, editingProvider: state.editingProvider, editingEnvironment: state.editingEnvironment, environmentDetection: state.environmentDetection, environmentInstallPlan: state.environmentInstallPlan, environmentInstallInFlight: state.environmentInstallInFlight });
   if (!force && fingerprint === state.renderFingerprint) return;
   const focusedId = preserveInteractive ? document.activeElement?.id : "";
   const openDetails = preserveInteractive
@@ -1072,6 +1110,7 @@ const bindPageEvents = () => {
 
   const detectEnvironment = async (environmentRef) => {
     state.environmentError = "";
+    state.environmentInstallPlan = null;
     try {
       setBusy(true);
       state.environmentDetection = await request(`/api/environments/${encodeURIComponent(environmentRef)}/detect`, { method: "POST", body: "{}" });
@@ -1086,6 +1125,65 @@ const bindPageEvents = () => {
     } finally { setBusy(false); }
   };
 
+  const buildEnvironmentInstallPlan = async (environmentRef) => {
+    state.environmentError = "";
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(environmentRef)}/install/plan`, {
+        method: "POST",
+        body: "{}",
+      });
+      state.environmentInstallPlan = result.plan;
+      render({ force: true, preserveInteractive: true });
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmEnvironmentInstall = async () => {
+    const plan = state.environmentInstallPlan;
+    const checkbox = document.getElementById("environment-install-confirm");
+    if (!plan || plan.status !== "READY_TO_INSTALL") return;
+    if (!checkbox?.checked) {
+      showToast("请先确认完整安装方案", true);
+      checkbox?.focus();
+      return;
+    }
+    state.environmentError = "";
+    state.environmentInstallInFlight = true;
+    render({ force: true, preserveInteractive: true });
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(plan.environment_ref)}/install/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          confirm: true,
+          plan_id: plan.plan_id,
+          plan_digest: plan.plan_digest,
+          connection_digest: plan.connection_digest,
+          report_digest: plan.report_digest,
+        }),
+      });
+      state.environmentInstallPlan = { ...plan, installation: result.installation, runtime_config: result.runtime_config };
+      await loadBootstrap();
+      const detail = await request(`/api/environments/${encodeURIComponent(plan.environment_ref)}`);
+      state.environmentDetection = detail.detection;
+      render({ force: true, preserveInteractive: true });
+      showToast(result.installation?.state === "CONFIRMED" ? "运行环境已确认并登记" : "安装状态已更新");
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally {
+      state.environmentInstallInFlight = false;
+      setBusy(false);
+      render({ force: true, preserveInteractive: true });
+    }
+  };
+
   const saveEnvironment = async ({ detect = false } = {}) => {
     state.environmentError = "";
     const value = readEnvironmentForm();
@@ -1094,6 +1192,7 @@ const bindPageEvents = () => {
       const saved = await request("/api/environments", { method: "POST", body: JSON.stringify(value) });
       state.editingEnvironment = saved.environment;
       state.environmentDetection = null;
+      state.environmentInstallPlan = null;
       await loadBootstrap();
       state.editingEnvironment = state.bootstrap.environments.find((item) => item.environment_ref === saved.environment.environment_ref) || saved.environment;
       if (detect) {
@@ -1120,11 +1219,18 @@ const bindPageEvents = () => {
   document.querySelectorAll("[data-detect-environment]").forEach((button) => button.addEventListener("click", async () => {
     await detectEnvironment(button.dataset.detectEnvironment);
   }));
+  document.querySelectorAll("[data-build-environment-plan]").forEach((button) => button.addEventListener("click", async () => {
+    await buildEnvironmentInstallPlan(button.dataset.buildEnvironmentPlan);
+  }));
+  document.querySelectorAll("[data-confirm-environment-install]").forEach((button) => button.addEventListener("click", async () => {
+    await confirmEnvironmentInstall();
+  }));
   document.querySelectorAll("[data-edit-environment]").forEach((button) => button.addEventListener("click", async () => {
     const profile = state.bootstrap?.environments?.find((item) => item.environment_ref === button.dataset.editEnvironment);
     if (!profile) return;
     state.editingEnvironment = profile;
     state.environmentDetection = null;
+    state.environmentInstallPlan = null;
     state.environmentError = "";
     render({ force: true, preserveInteractive: true });
     if (!profile.detection_available) return;
@@ -1140,6 +1246,7 @@ const bindPageEvents = () => {
   document.querySelectorAll("[data-clear-environment]").forEach((button) => button.addEventListener("click", () => {
     state.editingEnvironment = null;
     state.environmentDetection = null;
+    state.environmentInstallPlan = null;
     state.environmentError = "";
     render({ force: true, preserveInteractive: true });
   }));

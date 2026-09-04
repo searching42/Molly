@@ -1,10 +1,12 @@
 """Server-owned connection profiles and read-only runtime discovery.
 
-This module deliberately stops at discovery and planning.  It does not expose
-an arbitrary command endpoint and it never installs packages, downloads model
-weights, or changes a local or remote environment.  SSH is only used as a
-transport for one fixed Python probe script; the connection profile cannot
-provide a command, shell fragment, private key, or download URL.
+This module deliberately stops at discovery.  It does not expose an arbitrary
+command endpoint and never installs packages, downloads model weights, or
+changes a local or remote environment.  The separate ``installations``
+module consumes a digest-bound, server-owned plan only after explicit user
+confirmation.  SSH here is only used as a transport for one fixed Python
+probe script; the connection profile cannot provide a command, shell
+fragment, private key, or download URL.
 """
 
 from __future__ import annotations
@@ -1764,13 +1766,13 @@ def match_environment(
         "catalog_version": COMPATIBILITY_CATALOG_VERSION,
         "selected_candidate": selected_candidate,
         "target_directory": ".molly/runtimes/<runtime-id>" if profile.mode == "local" else "~/.local/share/molly/runtimes/<runtime-id>",
-        "integrity_policy": "安装阶段必须按兼容性清单校验固定 SHA-256；本 PR 不下载文件",
+        "integrity_policy": "安装阶段必须按兼容性清单校验固定 SHA-256；只读检测阶段不下载文件",
         "items": plan_items,
         "estimated_download_bytes": sum(int(item.get("estimated_download_bytes", 0)) for item in plan_items),
         "estimated_disk_bytes": sum(int(item.get("estimated_disk_bytes", 0)) for item in plan_items),
         "estimated_duration_seconds": sum(int(item.get("estimated_duration_seconds", 0)) for item in plan_items),
         "notes": [
-            "本次仅生成安装预览，不会下载、安装、覆盖或修改现有环境。",
+            "本次仅生成只读安装预览，不会下载、安装、覆盖或修改现有环境。",
             "真正执行前仍需再次确认固定来源、版本、大小和隔离目录。",
         ],
     }
@@ -1966,6 +1968,7 @@ class EnvironmentManager:
             "detection": detection,
             "read_only": True,
             "installation_enabled": False,
+            "installation_available": True,
         }
 
     def detect(self, environment_ref: str) -> dict[str, Any]:
@@ -1984,6 +1987,7 @@ class EnvironmentManager:
             "match": match,
             "read_only": True,
             "installation_enabled": False,
+            "installation_available": True,
             "probe_names": list(READ_ONLY_PROBE_NAMES),
         }
         self.store.save_detection(

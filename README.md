@@ -200,8 +200,13 @@ environment can be reused; missing components are shown as a fixed-version,
 isolated installation preview. This discovery preview never downloads,
 installs, or executes an arbitrary command. SSH uses the server's configured
 transport and credentials; private keys, shell commands, and download URLs
-are not accepted from the browser. Installation and the one-time confirmation
-are intentionally deferred to the later restricted-install flow.
+are not accepted from the browser. When a complete server-owned manifest is
+available, the page can generate a digest-bound installation plan and presents
+one confirmation before downloading. Installation uses a temporary isolated
+directory, fixed source/version/hash, bounded transport, atomic enable, and a
+persisted confirmed runtime configuration. The default scientific catalog
+fails closed when an artifact SHA-256 has not yet been entered; it never
+guesses a hash or downloads from a client-supplied URL.
 
 ### BR1 real end-to-end run
 
