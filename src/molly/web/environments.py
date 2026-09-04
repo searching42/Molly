@@ -42,6 +42,7 @@ from molly.core.ids import (
 ENVIRONMENT_CONFIG_VERSION = 1
 ENVIRONMENT_REPORT_VERSION = 1
 COMPATIBILITY_CATALOG_VERSION = "2026.09"
+COMPATIBLE_WEIGHT_NAMES = frozenset({"unimolv1.pt"})
 DEFAULT_SSH_PORT = 22
 MAX_ENVIRONMENT_NAME_LENGTH = 80
 MAX_SSH_TARGET_LENGTH = 255
@@ -474,8 +475,30 @@ class EnvironmentConfigStore:
                 environment_ref=existing.environment_ref if existing else requested_ref,
                 created_at=existing.created_at if existing else None,
             )
-            if profile.environment_ref not in profiles and len(profiles) >= MAX_ENVIRONMENT_PROFILES:
+            migrated_from: str | None = None
+            if existing is not None and existing.connection_digest != profile.connection_digest:
+                migrated_ref = _profile_ref(
+                    profile.mode,
+                    profile.ssh_target,
+                    profile.ssh_user,
+                    profile.ssh_port,
+                )
+                if migrated_ref in profiles and migrated_ref != existing.environment_ref:
+                    raise EnvironmentConfigError(
+                        "an environment profile for this connection already exists"
+                    )
+                profile = EnvironmentProfile.from_payload(
+                    payload,
+                    environment_ref=migrated_ref,
+                    created_at=None,
+                )
+                migrated_from = existing.environment_ref
+            elif existing is None and profile.environment_ref in profiles:
+                raise EnvironmentConfigError("an environment profile for this connection already exists")
+            if profile.environment_ref not in profiles and existing is None and len(profiles) >= MAX_ENVIRONMENT_PROFILES:
                 raise EnvironmentConfigError("too many environment profiles")
+            if migrated_from is not None:
+                del profiles[migrated_from]
             profiles[profile.environment_ref] = profile
             self._write_json(
                 self.profiles_path,
@@ -484,8 +507,8 @@ class EnvironmentConfigStore:
                     "profiles": {key: value.to_dict() for key, value in profiles.items()},
                 },
             )
-            if existing is not None and existing.connection_digest != profile.connection_digest:
-                self._clear_detection_unlocked(profile.environment_ref)
+            if migrated_from is not None:
+                self._clear_detection_unlocked(migrated_from)
             return profile
 
     def get_detection(self, environment_ref: str) -> dict[str, Any] | None:
@@ -635,28 +658,90 @@ _PROBE_SCRIPT = dedent(
     import os
     from pathlib import Path
     import platform
+    import selectors
     import shutil
     import subprocess
     import sys
+    import time
 
     def text(value, limit=256):
         value = str(value or "")
         return value.replace("\x00", "")[:limit]
 
+    MAX_SUBPROCESS_OUTPUT_BYTES = 64 * 1024
+
+    def bounded_command(path, args=("--version",), timeout=5):
+        try:
+            process = subprocess.Popen(
+                [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                shell=False, close_fds=True,
+            )
+        except OSError:
+            return 1, ""
+        selector = selectors.DefaultSelector()
+        registered = {}
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            if stream is not None:
+                selector.register(stream, selectors.EVENT_READ, name)
+                registered[stream] = name
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        try:
+            while registered:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return 1, ""
+                events = selector.select(remaining)
+                if not events:
+                    return 1, ""
+                for key, _ in events:
+                    stream = key.fileobj
+                    name = key.data
+                    capacity = MAX_SUBPROCESS_OUTPUT_BYTES - len(buffers[name]) + 1
+                    reader = getattr(stream, "read1", stream.read)
+                    chunk = reader(min(64 * 1024, max(1, capacity)))
+                    if not chunk:
+                        try:
+                            selector.unregister(stream)
+                        except (KeyError, ValueError):
+                            pass
+                        registered.pop(stream, None)
+                        stream.close()
+                        continue
+                    buffers[name].extend(chunk)
+                    if len(buffers[name]) > MAX_SUBPROCESS_OUTPUT_BYTES:
+                        return 1, ""
+            remaining = max(0.1, deadline - time.monotonic())
+            process.wait(timeout=remaining)
+        except (OSError, ValueError, TimeoutError):
+            return 1, ""
+        finally:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=1)
+            except (OSError, TimeoutError):
+                pass
+            for stream in tuple(registered):
+                try:
+                    selector.unregister(stream)
+                except (KeyError, ValueError):
+                    pass
+                stream.close()
+            selector.close()
+        output = bytes(buffers["stdout"] or buffers["stderr"])
+        return process.returncode if process.returncode is not None else 1, output.decode("utf-8", "replace")
+
     def command(name, args=("--version",), timeout=5):
         path = shutil.which(name)
         if not path:
             return {"available": False, "version": "", "path": ""}
-        try:
-            result = subprocess.run(
-                [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=timeout, check=False, shell=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return {"available": False, "version": "", "path": ""}
-        output = (result.stdout or result.stderr or b"").decode("utf-8", "replace")
+        returncode, output = bounded_command(path, args, timeout=timeout)
         return {
-            "available": result.returncode == 0,
+            "available": returncode == 0,
             "version": text(output.strip().splitlines()[0] if output.strip() else "", 160),
             "path": text(path, 512),
         }
@@ -708,17 +793,6 @@ _PROBE_SCRIPT = dedent(
         "reinvent4": reinvent,
     }, ensure_ascii=True, separators=(",", ":")))
     """
-
-    def bounded_command(path, args=("--version",), timeout=5):
-        try:
-            result = subprocess.run(
-                [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=timeout, check=False, shell=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return 1, ""
-        output = (result.stdout or b"")[:65536].decode("utf-8", "replace")
-        return result.returncode, output
 
     def add_python_candidate(candidates, seen, path, source):
         if not path:
@@ -871,23 +945,21 @@ _PROBE_SCRIPT = dedent(
     devices = []
     nvidia_path = shutil.which("nvidia-smi")
     if nvidia_path:
-        try:
-            result = subprocess.run(
-                [nvidia_path, "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=False, shell=False,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.decode("utf-8", "replace").splitlines()[:8]:
-                    fields = [item.strip() for item in line.split(",")]
-                    if len(fields) < 3:
-                        continue
-                    try:
-                        memory = int(float(fields[1]))
-                    except ValueError:
-                        memory = 0
-                    devices.append({"name": text(fields[0], 120), "memory_mib": max(0, memory), "driver_version": text(fields[2], 80)})
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        returncode, output = bounded_command(
+            nvidia_path,
+            ("--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"),
+            timeout=5,
+        )
+        if returncode == 0:
+            for line in output.splitlines()[:8]:
+                fields = [item.strip() for item in line.split(",")]
+                if len(fields) < 3:
+                    continue
+                try:
+                    memory = int(float(fields[1]))
+                except ValueError:
+                    memory = 0
+                devices.append({"name": text(fields[0], 120), "memory_mib": max(0, memory), "driver_version": text(fields[2], 80)})
     nvcc = command("nvcc", ("--version",))
     gpu = {
         "available": bool(devices),
@@ -960,21 +1032,42 @@ def _clean_package(value: Any) -> dict[str, Any]:
     }
 
 
+def _normalized_weight_path(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return str(Path(value).expanduser().resolve(strict=False))
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return ""
+
+
+def _weight_candidate_id(path: str, size_bytes: int) -> str:
+    return sha256_bytes(
+        canonical_json_bytes({"path": path, "size_bytes": size_bytes})
+    )
+
+
 def _normalize_probe(
     raw: Mapping[str, Any],
     *,
-    verified_weight_digests: Mapping[str, str] | None = None,
+    verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    trusted_weight_digests: dict[str, str] = {}
-    for name, digest in (verified_weight_digests or {}).items():
-        if not isinstance(name, str):
-            raise EnvironmentConfigError("verified weight name is invalid")
+    trusted_weight_records: dict[str, dict[str, Any]] = {}
+    for path, record in (verified_weight_records or {}).items():
+        normalized_path = _normalized_weight_path(path)
+        if not normalized_path or not isinstance(record, Mapping):
+            raise EnvironmentConfigError("verified weight record is invalid")
         try:
-            trusted_weight_digests[name] = validate_sha256(
-                digest, field=f"verified weight {name} digest"
+            digest = validate_sha256(
+                record.get("sha256", ""), field="verified weight digest"
             )
+            size_bytes = _clean_int(record.get("size_bytes"), maximum=2**50)
         except Exception as exc:
             raise EnvironmentConfigError("verified weight digest is invalid") from exc
+        trusted_weight_records[normalized_path] = {
+            "sha256": digest,
+            "size_bytes": size_bytes,
+        }
     system = raw.get("system") if isinstance(raw.get("system"), Mapping) else {}
     disk = raw.get("disk") if isinstance(raw.get("disk"), Mapping) else {}
     gpu_raw = raw.get("gpu") if isinstance(raw.get("gpu"), Mapping) else {}
@@ -1010,15 +1103,23 @@ def _normalize_probe(
         if not isinstance(item, Mapping):
             continue
         name = _clean_string(item.get("name"), maximum=180)
+        path = _clean_string(item.get("path"))
         size_bytes = _clean_int(item.get("size_bytes"), maximum=2**50)
+        normalized_path = _normalized_weight_path(path)
         weight = {
             "name": name,
-            "path": _clean_string(item.get("path")),
+            "path": path,
             "size_bytes": size_bytes,
+            "candidate_id": _weight_candidate_id(normalized_path, size_bytes),
             "verification_status": "pending",
         }
-        if name in trusted_weight_digests and size_bytes > 0:
-            weight["sha256"] = trusted_weight_digests[name]
+        verified = trusted_weight_records.get(normalized_path)
+        if (
+            verified is not None
+            and size_bytes > 0
+            and verified["size_bytes"] == size_bytes
+        ):
+            weight["sha256"] = verified["sha256"]
             weight["verification_status"] = "verified"
         weights.append(
             weight
@@ -1114,9 +1215,11 @@ class EnvironmentReport:
         raw: Mapping[str, Any],
         *,
         detected_at: str | None = None,
-        verified_weight_digests: Mapping[str, str] | None = None,
+        verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> "EnvironmentReport":
-        normalized = _normalize_probe(raw, verified_weight_digests=verified_weight_digests)
+        normalized = _normalize_probe(
+            raw, verified_weight_records=verified_weight_records
+        )
         timestamp = (
             _timestamp(detected_at, field="environment detected_at")
             if detected_at is not None
@@ -1261,9 +1364,11 @@ def _weights_ready(weights: Mapping[str, Any], *, unimol_ready: bool) -> bool:
         if not isinstance(item, Mapping):
             continue
         name = str(item.get("name", "")).casefold()
-        if "unimol" not in name or item.get("verification_status") != "verified":
+        if name not in COMPATIBLE_WEIGHT_NAMES or item.get("verification_status") != "verified":
             continue
-        if _clean_int(item.get("size_bytes")) <= 0:
+        size_bytes = _clean_int(item.get("size_bytes"))
+        path = _normalized_weight_path(item.get("path"))
+        if size_bytes <= 0 or item.get("candidate_id") != _weight_candidate_id(path, size_bytes):
             continue
         try:
             validate_sha256(item.get("sha256", ""), field="weight sha256")

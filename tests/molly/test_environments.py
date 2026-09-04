@@ -16,6 +16,7 @@ from molly.web.environments import (
     EnvironmentManager,
     EnvironmentProfile,
     EnvironmentReport,
+    _PROBE_SCRIPT,
     _default_runner,
     match_environment,
 )
@@ -102,12 +103,42 @@ def test_environment_profiles_validate_and_persist_without_private_keys(tmp_path
         )
 
 
+def test_editing_connection_migrates_id_without_later_create_overwriting_it(
+    tmp_path: Path,
+) -> None:
+    store = EnvironmentConfigStore(tmp_path / "runtime")
+    original = store.upsert_profile({"mode": "local", "display_name": "A"})
+
+    migrated = store.upsert_profile(
+        {
+            "environment_ref": original.environment_ref,
+            "display_name": "B",
+            "mode": "ssh",
+            "ssh_target": "compute",
+            "ssh_user": "researcher",
+            "ssh_port": 22,
+        }
+    )
+    recreated = store.upsert_profile({"mode": "local", "display_name": "A again"})
+
+    profiles = store.list_profiles()
+    assert migrated.environment_ref != original.environment_ref
+    assert recreated.environment_ref == original.environment_ref
+    assert {profile.environment_ref for profile in profiles} == {
+        migrated.environment_ref,
+        recreated.environment_ref,
+    }
+    assert store.get_profile(migrated.environment_ref).target_label == "researcher@compute:22"
+
+
 def test_matching_prefers_reusable_environment_and_never_executes_install(tmp_path: Path) -> None:
     profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
     report = EnvironmentReport.from_probe(
         profile,
         _probe_payload(),
-        verified_weight_digests={"unimolv1.pt": "a" * 64},
+        verified_weight_records={
+            "/opt/weights/unimolv1.pt": {"size_bytes": 1000, "sha256": "a" * 64}
+        },
     )
     match = match_environment(profile, report)
 
@@ -170,7 +201,9 @@ def test_environment_manager_persists_report_and_match(tmp_path: Path) -> None:
     report = EnvironmentReport.from_probe(
         profile,
         _probe_payload(),
-        verified_weight_digests={"unimolv1.pt": "a" * 64},
+        verified_weight_records={
+            "/opt/weights/unimolv1.pt": {"size_bytes": 1000, "sha256": "a" * 64}
+        },
     )
 
     class FakeDetector:
@@ -238,7 +271,9 @@ def test_python_packages_can_be_reused_from_independent_environments() -> None:
     report = EnvironmentReport.from_probe(
         profile,
         payload,
-        verified_weight_digests={"unimolv1.pt": "a" * 64},
+        verified_weight_records={
+            "/opt/weights/unimolv1.pt": {"size_bytes": 1000, "sha256": "a" * 64}
+        },
     )
 
     match = match_environment(profile, report)
@@ -269,11 +304,34 @@ def test_unverified_or_empty_model_weights_never_make_environment_ready() -> Non
     empty_report = EnvironmentReport.from_probe(
         profile,
         empty_payload,
-        verified_weight_digests={"unimol-not-a-model.pt": "a" * 64},
+        verified_weight_records={
+            "/opt/weights/unimol-not-a-model.pt": {"size_bytes": 0, "sha256": "a" * 64}
+        },
     )
 
     assert empty_report.data["weights"]["entries"][0]["verification_status"] == "pending"
     assert match_environment(profile, empty_report)["status"] != "READY"
+
+    duplicate_payload = _probe_payload()
+    duplicate_payload["weights"] = {
+        "entries": [
+            {"name": "unimolv1.pt", "path": "/weights/one/unimolv1.pt", "size_bytes": 1000},
+            {"name": "unimolv1.pt", "path": "/weights/two/unimolv1.pt", "size_bytes": 1000},
+        ],
+        "total_bytes": 2000,
+    }
+    duplicate_report = EnvironmentReport.from_probe(
+        profile,
+        duplicate_payload,
+        verified_weight_records={
+            "/weights/one/unimolv1.pt": {"size_bytes": 1000, "sha256": "a" * 64}
+        },
+    )
+
+    duplicate_entries = duplicate_report.data["weights"]["entries"]
+    assert duplicate_entries[0]["verification_status"] == "verified"
+    assert duplicate_entries[1]["verification_status"] == "pending"
+    assert duplicate_entries[0]["candidate_id"] != duplicate_entries[1]["candidate_id"]
 
 
 def test_environment_ref_and_report_binding_use_connection_digest() -> None:
@@ -316,3 +374,10 @@ def test_probe_runner_limits_both_output_streams(stream: str) -> None:
 
     with pytest.raises(EnvironmentDetectionError, match="safety limit"):
         _default_runner((sys.executable, "-c", code), None, 5)
+
+
+def test_probe_child_commands_use_the_stream_limited_executor() -> None:
+    assert "subprocess.run(" not in _PROBE_SCRIPT
+    assert "subprocess.Popen(" in _PROBE_SCRIPT
+    assert "MAX_SUBPROCESS_OUTPUT_BYTES" in _PROBE_SCRIPT
+    assert "selector.select" in _PROBE_SCRIPT
