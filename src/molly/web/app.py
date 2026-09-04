@@ -48,6 +48,11 @@ from molly.runtime import (
 )
 
 from .providers import ProviderConfigError, ProviderConfigStore
+from .environments import (
+    EnvironmentConfigError,
+    EnvironmentDetectionError,
+    EnvironmentManager,
+)
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
 from molly.plugins.br1_inverse_design.intent import Br1Intent, parse_br1_request
 from molly.plugins.br1_inverse_design.schema import Br1PluginConfig
@@ -173,6 +178,16 @@ def _run_summary(inspection: Any, *, background_pending: bool = False) -> dict[s
 def _safe_exception_response(exc: BaseException) -> tuple[int, dict[str, Any]]:
     if isinstance(exc, WebRequestError):
         return exc.status, {"error_type": exc.code, "message": exc.message}
+    if isinstance(exc, EnvironmentConfigError):
+        return 400, {
+            "error_type": "ENVIRONMENT_CONFIG_INVALID",
+            "message": "运行环境连接配置无效",
+        }
+    if isinstance(exc, EnvironmentDetectionError):
+        return 502, {
+            "error_type": "ENVIRONMENT_DETECTION_FAILED",
+            "message": "环境检测失败，请检查本机或 SSH 连接配置",
+        }
     if isinstance(exc, ProviderConfigError):
         return 400, {
             "error_type": "PROVIDER_CONFIG_INVALID",
@@ -227,6 +242,7 @@ class MollyWebApplication:
         *,
         service: RuntimeService,
         provider_store: ProviderConfigStore,
+        environment_manager: EnvironmentManager | None = None,
         static_root: Path | None = None,
     ) -> None:
         if not isinstance(service, RuntimeService):
@@ -235,6 +251,9 @@ class MollyWebApplication:
             raise TypeError("provider_store must be a ProviderConfigStore")
         self.service = service
         self.provider_store = provider_store
+        if environment_manager is not None and not isinstance(environment_manager, EnvironmentManager):
+            raise TypeError("environment_manager must be an EnvironmentManager")
+        self.environment_manager = environment_manager or EnvironmentManager(service.root)
         self.static_root = static_root or Path(__file__).with_name("static")
         self._local_session_token = secrets.token_urlsafe(32)
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="molly-run")
@@ -447,6 +466,17 @@ class MollyWebApplication:
                 return 200, {"profiles": self._provider_profiles()}
             if method == "POST":
                 return 201, self._save_provider_profile(body)
+        if route == ["api", "environments"]:
+            if method == "GET":
+                return 200, {"environments": self.environment_manager.list_public()}
+            if method == "POST":
+                return 201, self._save_environment_profile(body)
+        if len(route) == 3 and route[:2] == ["api", "environments"]:
+            if method == "GET":
+                return 200, self.environment_manager.get_public(route[2])
+        if len(route) == 4 and route[:2] == ["api", "environments"]:
+            if method == "POST" and route[3] == "detect":
+                return 200, self.environment_manager.detect(route[2])
         if len(route) == 4 and route[:2] == ["api", "model-profiles"]:
             profile_ref, action = route[2], route[3]
             if method == "POST" and action == "credential":
@@ -466,6 +496,7 @@ class MollyWebApplication:
                 _runtime_profile_view(profile) for profile in self.service.profiles.profiles
             ],
             "model_profiles": self._provider_profiles(),
+            "environments": self.environment_manager.list_public(),
             "runs": self._run_summaries(),
             "workflow_profiles": [
                 {
@@ -1120,6 +1151,14 @@ class MollyWebApplication:
     def _provider_profiles(self) -> list[dict[str, Any]]:
         return [view.to_public_dict() for view in self.provider_store.list_profiles()]
 
+    def _save_environment_profile(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        profile = self.environment_manager.upsert_profile(payload)
+        detection = self.environment_manager.store.get_detection(profile.environment_ref)
+        return {
+            "environment": profile.to_public_dict(detection=detection),
+            "message": "运行环境连接配置已保存；请点击“检测环境”进行只读探测",
+        }
+
     def _save_provider_profile(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         view = self.provider_store.upsert_profile(payload)
         return {
@@ -1373,6 +1412,7 @@ def create_application(
     *,
     service: RuntimeService | None = None,
     provider_store: ProviderConfigStore | None = None,
+    environment_manager: EnvironmentManager | None = None,
 ) -> MollyWebApplication:
     """Create the local web app from server-owned runtime profiles."""
 
@@ -1390,6 +1430,7 @@ def create_application(
     return MollyWebApplication(
         service=service,
         provider_store=configured_provider_store,
+        environment_manager=environment_manager,
     )
 
 

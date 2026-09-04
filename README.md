@@ -192,6 +192,17 @@ If the shell reports `molly: command not found`, use the project-local
 `.venv/bin/molly` entrypoint after installing the package into that virtual
 environment.
 
+The model settings page also supports server-owned local and SSH environment
+connection profiles. “检测环境” runs a bounded, fixed read-only probe for the
+operating system, GPU/CUDA, Python tooling, Uni-Mol, REINVENT4, disk space,
+write access, and existing weights. Molly first reports whether an existing
+environment can be reused; missing components are shown as a fixed-version,
+isolated installation preview. This discovery preview never downloads,
+installs, or executes an arbitrary command. SSH uses the server's configured
+transport and credentials; private keys, shell commands, and download URLs
+are not accepted from the browser. Installation and the one-time confirmation
+are intentionally deferred to the later restricted-install flow.
+
 ### BR1 real end-to-end run
 
 Normal web mode exposes only worker profiles that are complete and registered
