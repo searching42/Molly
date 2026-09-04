@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -19,8 +20,14 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from textwrap import dedent
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    fcntl = None
 
 from molly.core.ids import (
     canonical_json_bytes,
@@ -28,6 +35,7 @@ from molly.core.ids import (
     sha256_bytes,
     utc_timestamp,
     validate_identifier,
+    validate_sha256,
 )
 
 
@@ -111,9 +119,29 @@ def _ssh_user(value: Any) -> str:
 
 
 def _profile_ref(mode: str, target: str | None, user: str | None, port: int | None) -> str:
-    raw = "local" if mode == "local" else f"ssh-{user}-{target}-{port}"
-    slug = re.sub(r"[^A-Za-z0-9._:-]+", "-", raw).strip("-")[:110]
-    return validate_identifier(f"environment:{slug or 'profile'}", field="environment_ref")
+    digest = _connection_digest(mode, target, user, port)
+    return validate_identifier(f"environment:{mode}-{digest[:32]}", field="environment_ref")
+
+
+def _connection_digest(
+    mode: str,
+    target: str | None,
+    user: str | None,
+    port: int | None,
+) -> str:
+    return sha256_bytes(
+        canonical_json_bytes(
+            {
+                "mode": mode,
+                "ssh_target": target if mode == "ssh" else None,
+                "ssh_user": user if mode == "ssh" else None,
+                "ssh_port": port if mode == "ssh" else None,
+            }
+        )
+    )
+
+
+_STORE_THREAD_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +195,12 @@ class EnvironmentProfile:
             return "本地"
         return f"{self.ssh_user}@{self.ssh_target}:{self.ssh_port}"
 
+    @property
+    def connection_digest(self) -> str:
+        """Stable identity of the endpoint authority, excluding display metadata."""
+
+        return _connection_digest(self.mode, self.ssh_target, self.ssh_user, self.ssh_port)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "environment_ref": self.environment_ref,
@@ -175,6 +209,7 @@ class EnvironmentProfile:
             "ssh_target": self.ssh_target,
             "ssh_user": self.ssh_user,
             "ssh_port": self.ssh_port,
+            "connection_digest": self.connection_digest,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -184,7 +219,7 @@ class EnvironmentProfile:
         if not isinstance(value, Mapping):
             raise EnvironmentConfigError("environment profile must be an object")
         try:
-            return cls(
+            profile = cls(
                 environment_ref=value["environment_ref"],
                 display_name=value["display_name"],
                 mode=value["mode"],
@@ -194,6 +229,10 @@ class EnvironmentProfile:
                 created_at=value.get("created_at", ""),
                 updated_at=value.get("updated_at", ""),
             )
+            recorded_digest = value.get("connection_digest")
+            if recorded_digest is not None and recorded_digest != profile.connection_digest:
+                raise EnvironmentConfigError("environment profile connection digest is inconsistent")
+            return profile
         except (KeyError, TypeError, ValueError) as exc:
             raise EnvironmentConfigError("environment profile is malformed") from exc
 
@@ -258,6 +297,13 @@ class EnvironmentProfile:
         )
 
     def to_public_dict(self, *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if isinstance(detection, Mapping):
+            report = detection.get("report")
+            if not isinstance(report, Mapping) or (
+                report.get("environment_ref") != self.environment_ref
+                or report.get("connection_digest") != self.connection_digest
+            ):
+                detection = None
         match_value = detection.get("match", {}) if isinstance(detection, Mapping) else {}
         report_value = detection.get("report", {}) if isinstance(detection, Mapping) else {}
         match = match_value if isinstance(match_value, Mapping) else {}
@@ -271,6 +317,7 @@ class EnvironmentProfile:
             "ssh_target": self.ssh_target,
             "ssh_user": self.ssh_user,
             "ssh_port": self.ssh_port,
+            "connection_digest": self.connection_digest,
             "last_detected_at": report.get("detected_at"),
             "status": match.get("status", "UNDETECTED"),
             "selected_device": match.get("selected_device"),
@@ -295,6 +342,26 @@ class EnvironmentConfigStore:
         self.root = configured.absolute()
         self.profiles_path = self.root / "environment_profiles.json"
         self.reports_path = self.root / "environment_reports.json"
+        self.lock_path = self.root / ".environment.lock"
+
+    @contextmanager
+    def _write_lock(self):
+        """Serialize profile/report read-modify-write operations across workers."""
+
+        if self.root.is_symlink():
+            raise EnvironmentConfigError("environment settings root cannot be a symlink")
+        self.root.mkdir(parents=True, exist_ok=True)
+        with _STORE_THREAD_LOCK:
+            descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                os.fchmod(descriptor, 0o600)
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
 
     @staticmethod
     def _check_file(path: Path) -> None:
@@ -398,57 +465,67 @@ class EnvironmentConfigStore:
             raise EnvironmentConfigError("environment profile was not found") from exc
 
     def upsert_profile(self, payload: Mapping[str, Any]) -> EnvironmentProfile:
-        profiles = self._read_profiles()
-        requested_ref = payload.get("environment_ref") if isinstance(payload, Mapping) else None
-        existing = profiles.get(requested_ref) if isinstance(requested_ref, str) else None
-        profile = EnvironmentProfile.from_payload(
-            payload,
-            environment_ref=existing.environment_ref if existing else requested_ref,
-            created_at=existing.created_at if existing else None,
-        )
-        if profile.environment_ref not in profiles and len(profiles) >= MAX_ENVIRONMENT_PROFILES:
-            raise EnvironmentConfigError("too many environment profiles")
-        profiles[profile.environment_ref] = profile
-        self._write_json(
-            self.profiles_path,
-            {
-                "version": ENVIRONMENT_CONFIG_VERSION,
-                "profiles": {key: value.to_dict() for key, value in profiles.items()},
-            },
-        )
-        if existing is not None and (
-            existing.mode,
-            existing.ssh_target,
-            existing.ssh_user,
-            existing.ssh_port,
-        ) != (
-            profile.mode,
-            profile.ssh_target,
-            profile.ssh_user,
-            profile.ssh_port,
-        ):
-            self.clear_detection(profile.environment_ref)
-        return profile
+        with self._write_lock():
+            profiles = self._read_profiles()
+            requested_ref = payload.get("environment_ref") if isinstance(payload, Mapping) else None
+            existing = profiles.get(requested_ref) if isinstance(requested_ref, str) else None
+            profile = EnvironmentProfile.from_payload(
+                payload,
+                environment_ref=existing.environment_ref if existing else requested_ref,
+                created_at=existing.created_at if existing else None,
+            )
+            if profile.environment_ref not in profiles and len(profiles) >= MAX_ENVIRONMENT_PROFILES:
+                raise EnvironmentConfigError("too many environment profiles")
+            profiles[profile.environment_ref] = profile
+            self._write_json(
+                self.profiles_path,
+                {
+                    "version": ENVIRONMENT_CONFIG_VERSION,
+                    "profiles": {key: value.to_dict() for key, value in profiles.items()},
+                },
+            )
+            if existing is not None and existing.connection_digest != profile.connection_digest:
+                self._clear_detection_unlocked(profile.environment_ref)
+            return profile
 
     def get_detection(self, environment_ref: str) -> dict[str, Any] | None:
         return self._read_reports().get(environment_ref)
 
-    def save_detection(self, environment_ref: str, detection: Mapping[str, Any]) -> None:
-        self.get_profile(environment_ref)
-        if not isinstance(detection, Mapping):
-            raise EnvironmentConfigError("environment detection must be an object")
-        try:
-            canonical_json_bytes(detection)
-        except (TypeError, ValueError) as exc:
-            raise EnvironmentConfigError("environment detection is not JSON serializable") from exc
-        reports = self._read_reports()
-        reports[environment_ref] = dict(detection)
-        self._write_json(
-            self.reports_path,
-            {"version": ENVIRONMENT_REPORT_VERSION, "reports": reports},
-        )
+    def save_detection(
+        self,
+        environment_ref: str,
+        detection: Mapping[str, Any],
+        *,
+        expected_connection_digest: str | None = None,
+    ) -> None:
+        with self._write_lock():
+            try:
+                profile = self._read_profiles()[environment_ref]
+            except KeyError as exc:
+                raise EnvironmentConfigError("environment profile was not found") from exc
+            if expected_connection_digest is not None and profile.connection_digest != expected_connection_digest:
+                raise EnvironmentConfigError("environment connection changed during detection")
+            if not isinstance(detection, Mapping):
+                raise EnvironmentConfigError("environment detection must be an object")
+            report = detection.get("report")
+            if not isinstance(report, Mapping) or report.get("connection_digest") != profile.connection_digest:
+                raise EnvironmentConfigError("environment report is bound to a different connection")
+            try:
+                canonical_json_bytes(detection)
+            except (TypeError, ValueError) as exc:
+                raise EnvironmentConfigError("environment detection is not JSON serializable") from exc
+            reports = self._read_reports()
+            reports[environment_ref] = dict(detection)
+            self._write_json(
+                self.reports_path,
+                {"version": ENVIRONMENT_REPORT_VERSION, "reports": reports},
+            )
 
     def clear_detection(self, environment_ref: str) -> None:
+        with self._write_lock():
+            self._clear_detection_unlocked(environment_ref)
+
+    def _clear_detection_unlocked(self, environment_ref: str) -> None:
         reports = self._read_reports()
         if environment_ref not in reports:
             return
@@ -460,6 +537,23 @@ class EnvironmentConfigStore:
 
 
 CommandRunner = Callable[[Sequence[str], bytes | None, float], tuple[int, bytes]]
+
+
+class _ProbeOutputLimitExceeded(Exception):
+    """Internal signal used to stop a probe as soon as either pipe is too large."""
+
+
+async def _read_limited_stream(stream: asyncio.StreamReader, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await stream.read(min(64 * 1024, limit - total + 1))
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > limit:
+            raise _ProbeOutputLimitExceeded
+        chunks.append(chunk)
 
 
 def _default_runner(
@@ -477,22 +571,52 @@ def _default_runner(
             raise EnvironmentDetectionError(
                 "fixed environment probe could not start"
             ) from exc
-        try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(input_bytes), timeout=timeout_seconds
-            )
-        except asyncio.TimeoutError as exc:
+
+        if input_bytes is not None and process.stdin is not None:
             try:
-                process.kill()
-            except ProcessLookupError:
+                process.stdin.write(input_bytes)
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
                 pass
-            await process.communicate()
+
+        stdout_task = asyncio.create_task(
+            _read_limited_stream(process.stdout, MAX_DETECTION_OUTPUT_BYTES)
+        )
+        stderr_task = asyncio.create_task(
+            _read_limited_stream(process.stderr, MAX_DETECTION_OUTPUT_BYTES)
+        )
+
+        async def stop_process() -> None:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+        try:
+            stdout, _stderr = await asyncio.wait_for(
+                asyncio.gather(stdout_task, stderr_task), timeout=timeout_seconds
+            )
+        except _ProbeOutputLimitExceeded as exc:
+            await stop_process()
+            raise EnvironmentDetectionError(
+                "environment probe output exceeded the safety limit"
+            ) from exc
+        except asyncio.TimeoutError as exc:
+            await stop_process()
             raise EnvironmentDetectionError(
                 "fixed environment probe timed out"
             ) from exc
-        stdout = bytes(stdout or b"")
-        if len(stdout) > MAX_DETECTION_OUTPUT_BYTES:
-            raise EnvironmentDetectionError("environment probe output exceeded the safety limit")
+        finally:
+            for task in (stdout_task, stderr_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await process.wait()
         return process.returncode or 0, stdout
 
     try:
@@ -550,6 +674,126 @@ _PROBE_SCRIPT = dedent(
             return importlib.util.find_spec(name) is not None
         except (ImportError, ModuleNotFoundError, ValueError):
             return False
+
+    PYTHON_ENVIRONMENT_PROBE = """
+    import importlib.metadata
+    import importlib.util
+    import json
+    import platform
+    import sys
+
+    def package(names):
+        for name in names:
+            try:
+                return {"installed": True, "importable": True, "package": name, "version": importlib.metadata.version(name)}
+            except importlib.metadata.PackageNotFoundError:
+                pass
+        return {"installed": False, "importable": False, "package": "", "version": ""}
+
+    def module(name):
+        try:
+            return importlib.util.find_spec(name) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            return False
+
+    unimol = package(("unimol-tools", "unimol_tools"))
+    unimol["importable"] = module("unimol_tools")
+    reinvent = package(("reinvent4", "reinvent"))
+    reinvent["importable"] = module("reinvent")
+    print(json.dumps({
+        "executable": sys.executable,
+        "version": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "unimol": unimol,
+        "reinvent4": reinvent,
+    }, ensure_ascii=True, separators=(",", ":")))
+    """
+
+    def bounded_command(path, args=("--version",), timeout=5):
+        try:
+            result = subprocess.run(
+                [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=timeout, check=False, shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, ""
+        output = (result.stdout or b"")[:65536].decode("utf-8", "replace")
+        return result.returncode, output
+
+    def add_python_candidate(candidates, seen, path, source):
+        if not path:
+            return
+        try:
+            candidate = Path(str(path)).expanduser()
+            if not candidate.is_file():
+                return
+            key = str(candidate)
+        except (OSError, TypeError, ValueError):
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((key, text(source, 80)))
+
+    def add_environment_python(candidates, seen, environment, source):
+        root = Path(str(environment)).expanduser()
+        add_python_candidate(candidates, seen, root / "bin" / "python", source)
+        add_python_candidate(candidates, seen, root / "Scripts" / "python.exe", source)
+
+    python_candidates = []
+    python_seen = set()
+    add_python_candidate(python_candidates, python_seen, sys.executable, "probe interpreter")
+    for name in ("python3", "python"):
+        add_python_candidate(python_candidates, python_seen, shutil.which(name), "PATH")
+    for variable in ("VIRTUAL_ENV", "CONDA_PREFIX", "UV_PROJECT_ENVIRONMENT"):
+        value = os.environ.get(variable)
+        if value:
+            add_environment_python(python_candidates, python_seen, value, variable)
+    add_environment_python(python_candidates, python_seen, Path.cwd() / ".venv", "project .venv")
+
+    for manager_name in ("conda", "mamba", "micromamba"):
+        manager_path = shutil.which(manager_name)
+        if not manager_path:
+            continue
+        returncode, output = bounded_command(manager_path, ("env", "list", "--json"), timeout=8)
+        if returncode != 0:
+            continue
+        try:
+            manager_data = json.loads(output)
+        except json.JSONDecodeError:
+            continue
+        environments = manager_data.get("envs", ()) if isinstance(manager_data, dict) else ()
+        if not isinstance(environments, list):
+            continue
+        for environment in environments[:32]:
+            if isinstance(environment, str):
+                add_environment_python(python_candidates, python_seen, environment, manager_name)
+
+    uv_path = shutil.which("uv")
+    if uv_path:
+        returncode, output = bounded_command(uv_path, ("python", "list", "--only-installed"), timeout=8)
+        if returncode == 0:
+            for line in output.splitlines()[:64]:
+                for token in reversed(line.split()):
+                    if token.startswith(("/", "~")):
+                        add_python_candidate(python_candidates, python_seen, token, "uv")
+                        break
+
+    python_environments = []
+    for path, source in python_candidates[:32]:
+        returncode, output = bounded_command(path, ("-c", PYTHON_ENVIRONMENT_PROBE), timeout=8)
+        if returncode != 0:
+            continue
+        try:
+            environment = json.loads(output)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(environment, dict):
+            continue
+        environment["source"] = source
+        environment["executable"] = text(path, 512)
+        environment["name"] = text(Path(path).parent.parent.name, 128)
+        python_environments.append(environment)
 
     def repository_candidates():
         home = Path.home()
@@ -671,7 +915,7 @@ _PROBE_SCRIPT = dedent(
         "system": {"os": text(platform.system(), 64), "release": text(platform.release(), 128), "architecture": text(platform.machine(), 64)},
         "disk": disk,
         "gpu": gpu,
-        "python": {"executable": text(sys.executable, 512), "version": text(platform.python_version(), 80), "implementation": text(platform.python_implementation(), 80), "managers": python_tools},
+        "python": {"executable": text(sys.executable, 512), "version": text(platform.python_version(), 80), "implementation": text(platform.python_implementation(), 80), "managers": python_tools, "environments": python_environments},
         "unimol": unimol,
         "reinvent4": reinvent,
         "weights": {"entries": entries, "total_bytes": total},
@@ -706,7 +950,31 @@ def _clean_command(value: Any) -> dict[str, Any]:
     }
 
 
-def _normalize_probe(raw: Mapping[str, Any]) -> dict[str, Any]:
+def _clean_package(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, Mapping) else {}
+    return {
+        "installed": bool(raw.get("installed")),
+        "importable": bool(raw.get("importable")),
+        "package": _clean_string(raw.get("package"), maximum=80),
+        "version": _clean_string(raw.get("version"), maximum=80),
+    }
+
+
+def _normalize_probe(
+    raw: Mapping[str, Any],
+    *,
+    verified_weight_digests: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    trusted_weight_digests: dict[str, str] = {}
+    for name, digest in (verified_weight_digests or {}).items():
+        if not isinstance(name, str):
+            raise EnvironmentConfigError("verified weight name is invalid")
+        try:
+            trusted_weight_digests[name] = validate_sha256(
+                digest, field=f"verified weight {name} digest"
+            )
+        except Exception as exc:
+            raise EnvironmentConfigError("verified weight digest is invalid") from exc
     system = raw.get("system") if isinstance(raw.get("system"), Mapping) else {}
     disk = raw.get("disk") if isinstance(raw.get("disk"), Mapping) else {}
     gpu_raw = raw.get("gpu") if isinstance(raw.get("gpu"), Mapping) else {}
@@ -741,15 +1009,43 @@ def _normalize_probe(raw: Mapping[str, Any]) -> dict[str, Any]:
     for item in weights_raw.get("entries", ()) if isinstance(weights_raw.get("entries", ()), Sequence) else ():
         if not isinstance(item, Mapping):
             continue
+        name = _clean_string(item.get("name"), maximum=180)
+        size_bytes = _clean_int(item.get("size_bytes"), maximum=2**50)
+        weight = {
+            "name": name,
+            "path": _clean_string(item.get("path")),
+            "size_bytes": size_bytes,
+            "verification_status": "pending",
+        }
+        if name in trusted_weight_digests and size_bytes > 0:
+            weight["sha256"] = trusted_weight_digests[name]
+            weight["verification_status"] = "verified"
         weights.append(
-            {
-                "name": _clean_string(item.get("name"), maximum=180),
-                "path": _clean_string(item.get("path")),
-                "size_bytes": _clean_int(item.get("size_bytes"), maximum=2**50),
-            }
+            weight
         )
     managers = python_raw.get("managers", {}) if isinstance(python_raw.get("managers"), Mapping) else {}
     cuda_raw = gpu_raw.get("cuda") if isinstance(gpu_raw.get("cuda"), Mapping) else {}
+    python_environments = []
+    raw_python_environments = python_raw.get("environments", ())
+    if isinstance(raw_python_environments, Sequence) and not isinstance(
+        raw_python_environments, (str, bytes, bytearray)
+    ):
+        for item in raw_python_environments[:32]:
+            if not isinstance(item, Mapping):
+                continue
+            source = _clean_string(item.get("source"), maximum=80)
+            executable = _clean_string(item.get("executable"))
+            python_environments.append(
+                {
+                    "name": _clean_string(item.get("name"), maximum=128) or source or executable,
+                    "source": source,
+                    "executable": executable,
+                    "version": _clean_string(item.get("version"), maximum=80),
+                    "implementation": _clean_string(item.get("implementation"), maximum=80),
+                    "unimol": _clean_package(item.get("unimol")),
+                    "reinvent4": _clean_package(item.get("reinvent4")),
+                }
+            )
     return {
         "system": {
             "os": _clean_string(system.get("os"), maximum=64) or "未知",
@@ -778,24 +1074,22 @@ def _normalize_probe(raw: Mapping[str, Any]) -> dict[str, Any]:
             "version": _clean_string(python_raw.get("version"), maximum=80),
             "implementation": _clean_string(python_raw.get("implementation"), maximum=80),
             "managers": {str(key): _clean_command(value) for key, value in list(managers.items())[:8]},
+            "environments": python_environments,
         },
-        "unimol": {
-            "installed": bool(unimol_raw.get("installed")),
-            "importable": bool(unimol_raw.get("importable")),
-            "package": _clean_string(unimol_raw.get("package"), maximum=80),
-            "version": _clean_string(unimol_raw.get("version"), maximum=80),
-        },
+        "unimol": _clean_package(unimol_raw),
         "reinvent4": {
-            "installed": bool(reinvent_raw.get("installed")),
-            "importable": bool(reinvent_raw.get("importable")),
-            "package": _clean_string(reinvent_raw.get("package"), maximum=80),
-            "version": _clean_string(reinvent_raw.get("version"), maximum=80),
+            **_clean_package(reinvent_raw),
             "repositories": repositories[:8],
             "license_present": bool(reinvent_raw.get("license_present")),
         },
         "weights": {
             "entries": weights[:128],
             "total_bytes": _clean_int(weights_raw.get("total_bytes"), maximum=2**52),
+            "verification_status": (
+                "verified"
+                if any(item.get("verification_status") == "verified" for item in weights)
+                else "pending"
+            ),
         },
     }
 
@@ -805,6 +1099,7 @@ class EnvironmentReport:
     """Bounded, sanitized output of the fixed discovery probe."""
 
     environment_ref: str
+    connection_digest: str
     mode: str
     target_label: str
     detected_at: str
@@ -819,8 +1114,9 @@ class EnvironmentReport:
         raw: Mapping[str, Any],
         *,
         detected_at: str | None = None,
+        verified_weight_digests: Mapping[str, str] | None = None,
     ) -> "EnvironmentReport":
-        normalized = _normalize_probe(raw)
+        normalized = _normalize_probe(raw, verified_weight_digests=verified_weight_digests)
         timestamp = (
             _timestamp(detected_at, field="environment detected_at")
             if detected_at is not None
@@ -829,6 +1125,7 @@ class EnvironmentReport:
         payload = {
             "version": ENVIRONMENT_REPORT_VERSION,
             "environment_ref": profile.environment_ref,
+            "connection_digest": profile.connection_digest,
             "mode": profile.mode,
             "target_label": profile.target_label,
             "detected_at": timestamp,
@@ -838,6 +1135,7 @@ class EnvironmentReport:
         digest = sha256_bytes(canonical_json_bytes(payload))
         return cls(
             environment_ref=profile.environment_ref,
+            connection_digest=profile.connection_digest,
             mode=profile.mode,
             target_label=profile.target_label,
             detected_at=timestamp,
@@ -850,6 +1148,7 @@ class EnvironmentReport:
         value: dict[str, Any] = {
             "version": ENVIRONMENT_REPORT_VERSION,
             "environment_ref": self.environment_ref,
+            "connection_digest": self.connection_digest,
             "mode": self.mode,
             "target_label": self.target_label,
             "detected_at": self.detected_at,
@@ -958,7 +1257,70 @@ def _weights_ready(weights: Mapping[str, Any], *, unimol_ready: bool) -> bool:
     entries = weights.get("entries", ())
     if not isinstance(entries, Sequence):
         return False
-    return any("unimol" in str(item.get("name", "")).casefold() for item in entries if isinstance(item, Mapping))
+    for item in entries:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "")).casefold()
+        if "unimol" not in name or item.get("verification_status") != "verified":
+            continue
+        if _clean_int(item.get("size_bytes")) <= 0:
+            continue
+        try:
+            validate_sha256(item.get("sha256", ""), field="weight sha256")
+        except Exception:
+            continue
+        return True
+    return False
+
+
+def _python_candidates(
+    python_data: Mapping[str, Any],
+    top_level_unimol: Mapping[str, Any],
+    top_level_reinvent: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    raw_environments = python_data.get("environments", ())
+    if isinstance(raw_environments, Sequence) and not isinstance(
+        raw_environments, (str, bytes, bytearray)
+    ) and raw_environments:
+        return tuple(item for item in raw_environments if isinstance(item, Mapping))
+    return (
+        {
+            "name": "probe interpreter",
+            "source": "probe interpreter",
+            "executable": python_data.get("executable", ""),
+            "version": python_data.get("version", ""),
+            "implementation": python_data.get("implementation", ""),
+            "unimol": top_level_unimol,
+            "reinvent4": top_level_reinvent,
+        },
+    )
+
+
+def _environment_package_ready(
+    environment: Mapping[str, Any],
+    component: str,
+    entry: CompatibilityEntry,
+) -> bool:
+    package = environment.get(component, {})
+    return (
+        bool(environment.get("executable"))
+        and _python_matches(str(environment.get("version", "")))
+        and isinstance(package, Mapping)
+        and bool(package.get("installed"))
+        and bool(package.get("importable"))
+        and _version_matches(str(package.get("version", "")), entry.version)
+    )
+
+
+def _environment_summary(environment: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not environment:
+        return None
+    return {
+        "name": _clean_string(environment.get("name"), maximum=128),
+        "source": _clean_string(environment.get("source"), maximum=80),
+        "executable": _clean_string(environment.get("executable")),
+        "version": _clean_string(environment.get("version"), maximum=80),
+    }
 
 
 def _install_location(profile: EnvironmentProfile, entry: CompatibilityEntry) -> str:
@@ -985,28 +1347,73 @@ def match_environment(
     unimol = data.get("unimol", {})
     reinvent = data.get("reinvent4", {})
     weights = data.get("weights", {})
+    top_level_unimol = unimol if isinstance(unimol, Mapping) else {}
+    top_level_reinvent = reinvent if isinstance(reinvent, Mapping) else {}
     entries = {entry.component_id: entry for entry in catalog}
-    python_ready = bool(python_data.get("executable")) and _python_matches(
-        str(python_data.get("version", ""))
+    python_environments = _python_candidates(
+        python_data, top_level_unimol, top_level_reinvent
     )
-    unimol_ready = bool(unimol.get("installed")) and bool(unimol.get("importable")) and _version_matches(
-        str(unimol.get("version", "")), entries["unimol"].version
+    selected_python_environment = next(
+        (
+            environment
+            for environment in python_environments
+            if bool(environment.get("executable"))
+            and _python_matches(str(environment.get("version", "")))
+        ),
+        None,
     )
+    unimol_environment = next(
+        (
+            environment
+            for environment in python_environments
+            if _environment_package_ready(environment, "unimol", entries["unimol"])
+        ),
+        None,
+    )
+    reinvent_environment = next(
+        (
+            environment
+            for environment in python_environments
+            if _environment_package_ready(environment, "reinvent4", entries["reinvent4"])
+        ),
+        None,
+    )
+    python_ready = selected_python_environment is not None
+    unimol_ready = unimol_environment is not None
+    unimol = (
+        unimol_environment.get("unimol", {})
+        if unimol_environment is not None
+        else {}
+    )
+    reinvent = dict(
+        reinvent_environment.get("reinvent4", {})
+        if reinvent_environment is not None
+        else {}
+    )
+    reinvent["repositories"] = top_level_reinvent.get("repositories", ())
+    reinvent["license_present"] = bool(top_level_reinvent.get("license_present"))
     repositories = reinvent.get("repositories", ())
     reinvent_ready = (
-        bool(reinvent.get("installed"))
-        and bool(reinvent.get("importable"))
-        and _version_matches(str(reinvent.get("version", "")), entries["reinvent4"].version)
+        reinvent_environment is not None
         and _repository_ready(repositories if isinstance(repositories, Sequence) else ())
     )
     weights_ready = _weights_ready(weights, unimol_ready=unimol_ready)
     directory_ready = bool(disk.get("exists")) and bool(disk.get("writable"))
-    license_attention = bool(reinvent.get("installed")) and not bool(reinvent.get("license_present"))
+    license_attention = reinvent_environment is not None and not bool(
+        reinvent.get("license_present")
+    )
 
     reusable: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     if python_ready:
-        reusable.append({"component_id": "python", "name": "Python", "version": python_data.get("version", "")})
+        reusable.append(
+            {
+                "component_id": "python",
+                "name": "Python",
+                "version": selected_python_environment.get("version", ""),
+                "environment": _environment_summary(selected_python_environment),
+            }
+        )
     else:
         missing.append({"component_id": "python", "reason": "未找到兼容的 Python 3.10+ 解释器"})
     if isinstance(python_data.get("managers"), Mapping):
@@ -1015,11 +1422,25 @@ def match_environment(
             if isinstance(value, Mapping) and value.get("available"):
                 reusable.append({"component_id": manager, "name": manager.title(), "version": value.get("version", "")})
     if unimol_ready:
-        reusable.append({"component_id": "unimol", "name": "Uni-Mol", "version": unimol.get("version", "")})
+        reusable.append(
+            {
+                "component_id": "unimol",
+                "name": "Uni-Mol",
+                "version": unimol.get("version", ""),
+                "environment": _environment_summary(unimol_environment),
+            }
+        )
     else:
         missing.append({"component_id": "unimol", "reason": "未找到兼容的 Uni-Mol 版本"})
     if reinvent_ready:
-        reusable.append({"component_id": "reinvent4", "name": "REINVENT4", "version": reinvent.get("version", "")})
+        reusable.append(
+            {
+                "component_id": "reinvent4",
+                "name": "REINVENT4",
+                "version": reinvent.get("version", ""),
+                "environment": _environment_summary(reinvent_environment),
+            }
+        )
     else:
         missing.append({"component_id": "reinvent4", "reason": "未找到兼容的 REINVENT4 环境或仓库"})
     if weights_ready:
@@ -1114,8 +1535,23 @@ def match_environment(
             },
         ],
         "device_candidates": device_candidates,
+        "python_environments": [
+            {
+                **(_environment_summary(environment) or {}),
+                "unimol_compatible": _environment_package_ready(
+                    environment, "unimol", entries["unimol"]
+                ),
+                "reinvent4_compatible": _environment_package_ready(
+                    environment, "reinvent4", entries["reinvent4"]
+                ),
+            }
+            for environment in python_environments
+        ],
+        "selected_python_environment": _environment_summary(selected_python_environment),
+        "selected_unimol_environment": _environment_summary(unimol_environment),
+        "selected_reinvent4_environment": _environment_summary(reinvent_environment),
         "compatibility": {
-            "python": {"compatible": python_ready, "detected_version": python_data.get("version", ""), "required": "Python >=3.10"},
+            "python": {"compatible": python_ready, "detected_version": selected_python_environment.get("version", "") if selected_python_environment else python_data.get("version", ""), "required": "Python >=3.10"},
             "unimol": {"compatible": unimol_ready, "detected_version": unimol.get("version", ""), "required": entries["unimol"].version},
             "reinvent4": {"compatible": reinvent_ready and not license_attention, "detected_version": reinvent.get("version", ""), "required": entries["reinvent4"].version},
             "unimol-weights": {"compatible": weights_ready, "required": entries["unimol-weights"].version},
@@ -1169,8 +1605,8 @@ class EnvironmentDetector:
             str(profile.ssh_port),
             "-l",
             profile.ssh_user,
-            profile.ssh_target,
             "--",
+            profile.ssh_target,
             interpreter,
             "-",
         )
@@ -1234,10 +1670,22 @@ class EnvironmentManager:
             local_run_directory=self.store.root / "runtimes"
         )
 
+    def _current_detection(self, profile: EnvironmentProfile) -> dict[str, Any] | None:
+        detection = self.store.get_detection(profile.environment_ref)
+        if not isinstance(detection, Mapping):
+            return None
+        report = detection.get("report")
+        if not isinstance(report, Mapping) or (
+            report.get("environment_ref") != profile.environment_ref
+            or report.get("connection_digest") != profile.connection_digest
+        ):
+            return None
+        return dict(detection)
+
     def list_public(self) -> list[dict[str, Any]]:
         profiles = self.store.list_profiles()
         return [
-            profile.to_public_dict(detection=self.store.get_detection(profile.environment_ref))
+            profile.to_public_dict(detection=self._current_detection(profile))
             for profile in profiles
         ]
 
@@ -1246,7 +1694,7 @@ class EnvironmentManager:
 
     def get_public(self, environment_ref: str) -> dict[str, Any]:
         profile = self.store.get_profile(environment_ref)
-        detection = self.store.get_detection(environment_ref)
+        detection = self._current_detection(profile)
         return {
             "environment": profile.to_public_dict(detection=detection),
             "detection": detection,
@@ -1257,7 +1705,11 @@ class EnvironmentManager:
     def detect(self, environment_ref: str) -> dict[str, Any]:
         profile = self.store.get_profile(environment_ref)
         report = self.detector.detect(profile)
-        if not isinstance(report, EnvironmentReport) or report.environment_ref != profile.environment_ref:
+        if (
+            not isinstance(report, EnvironmentReport)
+            or report.environment_ref != profile.environment_ref
+            or report.connection_digest != profile.connection_digest
+        ):
             raise EnvironmentDetectionError("environment detector returned an invalid report")
         match = match_environment(profile, report)
         detection = {
@@ -1268,7 +1720,11 @@ class EnvironmentManager:
             "installation_enabled": False,
             "probe_names": list(READ_ONLY_PROBE_NAMES),
         }
-        self.store.save_detection(environment_ref, detection)
+        self.store.save_detection(
+            environment_ref,
+            detection,
+            expected_connection_digest=profile.connection_digest,
+        )
         detection["environment"] = profile.to_public_dict(detection=detection)
         return detection
 

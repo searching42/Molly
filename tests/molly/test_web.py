@@ -172,9 +172,10 @@ def test_environment_api_reports_read_only_detection_and_install_preview(tmp_pat
         )
         assert status == 200
         assert detected["read_only"] is True
-        assert detected["match"]["status"] == "READY"
+        assert detected["match"]["status"] == "PLAN_REQUIRED"
         assert detected["match"]["plan"]["will_execute"] is False
         assert detected["report"]["system"]["architecture"] == "x86_64"
+        assert detected["report"]["weights"]["verification_status"] == "pending"
         assert calls
         assert (root / "environment_reports.json").is_file()
     finally:

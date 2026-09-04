@@ -12,9 +12,11 @@ import pytest
 from molly.web.environments import (
     EnvironmentConfigStore,
     EnvironmentDetector,
+    EnvironmentDetectionError,
     EnvironmentManager,
     EnvironmentProfile,
     EnvironmentReport,
+    _default_runner,
     match_environment,
 )
 
@@ -102,7 +104,11 @@ def test_environment_profiles_validate_and_persist_without_private_keys(tmp_path
 
 def test_matching_prefers_reusable_environment_and_never_executes_install(tmp_path: Path) -> None:
     profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
-    report = EnvironmentReport.from_probe(profile, _probe_payload())
+    report = EnvironmentReport.from_probe(
+        profile,
+        _probe_payload(),
+        verified_weight_digests={"unimolv1.pt": "a" * 64},
+    )
     match = match_environment(profile, report)
 
     assert match["status"] == "READY"
@@ -151,14 +157,21 @@ def test_detector_uses_only_fixed_local_or_ssh_probe_transport(tmp_path: Path) -
     argv, script, _ = calls[1]
     assert argv[:5] == ("ssh", "-T", "-o", "BatchMode=yes", "-o")
     assert "-l" in argv and "researcher" in argv
-    assert "compute-alias" in argv and argv[-2:] == ("python3", "-")
+    assert "compute-alias" in argv
+    separator = argv.index("--")
+    assert separator < argv.index("compute-alias")
+    assert argv[separator + 2 :] == ("python3", "-")
     assert script is not None and b"nvidia-smi" in script
     assert all(item not in argv for item in ("sh -c", "sudo", "curl", "wget"))
 
 
 def test_environment_manager_persists_report_and_match(tmp_path: Path) -> None:
     profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
-    report = EnvironmentReport.from_probe(profile, _probe_payload())
+    report = EnvironmentReport.from_probe(
+        profile,
+        _probe_payload(),
+        verified_weight_digests={"unimolv1.pt": "a" * 64},
+    )
 
     class FakeDetector:
         def detect(self, value: EnvironmentProfile) -> EnvironmentReport:
@@ -174,3 +187,132 @@ def test_environment_manager_persists_report_and_match(tmp_path: Path) -> None:
     assert result["match"]["selected_candidate"] == "existing"
     restored = manager.get_public(saved.environment_ref)
     assert restored["detection"]["report"]["environment_ref"] == saved.environment_ref
+
+
+def test_python_packages_can_be_reused_from_independent_environments() -> None:
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+    payload = _probe_payload()
+    payload["python"] = {
+        **payload["python"],
+        "environments": [
+            {
+                "name": "unimol-env",
+                "source": "conda",
+                "executable": "/opt/conda/envs/unimol/bin/python",
+                "version": "3.11.9",
+                "implementation": "CPython",
+                "unimol": {
+                    "installed": True,
+                    "importable": True,
+                    "package": "unimol-tools",
+                    "version": "0.1.5",
+                },
+                "reinvent4": {
+                    "installed": False,
+                    "importable": False,
+                    "package": "",
+                    "version": "",
+                },
+            },
+            {
+                "name": "reinvent-env",
+                "source": "conda",
+                "executable": "/opt/conda/envs/reinvent/bin/python",
+                "version": "3.11.9",
+                "implementation": "CPython",
+                "unimol": {
+                    "installed": False,
+                    "importable": False,
+                    "package": "",
+                    "version": "",
+                },
+                "reinvent4": {
+                    "installed": True,
+                    "importable": True,
+                    "package": "reinvent4",
+                    "version": "4.7.15",
+                },
+            },
+        ],
+    }
+    report = EnvironmentReport.from_probe(
+        profile,
+        payload,
+        verified_weight_digests={"unimolv1.pt": "a" * 64},
+    )
+
+    match = match_environment(profile, report)
+
+    assert match["status"] == "READY"
+    assert match["selected_unimol_environment"]["name"] == "unimol-env"
+    assert match["selected_reinvent4_environment"]["name"] == "reinvent-env"
+
+
+def test_unverified_or_empty_model_weights_never_make_environment_ready() -> None:
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+    report = EnvironmentReport.from_probe(profile, _probe_payload())
+
+    assert report.data["weights"]["verification_status"] == "pending"
+    assert match_environment(profile, report)["status"] != "READY"
+
+    empty_payload = _probe_payload()
+    empty_payload["weights"] = {
+        "entries": [
+            {
+                "name": "unimol-not-a-model.pt",
+                "path": "/opt/weights/unimol-not-a-model.pt",
+                "size_bytes": 0,
+            }
+        ],
+        "total_bytes": 0,
+    }
+    empty_report = EnvironmentReport.from_probe(
+        profile,
+        empty_payload,
+        verified_weight_digests={"unimol-not-a-model.pt": "a" * 64},
+    )
+
+    assert empty_report.data["weights"]["entries"][0]["verification_status"] == "pending"
+    assert match_environment(profile, empty_report)["status"] != "READY"
+
+
+def test_environment_ref_and_report_binding_use_connection_digest() -> None:
+    first = EnvironmentProfile.from_payload(
+        {"mode": "ssh", "ssh_target": "c", "ssh_user": "a-b", "ssh_port": 22}
+    )
+    second = EnvironmentProfile.from_payload(
+        {"mode": "ssh", "ssh_target": "b-c", "ssh_user": "a", "ssh_port": 22}
+    )
+
+    assert first.environment_ref != second.environment_ref
+    assert first.connection_digest != second.connection_digest
+
+
+def test_detection_save_fails_if_profile_changes_during_probe(tmp_path: Path) -> None:
+    store = EnvironmentConfigStore(tmp_path / "runtime")
+    profile = store.upsert_profile({"mode": "local", "display_name": "本地"})
+    report = EnvironmentReport.from_probe(profile, _probe_payload())
+    detection = {"report": report.to_dict(), "match": {}}
+
+    changed = store.upsert_profile(
+        {"environment_ref": profile.environment_ref, "mode": "ssh", "ssh_target": "compute", "ssh_user": "researcher", "ssh_port": 22}
+    )
+
+    with pytest.raises(ValueError, match="connection"):
+        store.save_detection(
+            changed.environment_ref,
+            detection,
+            expected_connection_digest=profile.connection_digest,
+        )
+
+
+@pytest.mark.parametrize("stream", ("stdout", "stderr"))
+def test_probe_runner_limits_both_output_streams(stream: str) -> None:
+    code = (
+        "import sys; "
+        f"getattr(sys, {stream!r}).write('x' * (600 * 1024)); "
+        f"getattr(sys, {stream!r}).flush()"
+    )
+
+    with pytest.raises(EnvironmentDetectionError, match="safety limit"):
+        _default_runner((sys.executable, "-c", code), None, 5)

@@ -660,6 +660,8 @@ const renderEnvironmentDetection = (detection) => {
   const match = detection.match || {};
   const plan = match.plan || {};
   const managers = Object.entries(python.managers || {}).filter(([, value]) => value?.available);
+  const pythonEnvironments = match.python_environments || python.environments || [];
+  const compatiblePythonEnvironments = pythonEnvironments.filter((item) => item.unimol_compatible || item.reinvent4_compatible);
   const devices = (gpu.devices || []).map((device) => `${device.name || "GPU"} · ${formatBytes(Number(device.memory_mib || 0) * 1024 * 1024)} 显存`).join("；") || "未检测到 GPU";
   const repositories = (reinvent.repositories || []).filter((item) => item.exists).map((item) => item.path).join("；") || "未找到 REINVENT4 仓库";
   const reusable = (match.reusable || []).map((item) => `<li>${html(item.name)}${item.version ? ` · ${html(item.version)}` : ""}</li>`).join("") || "暂无可复用组件";
@@ -675,9 +677,9 @@ const renderEnvironmentDetection = (detection) => {
     <div class="environment-report-grid">
       <div class="environment-component"><strong>系统与磁盘</strong><span>${html(system.os || "未知")} · ${html(system.architecture || "未知")}</span><span>可用磁盘：${formatBytes(disk.available_bytes || 0)}</span><span>${disk.writable ? "运行目录可写" : disk.parent_writable ? "运行目录待创建" : "运行目录不可写"}</span></div>
       <div class="environment-component"><strong>GPU / CUDA</strong><span>${html(devices)}</span><span>${gpu.cuda?.available ? `CUDA：${html(gpu.cuda.version || "已检测到")}` : "CUDA 未确认"}</span></div>
-      <div class="environment-component"><strong>Python 环境</strong><span>${html(python.version || "未检测到 Python")} · ${html(python.implementation || "")}</span><span>${managers.length ? `工具：${html(managers.map(([name]) => name).join("、"))}` : "未检测到 Conda/Mamba/uv"}</span></div>
+      <div class="environment-component"><strong>Python 环境</strong><span>${pythonEnvironments.length ? `已枚举 ${html(pythonEnvironments.length)} 个独立解释器` : html(python.version || "未检测到 Python")} · ${html(python.implementation || "")}</span><span>${managers.length ? `工具：${html(managers.map(([name]) => name).join("、"))}` : "未检测到 Conda/Mamba/uv"}</span><span>${compatiblePythonEnvironments.length ? `可复用组件分布在 ${html(compatiblePythonEnvironments.length)} 个环境中` : "未找到兼容组件环境"}</span></div>
       <div class="environment-component"><strong>科学组件</strong><span>Uni-Mol：${unimol.installed ? html(unimol.version || "已安装") : "未安装"}</span><span>REINVENT4：${reinvent.installed ? html(reinvent.version || "已安装") : "未安装"}</span><span>${html(repositories)}</span></div>
-      <div class="environment-component"><strong>模型权重</strong><span>${weights.entries?.length ? `${html(weights.entries.length)} 个候选文件 · ${formatBytes(weights.total_bytes || 0)}` : "未找到候选权重"}</span><span>版本兼容性由固定清单匹配</span></div>
+      <div class="environment-component"><strong>模型权重</strong><span>${weights.entries?.length ? `${html(weights.entries.length)} 个候选文件 · ${formatBytes(weights.total_bytes || 0)}` : "未找到候选权重"}</span><span>${weights.verification_status === "verified" ? "已完成固定清单哈希验证" : "候选文件待固定清单哈希验证，不能直接复用"}</span></div>
       <div class="environment-component"><strong>执行建议</strong><span>${html(match.selected_candidate === "existing" ? "优先复用现有环境" : "需要先准备隔离环境")}</span><span>使用：${html(match.selected_device || "CPU")}</span></div>
     </div>
     <div class="environment-match">
