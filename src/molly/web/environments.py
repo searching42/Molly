@@ -818,11 +818,11 @@ _PROBE_SCRIPT = dedent(
 
     threading.Thread(target=enforce_probe_deadline, daemon=True).start()
 
-    def bounded_command(path, args=("--version",), timeout=5):
+    def bounded_command(path, args=("--version",), timeout=5, env=None):
         try:
             process = subprocess.Popen(
                 [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                shell=False, close_fds=True, start_new_session=(os.name == "posix"),
+                shell=False, close_fds=True, start_new_session=(os.name == "posix"), env=env,
             )
         except OSError:
             return 1, ""
@@ -973,7 +973,26 @@ _PROBE_SCRIPT = dedent(
     def add_environment_python(candidates, seen, environment, source):
         root = Path(str(environment)).expanduser()
         add_python_candidate(candidates, seen, root / "bin" / "python", source)
+        add_python_candidate(candidates, seen, root / "bin" / "python3", source)
         add_python_candidate(candidates, seen, root / "Scripts" / "python.exe", source)
+
+    runtime_root_value = os.environ.get("MOLLY_PROBE_RUN_DIRECTORY", "").strip()
+    runtime_root = Path(runtime_root_value).expanduser() if runtime_root_value else None
+    runtime_probe_env = None
+    if runtime_root is not None:
+        runtime_pythonpath = [
+            runtime_root,
+            runtime_root / "python",
+            runtime_root / "unimol",
+            runtime_root / "reinvent4",
+        ]
+        runtime_pythonpath = [str(path) for path in runtime_pythonpath if path.is_dir()]
+        if runtime_pythonpath:
+            runtime_probe_env = os.environ.copy()
+            existing_pythonpath = runtime_probe_env.get("PYTHONPATH", "")
+            runtime_probe_env["PYTHONPATH"] = os.pathsep.join(
+                runtime_pythonpath + ([existing_pythonpath] if existing_pythonpath else [])
+            )
 
     python_candidates = []
     python_seen = set()
@@ -985,6 +1004,15 @@ _PROBE_SCRIPT = dedent(
         if value:
             add_environment_python(python_candidates, python_seen, value, variable)
     add_environment_python(python_candidates, python_seen, Path.cwd() / ".venv", "project .venv")
+    if runtime_root is not None:
+        for candidate_root in (
+            runtime_root,
+            runtime_root / "python",
+            runtime_root / ".venv",
+            runtime_root / "unimol",
+            runtime_root / "reinvent4",
+        ):
+            add_environment_python(python_candidates, python_seen, candidate_root, "runtime directory")
 
     for manager_name in ("conda", "mamba", "micromamba"):
         manager_path = shutil.which(manager_name)
@@ -1016,7 +1044,13 @@ _PROBE_SCRIPT = dedent(
 
     python_environments = []
     for path, source in python_candidates[:32]:
-        returncode, output = bounded_command(path, ("-c", PYTHON_ENVIRONMENT_PROBE), timeout=8)
+        probe_env = runtime_probe_env if source == "runtime directory" else None
+        returncode, output = bounded_command(
+            path,
+            ("-c", PYTHON_ENVIRONMENT_PROBE),
+            timeout=8,
+            env=probe_env,
+        )
         if returncode != 0:
             continue
         try:
@@ -1040,6 +1074,8 @@ _PROBE_SCRIPT = dedent(
             "/opt/REINVENT4",
             "/opt/reinvent4",
         ]
+        if runtime_root is not None:
+            values.extend((str(runtime_root / "REINVENT4"), str(runtime_root / "reinvent4")))
         result = []
         seen = set()
         for raw in values:
@@ -1129,6 +1165,10 @@ _PROBE_SCRIPT = dedent(
         "nvidia_smi": command("nvidia-smi", ("--version",)),
     }
 
+    if runtime_root is not None:
+        for package_root in (runtime_root, runtime_root / "unimol", runtime_root / "reinvent4"):
+            if package_root.is_dir() and str(package_root) not in sys.path:
+                sys.path.insert(0, str(package_root))
     python_tools = {name: command(name) for name in ("python", "python3", "conda", "mamba", "micromamba", "uv")}
     unimol = distribution(("unimol-tools", "unimol_tools"))
     unimol["importable"] = importable("unimol_tools")

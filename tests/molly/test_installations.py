@@ -139,7 +139,12 @@ class _FixedDetector:
                             "sha256": item["sha256"],
                             "size_bytes": item.get("size_bytes", 0),
                         }
-        trusted_weights.update(verified_weight_records or {})
+        for raw_path, record in (verified_weight_records or {}).items():
+            target_path = Path(runtime_directory).expanduser() / "weights" / Path(raw_path).name
+            for item in weights.get("entries", ()):
+                if isinstance(item, dict) and item.get("name") == target_path.name:
+                    item["size_bytes"] = record.get("size_bytes", item.get("size_bytes"))
+            trusted_weights[str(target_path)] = record
         return EnvironmentReport.from_probe(
             profile,
             payload,
@@ -332,6 +337,44 @@ def test_post_install_match_is_required_and_runtime_binds_reused_components(
     assert negative["runtime_config"] is None
 
 
+def test_manifest_weight_evidence_is_bound_to_staging_and_manifest(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"manifest-bound-original")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    base = RestrictedInstallExecutor()
+
+    class TamperBeforeFinalize:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            stage = Path(str(args[2]))
+            (stage / "weights" / "unimolv1.pt").write_bytes(b"manifest-bound-tampered")
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+
+        def rollback(self, *args: object, **kwargs: object) -> None:
+            base.rollback(*args, **kwargs)  # type: ignore[arg-type]
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=TamperBeforeFinalize(),  # type: ignore[arg-type]
+    )
+    plan = installer.build_plan(environment_ref)
+
+    result = installer.confirm(_approval(plan))
+
+    assert result["installation"]["state"] == "FAILED"
+    assert result["runtime_config"] is None
+    assert not (tmp_path / "runtime" / "runtimes" / plan.runtime_id).exists()
+
+
 def test_compatible_confirmation_recovery_reuses_persisted_config_digest(
     tmp_path: Path,
 ) -> None:
@@ -360,6 +403,35 @@ def test_compatible_confirmation_recovery_reuses_persisted_config_digest(
     assert recovered.config_digest == saved.config_digest
 
 
+def test_config_persist_error_after_replace_keeps_enabled_runtime(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"persist-after-enable")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = first.build_plan(environment_ref)
+    original_save = first.store.save_runtime_config
+
+    def save_then_raise(config: object) -> None:
+        original_save(config)  # type: ignore[arg-type]
+        raise OSError("fsync failed after atomic replace")
+
+    first.store.save_runtime_config = save_then_raise  # type: ignore[method-assign]
+    result = first.confirm(_approval(plan))
+
+    target = tmp_path / "runtime" / "runtimes" / plan.runtime_id
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert target.is_dir()
+    saved = first.store.get_runtime_config(environment_ref)
+    assert saved is not None and saved.state == "CONFIRMED"
+    assert saved.target_directory == str(target.absolute())
+
+
 def test_invalidated_runtime_allows_a_new_confirmation_transaction(tmp_path: Path) -> None:
     environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
     installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
@@ -377,6 +449,47 @@ def test_invalidated_runtime_allows_a_new_confirmation_transaction(tmp_path: Pat
     assert second["installation"]["state"] == "CONFIRMED"
     assert second["runtime_config"]["status_label"] == "已确认"
     assert second["runtime_config"]["runtime_id"] != first_config.runtime_id
+
+
+def test_invalidated_installed_runtime_reprobes_its_existing_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"reconfirm-installed-runtime")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    first_plan = installer.build_plan(environment_ref)
+    first = installer.confirm(_approval(first_plan))
+    assert first["installation"]["state"] == "CONFIRMED"
+    first_config = installer.store.get_runtime_config(environment_ref)
+    assert first_config is not None
+    target = Path(first_config.target_directory)
+    assert target.is_dir()
+    installer.store.mark_runtime_invalidated(first_config.runtime_id)
+
+    negative_payload = _probe_payload()
+    negative_payload["weights"] = {"entries": [], "total_bytes": 0}
+    detector = environment_manager.detector
+    detector.report = EnvironmentReport.from_probe(  # type: ignore[attr-defined]
+        environment_manager.store.get_profile(environment_ref),
+        negative_payload,
+    )
+    second_plan = installer.build_plan(environment_ref)
+    assert second_plan.status == "READY_TO_CONFIRM"
+    assert second_plan.target_directory == str(target)
+
+    second = installer.confirm(_approval(second_plan))
+
+    assert second["installation"]["state"] == "CONFIRMED"
+    assert second["runtime_config"]["status_label"] == "已确认"
+    second_config = installer.store.get_runtime_config(environment_ref)
+    assert second_config is not None
+    assert second_config.target_directory == str(target)
+    assert target.is_dir()
 
 
 def test_installable_manifest_rejects_zero_resource_estimates(tmp_path: Path) -> None:
@@ -649,17 +762,44 @@ def test_simulated_ssh_uses_fixed_remote_transport(tmp_path: Path) -> None:
     source.write_bytes(b"remote-fixed")
     environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
     calls: list[tuple[tuple[str, ...], bytes | None]] = []
+    evidence = {
+        "component_id": "unimol-weights",
+        "path": "/remote/weights/unimolv1.pt",
+        "size_bytes": len(source.read_bytes()),
+        "sha256": sha256_bytes(source.read_bytes()),
+    }
 
     def runner(argv: Sequence[str], input_bytes: bytes | None, _timeout: float) -> tuple[int, bytes]:
         calls.append((tuple(argv), input_bytes))
         assert input_bytes is not None
         if b'"operation":"finalize"' in input_bytes:
-            return 0, b'{"ok":true,"state":"ENABLED","target_exists":true}'
+            return 0, json.dumps(
+                {"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": [evidence]},
+                separators=(",", ":"),
+            ).encode("utf-8")
         if b'"operation":"status"' in input_bytes:
             state = b"ENABLED" if len(calls) >= 4 else b"VERIFIED"
             target_exists = b"true" if state == b"ENABLED" else b"false"
-            return 0, b'{"ok":true,"state":"' + state + b'","verified":true,"target_exists":' + target_exists + b'}'
-        return 0, b'{"ok":true,"verified":true,"state":"VERIFIED","target_exists":false}'
+            return 0, json.dumps(
+                {
+                    "ok": True,
+                    "state": state.decode("ascii"),
+                    "verified": True,
+                    "target_exists": target_exists == b"true",
+                    "verified_files": [evidence],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        return 0, json.dumps(
+            {
+                "ok": True,
+                "verified": True,
+                "state": "VERIFIED",
+                "target_exists": False,
+                "verified_files": [evidence],
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
 
     executor = RestrictedInstallExecutor(runner=runner)
     installer = InstallationManager(

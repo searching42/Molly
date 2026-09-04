@@ -239,6 +239,68 @@ def test_real_runtime_probe_applies_verified_weight_evidence(tmp_path: Path) -> 
     assert report.data["weights"]["verification_status"] == "verified"
 
 
+def test_real_runtime_probe_discovers_isolated_python_and_reinvent_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = tmp_path / "runtime"
+    python = runtime / "bin" / "python"
+    unimol_root = runtime / "unimol"
+    reinvent_root = runtime / "reinvent4"
+    (unimol_root / "unimol_tools").mkdir(parents=True)
+    (unimol_root / "unimol_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (unimol_root / "unimol_tools-0.1.5.dist-info").mkdir()
+    (unimol_root / "unimol_tools-0.1.5.dist-info" / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: unimol-tools\nVersion: 0.1.5\n",
+        encoding="utf-8",
+    )
+    (reinvent_root / "reinvent").mkdir(parents=True)
+    (reinvent_root / "reinvent" / "__init__.py").write_text("", encoding="utf-8")
+    (reinvent_root / "reinvent4-4.7.15.dist-info").mkdir()
+    (reinvent_root / "reinvent4-4.7.15.dist-info" / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: reinvent4\nVersion: 4.7.15\n",
+        encoding="utf-8",
+    )
+    (reinvent_root / "pyproject.toml").write_text(
+        "[project]\nname = 'reinvent4'\nversion = '4.7.15'\n",
+        encoding="utf-8",
+    )
+    python.parent.mkdir(parents=True, exist_ok=True)
+    python.symlink_to(sys.executable)
+    monkeypatch.setenv("REINVENT4_LICENSE", "fixture-license")
+    weight = runtime / "weights" / "unimolv1.pt"
+    weight.parent.mkdir(parents=True)
+    payload = b"isolated runtime weight"
+    weight.write_bytes(payload)
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+
+    report = EnvironmentDetector(timeout_seconds=30).detect_for_runtime(
+        profile,
+        runtime,
+        verified_weight_records={
+            str(weight): {
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        },
+    )
+    match = match_environment(profile, report)
+
+    environments = report.data["python"]["environments"]
+    runtime_environment = next(
+        item for item in environments if item["executable"] == str(python)
+    )
+    assert runtime_environment["unimol"]["version"] == "0.1.5"
+    assert runtime_environment["reinvent4"]["version"] == "4.7.15"
+    assert any(
+        item["path"] == str(reinvent_root) and item["config"]
+        for item in report.data["reinvent4"]["repositories"]
+    )
+    assert match["status"] == "READY"
+    assert match["selected_unimol_environment"]["executable"] == str(python)
+    assert match["selected_reinvent4_environment"]["executable"] == str(python)
+
+
 def test_environment_manager_persists_report_and_match(tmp_path: Path) -> None:
     profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
     report = EnvironmentReport.from_probe(

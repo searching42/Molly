@@ -1926,7 +1926,7 @@ def main(request):
             raise ValueError("remote transaction is not ready to finalize")
         if target_exists and not stage.exists():
             write_state(transaction_id, {**state, "state": "ENABLED"})
-            print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True}, separators=(",", ":")))
+            print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
         if target.exists() or target.is_symlink() or not stage.is_dir() or stage.is_symlink():
             raise ValueError("remote runtime target or staging directory is unsafe")
@@ -2029,6 +2029,7 @@ class RestrictedInstallExecutor:
                 "transport_verified": True,
                 "remote_state": remote_state,
                 "target_exists": bool(status.get("target_exists")),
+                "verified_files": thaw_json(status.get("verified_files", [])),
             }
         stage = Path(stage_directory)
         for entry in plan.entries:
@@ -2626,6 +2627,7 @@ class InstallationManager:
         verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[EnvironmentReport, Mapping[str, Any]]:
         detector = self.environment_manager.detector
+        detector_applied_weight_records = False
         if runtime_directory is not None:
             detect_for_runtime = getattr(detector, "detect_for_runtime", None)
             if callable(detect_for_runtime):
@@ -2637,6 +2639,7 @@ class InstallationManager:
                     parameter.kind is inspect.Parameter.VAR_KEYWORD
                     for parameter in parameters.values()
                 )
+                detector_applied_weight_records = accepts_records
                 report = (
                     detect_for_runtime(
                         profile,
@@ -2654,7 +2657,7 @@ class InstallationManager:
             raise InstallationIntegrityError("安装后重新探测没有返回有效报告")
         if report.connection_digest != profile.connection_digest:
             raise InstallationIntegrityError("安装后重新探测未绑定当前连接")
-        if verified_weight_records:
+        if verified_weight_records and not detector_applied_weight_records:
             report = EnvironmentReport.from_probe(
                 profile,
                 report.to_dict(include_digest=False),
@@ -2669,6 +2672,8 @@ class InstallationManager:
         plan: InstallPlan,
         runtime_directory: str | Path,
         result: Mapping[str, Any],
+        *,
+        expected_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Build trusted weight evidence for the target-aware re-probe.
 
@@ -2704,30 +2709,64 @@ class InstallationManager:
                         "size_bytes": size,
                         "sha256": digest,
                     }
-            return records
+        else:
+            raw_files = result.get("verified_files", ()) if isinstance(result, Mapping) else ()
+            if isinstance(raw_files, Sequence) and not isinstance(
+                raw_files, (str, bytes, bytearray)
+            ):
+                for raw in raw_files:
+                    if not isinstance(raw, Mapping) or raw.get("component_id") != "unimol-weights":
+                        continue
+                    path = raw.get("path")
+                    if not isinstance(path, str) or not path:
+                        continue
+                    try:
+                        digest = validate_sha256(raw.get("sha256"), field="verified weight digest")
+                        size = _bounded_int(
+                            raw.get("size_bytes"),
+                            field="verified weight size",
+                            minimum=1,
+                            maximum=MAX_EXTRACTED_FILE_BYTES,
+                        )
+                    except InstallationError:
+                        continue
+                    records[path] = {"size_bytes": size, "sha256": digest}
 
-        raw_files = result.get("verified_files", ()) if isinstance(result, Mapping) else ()
-        if not isinstance(raw_files, Sequence) or isinstance(
-            raw_files, (str, bytes, bytearray)
-        ):
-            return records
-        for raw in raw_files:
-            if not isinstance(raw, Mapping) or raw.get("component_id") != "unimol-weights":
-                continue
-            path = raw.get("path")
-            if not isinstance(path, str) or not path:
-                continue
-            try:
-                digest = validate_sha256(raw.get("sha256"), field="verified weight digest")
-                size = _bounded_int(
-                    raw.get("size_bytes"),
-                    field="verified weight size",
-                    minimum=1,
-                    maximum=MAX_EXTRACTED_FILE_BYTES,
+        if expected_records:
+            expected_fingerprint = sorted(
+                (
+                    validate_sha256(item.get("sha256"), field="expected weight digest"),
+                    _bounded_int(
+                        item.get("size_bytes"),
+                        field="expected weight size",
+                        minimum=1,
+                        maximum=MAX_EXTRACTED_FILE_BYTES,
+                    ),
                 )
-            except InstallationError:
+                for item in expected_records.values()
+                if isinstance(item, Mapping)
+            )
+            actual_fingerprint = sorted(
+                (item["sha256"], int(item["size_bytes"]))
+                for item in records.values()
+            )
+            if not expected_fingerprint or actual_fingerprint != expected_fingerprint:
+                raise InstallationIntegrityError(
+                    "最终权重证据与 staging 摘要不一致"
+                )
+
+        for entry in weight_entries:
+            if entry.install_kind != "file":
                 continue
-            records[path] = {"size_bytes": size, "sha256": digest}
+            expected = (entry.sha256, entry.estimated_download_bytes)
+            actual = sorted(
+                (item["sha256"], int(item["size_bytes"]))
+                for item in records.values()
+            )
+            if actual and actual != [expected]:
+                raise InstallationIntegrityError(
+                    "权重证据与固定 manifest 摘要或大小不一致"
+                )
         return records
 
     def _persist_reprobe(
@@ -2796,6 +2835,63 @@ class InstallationManager:
                 "runtime_config": existing_runtime.to_dict(public=True),
                 "idempotent_replay": True,
             }
+        # An installed runtime can be invalidated by a later report/catalog
+        # check and then legitimately re-confirmed.  In that case the old
+        # target is the candidate being confirmed; probing the ordinary
+        # connection would inspect the host's default environment instead and
+        # could lose the isolated runtime's component evidence.  Keep the
+        # target and its verified weight evidence only when the connection and
+        # fixed catalog still match.  Missing or stale evidence deliberately
+        # remains empty so the target-aware probe can only produce
+        # ``PLAN_REQUIRED``, never a false confirmation.
+        previous_runtime_directory: str | Path | None = None
+        previous_weight_records: dict[str, dict[str, Any]] = {}
+        persisted_config = self.store.get_runtime_config(plan.environment_ref)
+        if (
+            persisted_config is not None
+            and persisted_config.state == "INVALIDATED"
+            and persisted_config.connection_digest == profile.connection_digest
+            and persisted_config.catalog_digest == self.manifest.digest
+            and persisted_config.target_directory
+        ):
+            previous_runtime_directory = persisted_config.target_directory
+            try:
+                previous_record = self.store.get_installation(
+                    persisted_config.installation_id
+                )
+                previous_plan = self.store.get_plan(previous_record.plan_id)
+                previous_expected = (
+                    previous_record.verification.get("verified_weight_records")
+                    if isinstance(previous_record.verification, Mapping)
+                    else None
+                )
+                expected_records = (
+                    thaw_json(previous_expected)
+                    if isinstance(previous_expected, Mapping)
+                    else None
+                )
+                previous_result = (
+                    previous_record.verification.get("install_result", {})
+                    if isinstance(previous_record.verification, Mapping)
+                    else {}
+                )
+                if profile.mode == "ssh":
+                    previous_result = self.executor.verify(
+                        profile,
+                        previous_plan,
+                        previous_record.stage_directory,
+                        previous_result,
+                        transaction_id=previous_record.installation_id,
+                    )
+                previous_weight_records = self._verified_weight_records(
+                    profile,
+                    previous_plan,
+                    previous_runtime_directory,
+                    previous_result,
+                    expected_records=expected_records,
+                )
+            except InstallationError:
+                previous_weight_records = {}
         record, created = self.store.claim_approval(plan)
         if record.state == "CONFIRMED":
             config = self.store.get_runtime_config(plan.environment_ref)
@@ -2817,6 +2913,14 @@ class InstallationManager:
                 "idempotent_replay": True,
             }
         try:
+            if (
+                previous_runtime_directory is not None
+                and record.target_directory != str(previous_runtime_directory)
+            ):
+                record = self._update(
+                    record,
+                    target_directory=str(previous_runtime_directory),
+                )
             # The original report is still the approval binding.  The new
             # report is the runtime's post-confirmation binding.
             current_profile, current_report, current_match = self._current_binding(plan.environment_ref)
@@ -2832,6 +2936,12 @@ class InstallationManager:
                 and persisted_reprobe.get("report_digest") == current_report.report_digest
             ):
                 reprobe, reprobe_match = current_report, current_match
+            elif previous_runtime_directory is not None:
+                reprobe, reprobe_match = self._reprobe(
+                    profile,
+                    runtime_directory=previous_runtime_directory,
+                    verified_weight_records=previous_weight_records,
+                )
             else:
                 reprobe, reprobe_match = self._reprobe(profile)
             runtime_components = _runtime_components_from_match(reprobe_match)
@@ -3027,16 +3137,18 @@ class InstallationManager:
         runtime_directory: str | Path = (
             str(target) if profile.mode == "local" else plan.target_directory
         )
+        expected_weight_records: Mapping[str, Mapping[str, Any]] | None = None
+        if isinstance(record.verification, Mapping):
+            persisted_weight_records = record.verification.get("verified_weight_records")
+            if isinstance(persisted_weight_records, Mapping):
+                expected_weight_records = thaw_json(persisted_weight_records)
         weight_records = self._verified_weight_records(
             profile,
             plan,
             runtime_directory,
             final_result,
+            expected_records=expected_weight_records,
         )
-        if not weight_records and isinstance(record.verification, Mapping):
-            persisted_weight_records = record.verification.get("verified_weight_records")
-            if isinstance(persisted_weight_records, Mapping):
-                weight_records = thaw_json(persisted_weight_records)
         reprobe, reprobe_match = self._reprobe(
             profile,
             runtime_directory=runtime_directory,
@@ -3211,6 +3323,7 @@ class InstallationManager:
                 plan,
                 final_runtime_directory,
                 final_result,
+                expected_records=stage_weight_records,
             )
             final_reprobe, final_match = self._reprobe(
                 profile,
@@ -3259,6 +3372,15 @@ class InstallationManager:
             # resume the APPROVED/INSTALLING transaction from its stage.
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
+            if profile is not None:
+                committed = self._reconcile_committed_runtime(
+                    record,
+                    plan,
+                    profile,
+                    stage_directory,
+                )
+                if committed is not None:
+                    return committed
             return self._fail_record(
                 record,
                 plan,
@@ -3288,6 +3410,143 @@ class InstallationManager:
     def _update(self, record: InstallationRecord, **changes: Any) -> InstallationRecord:
         updated = replace(record, **changes, revision=record.revision + 1, updated_at=utc_timestamp())
         return self.store.update_installation(updated, expected_revision=record.revision)
+
+    def _reconcile_committed_runtime(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        profile: EnvironmentProfile,
+        stage_directory: str,
+    ) -> InstallationRecord | None:
+        """Reconcile an ambiguous exception after RuntimeConfig was committed.
+
+        ``save_runtime_config`` is an atomic write, but a filesystem error can
+        be raised after the replacement reached disk.  Once a matching config
+        exists, deleting the enabled target would create a confirmed pointer
+        to nothing.  Keep the target and either complete the installation or
+        leave it in ``ENABLING`` for the normal recovery endpoint.
+        """
+
+        try:
+            config = self.store.get_runtime_config(plan.environment_ref)
+        except InstallationError:
+            return None
+        if config is None or config.state != "CONFIRMED":
+            return None
+        if (
+            config.runtime_id != plan.runtime_id
+            or config.installation_id != record.installation_id
+            or config.plan_digest != plan.plan_digest
+            or config.connection_digest != plan.connection_digest
+            or config.catalog_digest != plan.catalog_digest
+        ):
+            return None
+
+        current = self.store.get_installation(record.installation_id)
+        final_reprobe = (
+            current.verification.get("final_reprobe")
+            if isinstance(current.verification, Mapping)
+            else None
+        )
+        if (
+            not isinstance(final_reprobe, Mapping)
+            or config.report_digest != final_reprobe.get("report_digest")
+        ):
+            return None
+        expected_target = (
+            str((self.root / "runtimes" / plan.runtime_id).absolute())
+            if profile.mode == "local"
+            else plan.target_directory
+        )
+        if config.target_directory != expected_target:
+            return None
+        expected_records: Mapping[str, Mapping[str, Any]] | None = None
+        if isinstance(current.verification, Mapping):
+            persisted_records = current.verification.get("verified_weight_records")
+            if isinstance(persisted_records, Mapping):
+                expected_records = thaw_json(persisted_records)
+
+        def invalidate_config() -> None:
+            try:
+                self.store.mark_runtime_invalidated(config.runtime_id)
+            except InstallationError:
+                pass
+
+        target_exists = False
+        if profile.mode == "local":
+            target = self.root / "runtimes" / plan.runtime_id
+            target_exists = target.is_dir() and not target.is_symlink()
+            if not target_exists:
+                invalidate_config()
+                return None
+            try:
+                self._verified_weight_records(
+                    profile,
+                    plan,
+                    target,
+                    (
+                        current.verification.get("install_result", {})
+                        if isinstance(current.verification, Mapping)
+                        else {}
+                    ),
+                    expected_records=expected_records,
+                )
+            except InstallationError:
+                invalidate_config()
+                return None
+        else:
+            try:
+                status = self.executor.verify(
+                    profile,
+                    plan,
+                    stage_directory,
+                    (
+                        current.verification.get("install_result", {})
+                        if isinstance(current.verification, Mapping)
+                        else {}
+                    ),
+                    transaction_id=record.installation_id,
+                )
+                target_exists = (
+                    status.get("remote_state") == "ENABLED"
+                    and bool(status.get("target_exists"))
+                )
+                if target_exists:
+                    self._verified_weight_records(
+                        profile,
+                        plan,
+                        plan.target_directory,
+                        status,
+                        expected_records=expected_records,
+                    )
+            except Exception:
+                target_exists = False
+
+        if profile.mode == "ssh" and not target_exists:
+            # A remote status failure is ambiguous: do not delete a target we
+            # could not inspect, but never leave a public confirmed pointer
+            # while its existence/evidence is unknown.  ENABLING remains
+            # recoverable through the normal status/finalize path.
+            invalidate_config()
+
+        if target_exists:
+            if current.state != "CONFIRMED":
+                current = self._update(
+                    current,
+                    state="CONFIRMED",
+                    side_effects_started=True,
+                    worker_pid=0,
+                )
+            return current
+
+        if current.state != "ENABLING":
+            current = self._update(
+                current,
+                state="ENABLING",
+                side_effects_started=True,
+                worker_pid=0,
+            )
+        return current
 
     def _fail_record(
         self,
@@ -3330,12 +3589,22 @@ class InstallationManager:
             profile, report, _ = self._current_binding(environment_ref)
         except InstallationError:
             return self.store.mark_runtime_invalidated(config.runtime_id)
+        local_target_missing = (
+            profile.mode == "local"
+            and config.target_directory
+            == str((self.root / "runtimes" / config.runtime_id).absolute())
+            and (
+                not Path(config.target_directory).is_dir()
+                or Path(config.target_directory).is_symlink()
+            )
+        )
         if (
             config.state != "CONFIRMED"
             or config.connection_digest != profile.connection_digest
             or config.report_digest != report.report_digest
             or config.catalog_version != self.manifest.catalog_version
             or config.catalog_digest != self.manifest.digest
+            or local_target_missing
         ):
             return self.store.mark_runtime_invalidated(config.runtime_id)
         return config
