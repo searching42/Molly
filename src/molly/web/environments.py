@@ -645,11 +645,10 @@ def _default_runner(
             else:
                 try:
                     process.kill()
-                except ProcessLookupError:
+                except (OSError, ProcessLookupError):
                     pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=0.75)
-                return
             except asyncio.TimeoutError:
                 pass
             if os.name == "posix":
@@ -660,12 +659,12 @@ def _default_runner(
                 except OSError:
                     try:
                         process.kill()
-                    except ProcessLookupError:
+                    except (OSError, ProcessLookupError):
                         pass
             else:
                 try:
                     process.kill()
-                except ProcessLookupError:
+                except (OSError, ProcessLookupError):
                     pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=1.0)

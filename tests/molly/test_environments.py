@@ -473,3 +473,32 @@ def test_outer_probe_timeout_cleans_inner_process_groups(
     while time.monotonic() < deadline and not marker.exists():
         time.sleep(0.05)
     assert not marker.exists()
+
+
+def test_outer_timeout_kills_same_group_descendant_after_leader_exits(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("process-group cleanup is covered on POSIX probe hosts")
+    marker = tmp_path / "probe-descendant-marker"
+    child_code = (
+        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(2); "
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('survived')"
+    )
+    leader_code = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+        "sys.stdout.close(); sys.stderr.close()"
+    )
+
+    try:
+        with pytest.raises(EnvironmentDetectionError, match="timed out"):
+            _default_runner((sys.executable, "-c", leader_code), None, 1)
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline and not marker.exists():
+            time.sleep(0.05)
+        assert not marker.exists()
+    finally:
+        if marker.exists():
+            marker.unlink()
