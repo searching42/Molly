@@ -468,14 +468,34 @@ class EnvironmentConfigStore:
     def upsert_profile(self, payload: Mapping[str, Any]) -> EnvironmentProfile:
         with self._write_lock():
             profiles = self._read_profiles()
-            requested_ref = payload.get("environment_ref") if isinstance(payload, Mapping) else None
+            if not isinstance(payload, Mapping):
+                raise EnvironmentConfigError("environment profile must be an object")
+            raw_requested_ref = payload.get("environment_ref")
+            requested_ref = raw_requested_ref if raw_requested_ref not in (None, "") else None
+            if requested_ref is not None and not isinstance(requested_ref, str):
+                raise EnvironmentConfigError("unknown environment profile ID")
             existing = profiles.get(requested_ref) if isinstance(requested_ref, str) else None
+            if requested_ref is not None and existing is None:
+                raise EnvironmentConfigError("unknown environment profile ID")
             profile = EnvironmentProfile.from_payload(
                 payload,
                 environment_ref=existing.environment_ref if existing else requested_ref,
                 created_at=existing.created_at if existing else None,
             )
             migrated_from: str | None = None
+            duplicate = next(
+                (
+                    candidate
+                    for candidate in profiles.values()
+                    if candidate.environment_ref != (existing.environment_ref if existing else "")
+                    and candidate.connection_digest == profile.connection_digest
+                ),
+                None,
+            )
+            if duplicate is not None:
+                raise EnvironmentConfigError(
+                    "an environment profile for this connection already exists"
+                )
             if existing is not None and existing.connection_digest != profile.connection_digest:
                 migrated_ref = _profile_ref(
                     profile.mode,
@@ -659,6 +679,7 @@ _PROBE_SCRIPT = dedent(
     from pathlib import Path
     import platform
     import selectors
+    import signal
     import shutil
     import subprocess
     import sys
@@ -674,7 +695,7 @@ _PROBE_SCRIPT = dedent(
         try:
             process = subprocess.Popen(
                 [path, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                shell=False, close_fds=True,
+                shell=False, close_fds=True, start_new_session=(os.name == "posix"),
             )
         except OSError:
             return 1, ""
@@ -686,13 +707,38 @@ _PROBE_SCRIPT = dedent(
                 selector.register(stream, selectors.EVENT_READ, name)
                 registered[stream] = name
         deadline = time.monotonic() + max(0.1, float(timeout))
+        aborted = False
+
+        def terminate_process():
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+            else:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired, TimeoutError):
+                pass
+
         try:
             while registered:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    aborted = True
                     return 1, ""
                 events = selector.select(remaining)
                 if not events:
+                    aborted = True
                     return 1, ""
                 for key, _ in events:
                     stream = key.fileobj
@@ -710,21 +756,16 @@ _PROBE_SCRIPT = dedent(
                         continue
                     buffers[name].extend(chunk)
                     if len(buffers[name]) > MAX_SUBPROCESS_OUTPUT_BYTES:
+                        aborted = True
                         return 1, ""
             remaining = max(0.1, deadline - time.monotonic())
             process.wait(timeout=remaining)
-        except (OSError, ValueError, TimeoutError):
+        except (OSError, ValueError, subprocess.TimeoutExpired, TimeoutError):
+            aborted = True
             return 1, ""
         finally:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=1)
-            except (OSError, TimeoutError):
-                pass
+            if aborted or process.poll() is None:
+                terminate_process()
             for stream in tuple(registered):
                 try:
                     selector.unregister(stream)

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import stat
 import sys
+import time
 
 import pytest
 
 from molly.web.environments import (
+    EnvironmentConfigError,
     EnvironmentConfigStore,
     EnvironmentDetector,
     EnvironmentDetectionError,
@@ -107,6 +110,14 @@ def test_editing_connection_migrates_id_without_later_create_overwriting_it(
     tmp_path: Path,
 ) -> None:
     store = EnvironmentConfigStore(tmp_path / "runtime")
+    with pytest.raises(EnvironmentConfigError, match="unknown"):
+        store.upsert_profile(
+            {
+                "environment_ref": "environment:client-owned",
+                "display_name": "伪造",
+                "mode": "local",
+            }
+        )
     original = store.upsert_profile({"mode": "local", "display_name": "A"})
 
     migrated = store.upsert_profile(
@@ -129,6 +140,8 @@ def test_editing_connection_migrates_id_without_later_create_overwriting_it(
         recreated.environment_ref,
     }
     assert store.get_profile(migrated.environment_ref).target_label == "researcher@compute:22"
+    with pytest.raises(EnvironmentConfigError, match="already exists"):
+        store.upsert_profile({"mode": "local", "display_name": "duplicate A"})
 
 
 def test_matching_prefers_reusable_environment_and_never_executes_install(tmp_path: Path) -> None:
@@ -381,3 +394,42 @@ def test_probe_child_commands_use_the_stream_limited_executor() -> None:
     assert "subprocess.Popen(" in _PROBE_SCRIPT
     assert "MAX_SUBPROCESS_OUTPUT_BYTES" in _PROBE_SCRIPT
     assert "selector.select" in _PROBE_SCRIPT
+
+
+def test_probe_child_timeout_kills_descendants_in_its_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "posix":
+        pytest.skip("process-group cleanup is covered on POSIX probe hosts")
+    marker = tmp_path / "descendant-survived.txt"
+    child_code = (
+        "import time; time.sleep(6); "
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('survived')"
+    )
+    fake_nvidia = tmp_path / "nvidia-smi"
+    fake_nvidia.write_text(
+        "#!" + sys.executable + "\n"
+        "import subprocess, sys, time\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        f"    subprocess.Popen([sys.executable, '-c', {child_code!r}], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "    sys.stdout.close()\n"
+        "    sys.stderr.close()\n"
+        "    time.sleep(30)\n"
+        "else:\n"
+        "    print('not a GPU')\n",
+        encoding="utf-8",
+    )
+    fake_nvidia.chmod(fake_nvidia.stat().st_mode | 0o111)
+    monkeypatch.setenv(
+        "PATH",
+        str(tmp_path) + os.pathsep + os.environ.get("PATH", ""),
+    )
+
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+    report = EnvironmentDetector(local_run_directory=tmp_path / "runtimes").detect(profile)
+
+    assert report.data["gpu"]["available"] is False
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert not marker.exists()
