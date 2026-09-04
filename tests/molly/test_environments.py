@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 from pathlib import Path
@@ -476,7 +477,7 @@ def test_outer_probe_timeout_cleans_inner_process_groups(
 
 
 def test_outer_timeout_kills_same_group_descendant_after_leader_exits(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if os.name != "posix":
         pytest.skip("process-group cleanup is covered on POSIX probe hosts")
@@ -491,6 +492,12 @@ def test_outer_timeout_kills_same_group_descendant_after_leader_exits(
         f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
         "sys.stdout.close(); sys.stderr.close()"
     )
+    unraisable: list[object] = []
+
+    def capture_unraisable(value: object) -> None:
+        unraisable.append(value)
+
+    monkeypatch.setattr(sys, "unraisablehook", capture_unraisable)
 
     try:
         with pytest.raises(EnvironmentDetectionError, match="timed out"):
@@ -499,6 +506,8 @@ def test_outer_timeout_kills_same_group_descendant_after_leader_exits(
         while time.monotonic() < deadline and not marker.exists():
             time.sleep(0.05)
         assert not marker.exists()
+        gc.collect()
+        assert unraisable == []
     finally:
         if marker.exists():
             marker.unlink()

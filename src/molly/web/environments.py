@@ -671,27 +671,73 @@ def _default_runner(
             except asyncio.TimeoutError:
                 pass
 
-        try:
-            stdout, _stderr = await asyncio.wait_for(
-                asyncio.gather(stdout_task, stderr_task), timeout=timeout_seconds
-            )
-        except _ProbeOutputLimitExceeded as exc:
-            await stop_process()
-            raise EnvironmentDetectionError(
-                "environment probe output exceeded the safety limit"
-            ) from exc
-        except asyncio.TimeoutError as exc:
-            await stop_process()
-            raise EnvironmentDetectionError(
-                "fixed environment probe timed out"
-            ) from exc
-        finally:
-            for task in (stdout_task, stderr_task):
-                if not task.done():
+        stream_tasks = (stdout_task, stderr_task)
+        terminated = False
+        completed = False
+
+        async def terminate_once() -> None:
+            nonlocal terminated
+            if not terminated:
+                await stop_process()
+                terminated = True
+
+        async def drain_streams(timeout_seconds: float = 1.0) -> None:
+            _, pending = await asyncio.wait(stream_tasks, timeout=timeout_seconds)
+            if pending:
+                for task in pending:
                     task.cancel()
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-        await process.wait()
-        return process.returncode or 0, stdout
+            await asyncio.gather(*stream_tasks, return_exceptions=True)
+
+        try:
+            deadline = asyncio.get_running_loop().time() + timeout_seconds
+            done, pending = await asyncio.wait(
+                stream_tasks,
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+            errors = [
+                task.exception()
+                for task in done
+                if not task.cancelled() and task.exception() is not None
+            ]
+            if errors:
+                await terminate_once()
+                await drain_streams()
+                if isinstance(errors[0], _ProbeOutputLimitExceeded):
+                    raise EnvironmentDetectionError(
+                        "environment probe output exceeded the safety limit"
+                    ) from errors[0]
+                raise errors[0]
+            if pending:
+                await terminate_once()
+                await drain_streams()
+                raise EnvironmentDetectionError("fixed environment probe timed out")
+            remaining = deadline - asyncio.get_running_loop().time()
+            if process.returncode is None and remaining <= 0:
+                await terminate_once()
+                await drain_streams()
+                raise EnvironmentDetectionError("fixed environment probe timed out")
+            if process.returncode is None:
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=max(0.01, remaining))
+                except asyncio.TimeoutError as exc:
+                    await terminate_once()
+                    await drain_streams()
+                    raise EnvironmentDetectionError(
+                        "fixed environment probe timed out"
+                    ) from exc
+            stdout, _stderr = await asyncio.gather(*stream_tasks)
+            completed = True
+            return process.returncode or 0, stdout
+        finally:
+            if not completed:
+                await terminate_once()
+            await drain_streams()
+            if process.returncode is None:
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
 
     try:
         return asyncio.run(run())
