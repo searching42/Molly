@@ -1152,7 +1152,7 @@ const bindPageEvents = () => {
   const confirmEnvironmentInstall = async () => {
     const plan = state.environmentInstallPlan;
     const checkbox = document.getElementById("environment-install-confirm");
-    if (!plan || plan.status !== "READY_TO_INSTALL") return;
+    if (!plan || !["READY_TO_INSTALL", "READY_TO_CONFIRM"].includes(plan.status)) return;
     if (!checkbox?.checked) {
       showToast("请先确认完整安装方案", true);
       checkbox?.focus();

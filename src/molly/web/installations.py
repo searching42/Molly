@@ -70,6 +70,8 @@ MAX_INSTALL_DISK_BYTES = 4 * 1024 * 1024 * 1024
 MAX_INSTALL_OUTPUT_BYTES = 512 * 1024
 MAX_INSTALL_ENTRIES = 32
 MAX_EXTRACTED_FILE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_PERSISTED_PLANS = 128
+MAX_STATE_RECORDS_ON_READ = MAX_PERSISTED_PLANS + 64
 RUNTIME_MANIFEST_ENV = "MOLLY_RUNTIME_MANIFEST_PATH"
 _STORE_THREAD_LOCK = threading.RLock()
 
@@ -236,6 +238,10 @@ class InstallManifestEntry:
                 object.__setattr__(self, "sha256", validate_sha256(self.sha256, field="manifest sha256"))
             except Exception as exc:
                 raise InstallationConfigError("manifest sha256 is invalid") from exc
+            if self.estimated_download_bytes <= 0 or self.estimated_disk_bytes <= 0:
+                raise InstallationConfigError(
+                    "installable manifest entries require positive download and disk estimates"
+                )
         if self.install_kind not in {"archive", "zip", "tar", "file"}:
             raise InstallationConfigError("install_kind is not allow-listed")
         filename = self.install_filename
@@ -1220,6 +1226,65 @@ class RuntimeInstallationStore:
         if self.state_path.exists() and not self.state_path.is_file():
             raise InstallationConfigError("installation state file is not regular")
 
+    @staticmethod
+    def _compact_state(
+        value: dict[str, Any],
+        *,
+        maximum_plans: int = MAX_PERSISTED_PLANS,
+    ) -> dict[str, Any]:
+        """Drop only unreferenced/terminal records before the bounded store grows.
+
+        Plans are retained while an installation may still need them for
+        recovery or audit.  A caller that needs to insert a new plan passes
+        ``maximum_plans - 1`` so the following insert remains within the
+        persisted capacity.  This also makes a state file produced by an
+        older version self-healing on its next write instead of becoming
+        permanently unreadable at plan 129.
+        """
+
+        plans = value["plans"]
+        installations = value["installations"]
+        runtime_configs = value["runtime_configs"]
+        maximum_plans = max(0, int(maximum_plans))
+
+        def created_key(raw: Mapping[str, Any]) -> str:
+            return str(raw.get("created_at", ""))
+
+        while len(plans) > maximum_plans:
+            referenced = {
+                str(raw.get("plan_id"))
+                for raw in installations.values()
+                if isinstance(raw, Mapping) and raw.get("plan_id")
+            }
+            unreferenced = [
+                (created_key(raw), plan_id)
+                for plan_id, raw in plans.items()
+                if plan_id not in referenced and isinstance(raw, Mapping)
+            ]
+            if unreferenced:
+                _, plan_id = min(unreferenced)
+                del plans[plan_id]
+                continue
+
+            runtime_installation_ids = {
+                str(raw.get("installation_id"))
+                for raw in runtime_configs.values()
+                if isinstance(raw, Mapping) and raw.get("installation_id")
+            }
+            terminal = [
+                (created_key(raw), installation_id, str(raw.get("plan_id")))
+                for installation_id, raw in installations.items()
+                if isinstance(raw, Mapping)
+                and raw.get("state") in {"FAILED", "ROLLED_BACK"}
+                and installation_id not in runtime_installation_ids
+            ]
+            if not terminal:
+                break
+            _, installation_id, plan_id = min(terminal)
+            del installations[installation_id]
+            plans.pop(plan_id, None)
+        return value
+
     def _read_state(self) -> dict[str, Any]:
         self._check_file()
         if not self.state_path.exists():
@@ -1233,7 +1298,11 @@ class RuntimeInstallationStore:
         for key in ("plans", "installations", "runtime_configs"):
             if not isinstance(value.get(key), dict):
                 raise InstallationConfigError("installation state has an invalid shape")
-        if len(value["plans"]) > 128 or len(value["installations"]) > 128 or len(value["runtime_configs"]) > 128:
+        if (
+            len(value["plans"]) > MAX_STATE_RECORDS_ON_READ
+            or len(value["installations"]) > MAX_STATE_RECORDS_ON_READ
+            or len(value["runtime_configs"]) > MAX_STATE_RECORDS_ON_READ
+        ):
             raise InstallationConfigError("installation state contains too many records")
         for key, raw in value["plans"].items():
             if not isinstance(key, str) or not isinstance(raw, Mapping) or raw.get("plan_id") != key:
@@ -1247,7 +1316,7 @@ class RuntimeInstallationStore:
             if not isinstance(key, str) or not isinstance(raw, Mapping) or raw.get("runtime_id") != key:
                 raise InstallationConfigError("runtime config identity is inconsistent")
             RuntimeConfig.from_dict(raw)
-        return value
+        return self._compact_state(value)
 
     def _write_state(self, value: Mapping[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -1281,6 +1350,11 @@ class RuntimeInstallationStore:
             existing = value["plans"].get(plan.plan_id)
             if existing is not None and existing != plan.to_dict(public=False):
                 raise InstallationConflictError("install plan ID is already bound to different content")
+            if existing is not None:
+                return
+            self._compact_state(value, maximum_plans=MAX_PERSISTED_PLANS - 1)
+            if len(value["plans"]) >= MAX_PERSISTED_PLANS:
+                raise InstallationConflictError("installation plan store is at capacity")
             value["plans"][plan.plan_id] = plan.to_dict(public=False)
             self._write_state(value)
 
@@ -1313,6 +1387,25 @@ class RuntimeInstallationStore:
             for raw in value["installations"].values():
                 if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
                     return InstallationRecord.from_dict(raw), False
+            active_states = {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "CONFIRMED"}
+            for raw in value["installations"].values():
+                if not isinstance(raw, Mapping):
+                    continue
+                if raw.get("environment_ref") != plan.environment_ref:
+                    continue
+                if raw.get("state") in active_states:
+                    raise InstallationConflictError(
+                        "当前连接已有另一个安装或确认事务正在进行"
+                    )
+            for raw in value["runtime_configs"].values():
+                if not isinstance(raw, Mapping):
+                    continue
+                if (
+                    raw.get("environment_ref") == plan.environment_ref
+                    and raw.get("state") == "CONFIRMED"
+                    and raw.get("runtime_id") != plan.runtime_id
+                ):
+                    raise InstallationConflictError("当前连接已有已确认运行配置")
             now = utc_timestamp()
             record = InstallationRecord(
                 installation_id=new_server_id("installation"),
@@ -1428,12 +1521,9 @@ class RuntimeInstallationStore:
                 current = RuntimeConfig.from_dict(raw)
                 if current.state != "CONFIRMED":
                     continue
-                invalidated = replace(current, state="INVALIDATED", config_digest="")
-                invalidated = replace(
-                    invalidated,
-                    config_digest=sha256_bytes(canonical_json_bytes(invalidated._payload())),
+                raise InstallationConflictError(
+                    "当前连接已有另一个已确认运行配置"
                 )
-                value["runtime_configs"][runtime_id] = invalidated.to_dict()
             value["runtime_configs"][config.runtime_id] = config.to_dict()
             self._write_state(value)
 
@@ -1555,7 +1645,8 @@ def _fixed_ssh_argv(profile: EnvironmentProfile) -> tuple[str, ...]:
 _REMOTE_INSTALL_SCRIPT = r'''
 import hashlib, json, os, pathlib, re, shutil, stat, sys, tarfile, tempfile, time, urllib.request, zipfile
 
-MAX_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DISK_BYTES = 4 * 1024 * 1024 * 1024
 MAX_TIMEOUT = 3600.0
 RUNTIME_BASE = (pathlib.Path.home() / ".local/share/molly/runtimes").resolve()
 TRANSACTION_BASE = RUNTIME_BASE / ".transactions"
@@ -1623,7 +1714,7 @@ def fetch(item, destination, deadline):
     expected = item["sha256"]
     if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ValueError("missing fixed SHA-256")
-    maximum = min(int(item["max_download_bytes"]), MAX_BYTES)
+    maximum = min(int(item["max_download_bytes"]), MAX_DOWNLOAD_BYTES)
     digest = hashlib.sha256()
     size = 0
     check_deadline(deadline)
@@ -1641,7 +1732,7 @@ def fetch(item, destination, deadline):
             output.write(block)
     if digest.hexdigest() != expected:
         raise ValueError("download SHA-256 mismatch")
-    if int(item["estimated_download_bytes"]) and size != int(item["estimated_download_bytes"]):
+    if size != int(item["estimated_download_bytes"]):
         raise ValueError("download size mismatch")
     return size
 
@@ -1663,7 +1754,7 @@ def safe_extract(archive, destination, kind, disk_limit, deadline):
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 total += member.file_size
-                if total > int(disk_limit) or total > MAX_BYTES:
+                if total > int(disk_limit) or total > MAX_DISK_BYTES:
                     raise ValueError("extracted size safety limit exceeded")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with source.open(member) as input_file, open(target, "wb") as output:
@@ -1684,7 +1775,7 @@ def safe_extract(archive, destination, kind, disk_limit, deadline):
                 if not member.isfile():
                     raise ValueError("unsupported tar member")
                 total += member.size
-                if total > int(disk_limit) or total > MAX_BYTES:
+                if total > int(disk_limit) or total > MAX_DISK_BYTES:
                     raise ValueError("extracted size safety limit exceeded")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 input_file = source.extractfile(member)
@@ -1745,7 +1836,11 @@ def main(request):
                 size = fetch(item, downloaded, deadline)
                 if item["install_kind"] == "file":
                     output = (destination / safe_rel(item["install_filename"])).resolve()
-                    if not output.is_relative_to(destination) or int(item["estimated_disk_bytes"]) < size:
+                    if (
+                        not output.is_relative_to(destination)
+                        or int(item["estimated_disk_bytes"]) <= 0
+                        or int(item["estimated_disk_bytes"]) < size
+                    ):
                         raise ValueError("file exceeds fixed disk estimate")
                     shutil.copyfile(downloaded, output)
                 else:
@@ -1971,7 +2066,7 @@ class RestrictedInstallExecutor:
         destination = _owned_directory(stage / entry.install_subdirectory, create=True)
         if entry.install_kind == "file":
             output = destination / entry.install_filename
-            if entry.estimated_disk_bytes and entry.estimated_download_bytes > entry.estimated_disk_bytes:
+            if entry.estimated_disk_bytes <= 0 or entry.estimated_download_bytes > entry.estimated_disk_bytes:
                 raise InstallationIntegrityError(f"{entry.name} exceeds its fixed disk estimate")
             shutil.copyfile(download_path, output)
             os.chmod(output, 0o600)
@@ -2072,7 +2167,13 @@ def _local_target_from_stage(stage: Path, runtime_id: str) -> Path:
     marker = ".runtime-staging"
     if marker not in root.parts:
         raise InstallationIntegrityError("staging path is outside the owned runtime area")
-    base = Path(*root.parts[: root.parts.index(marker)])
+    marker_index = len(root.parts) - 1 - tuple(reversed(root.parts)).index(marker)
+    if marker_index == 0 or len(root.parts) != marker_index + 2:
+        raise InstallationIntegrityError("staging path has an invalid runtime layout")
+    stage_name = root.parts[-1]
+    if not stage_name.startswith(f"{runtime_id}-"):
+        raise InstallationIntegrityError("staging path is bound to another runtime")
+    base = Path(*root.parts[:marker_index])
     return base / "runtimes" / runtime_id
 
 
@@ -2130,7 +2231,7 @@ def _download_fixed(opener: Any, entry: InstallManifestEntry, destination: Path,
                 output.write(block)
             output.flush()
             os.fsync(output.fileno())
-        if entry.estimated_download_bytes and size != entry.estimated_download_bytes:
+        if size != entry.estimated_download_bytes:
             raise InstallationIntegrityError("下载大小与固定清单不一致")
         if digest.hexdigest() != entry.sha256:
             raise InstallationIntegrityError("下载内容 SHA-256 校验失败")
@@ -2230,6 +2331,53 @@ def _component_is_complete(stage: Path, entry: InstallManifestEntry) -> bool:
             for relative in entry.required_paths
         )
     return any(item.is_file() and not item.is_symlink() for item in destination.rglob("*"))
+
+
+_REQUIRED_RUNTIME_COMPONENT_IDS = frozenset(
+    {"python", "unimol", "reinvent4", "unimol-weights"}
+)
+
+
+def _runtime_components_from_match(
+    match: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    """Return the complete, freshly matched runtime binding.
+
+    Installation entries are not evidence that a component became usable.
+    Only the post-confirmation discovery match can establish that fact.  Keep
+    the complete reusable list so a runtime config records both installed and
+    reused interpreters/components instead of only the downloaded entries.
+    """
+
+    if not isinstance(match, Mapping) or match.get("status") != "READY":
+        raise InstallationIntegrityError(
+            "安装后重新探测未匹配到完整可用运行环境"
+        )
+    raw_reusable = match.get("reusable", ())
+    if not isinstance(raw_reusable, Sequence) or isinstance(
+        raw_reusable, (str, bytes, bytearray)
+    ):
+        raise InstallationIntegrityError("安装后重新探测的复用组件列表无效")
+    components: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_reusable:
+        if not isinstance(raw, Mapping):
+            raise InstallationIntegrityError("安装后重新探测的组件绑定无效")
+        component_id = raw.get("component_id")
+        if not isinstance(component_id, str) or not component_id:
+            raise InstallationIntegrityError("安装后重新探测的组件缺少标识")
+        if component_id in seen:
+            raise InstallationIntegrityError("安装后重新探测包含重复组件")
+        seen.add(component_id)
+        value = thaw_json(raw)
+        value["verified"] = True
+        components.append(value)
+    missing = _REQUIRED_RUNTIME_COMPONENT_IDS - seen
+    if missing:
+        raise InstallationIntegrityError(
+            "安装后重新探测仍缺少固定组件：" + ", ".join(sorted(missing))
+        )
+    return tuple(components)
 
 
 class InstallationManager:
@@ -2395,8 +2543,22 @@ class InstallationManager:
             "idempotent_replay": not created,
         }
 
-    def _reprobe(self, profile: EnvironmentProfile) -> tuple[EnvironmentReport, Mapping[str, Any]]:
-        report = self.environment_manager.detector.detect(profile)
+    def _reprobe(
+        self,
+        profile: EnvironmentProfile,
+        *,
+        runtime_directory: str | Path | None = None,
+    ) -> tuple[EnvironmentReport, Mapping[str, Any]]:
+        detector = self.environment_manager.detector
+        if runtime_directory is not None:
+            detect_for_runtime = getattr(detector, "detect_for_runtime", None)
+            report = (
+                detect_for_runtime(profile, runtime_directory)
+                if callable(detect_for_runtime)
+                else detector.detect(profile)
+            )
+        else:
+            report = detector.detect(profile)
         if not isinstance(report, EnvironmentReport):
             raise InstallationIntegrityError("安装后重新探测没有返回有效报告")
         if report.connection_digest != profile.connection_digest:
@@ -2434,6 +2596,35 @@ class InstallationManager:
         resume: bool = False,
     ) -> dict[str, Any]:
         profile, original_report, _ = self._current_binding(plan.environment_ref)
+        pending_record = self.store.get_installation_for_plan(plan.plan_id)
+        persisted_config = self.store.get_runtime_config(plan.environment_ref)
+        if (
+            pending_record is not None
+            and persisted_config is not None
+            and persisted_config.state == "CONFIRMED"
+            and persisted_config.runtime_id == plan.runtime_id
+            and persisted_config.installation_id == pending_record.installation_id
+            and persisted_config.plan_digest == plan.plan_digest
+            and persisted_config.connection_digest == plan.connection_digest
+            and persisted_config.catalog_digest == plan.catalog_digest
+            and persisted_config.report_digest == original_report.report_digest
+        ):
+            # A crash after the config fsync but before the installation state
+            # update must replay the same durable config, not create a new
+            # verified_at/config_digest pair.
+            current = pending_record
+            if current.state != "CONFIRMED":
+                current = self._update(
+                    current,
+                    state="CONFIRMED",
+                    side_effects_started=False,
+                    worker_pid=0,
+                )
+            return {
+                "installation": current.to_dict(public=True),
+                "runtime_config": persisted_config.to_dict(public=True),
+                "idempotent_replay": True,
+            }
         existing_runtime = self.runtime_for_environment(plan.environment_ref)
         if existing_runtime is not None and existing_runtime.state == "CONFIRMED" and existing_runtime.runtime_id != plan.runtime_id:
             return {
@@ -2464,25 +2655,31 @@ class InstallationManager:
         try:
             # The original report is still the approval binding.  The new
             # report is the runtime's post-confirmation binding.
-            current_profile, current_report, _ = self._current_binding(plan.environment_ref)
+            current_profile, current_report, current_match = self._current_binding(plan.environment_ref)
             allowed_report_digests = {original_report.report_digest}
             persisted_reprobe = record.verification.get("reprobe") if isinstance(record.verification, Mapping) else None
             if isinstance(persisted_reprobe, Mapping) and isinstance(persisted_reprobe.get("report_digest"), str):
                 allowed_report_digests.add(persisted_reprobe["report_digest"])
             if current_profile.connection_digest != profile.connection_digest or current_report.report_digest not in allowed_report_digests:
                 raise InstallationConflictError("连接或探测报告在确认期间发生变化")
-            reprobe, reprobe_match = self._reprobe(profile)
-            if reprobe_match.get("status") != "READY":
-                raise InstallationIntegrityError("确认后的重新探测未再次匹配完整现有环境")
+            persisted_reprobe = record.verification.get("reprobe") if isinstance(record.verification, Mapping) else None
+            if (
+                isinstance(persisted_reprobe, Mapping)
+                and persisted_reprobe.get("report_digest") == current_report.report_digest
+            ):
+                reprobe, reprobe_match = current_report, current_match
+            else:
+                reprobe, reprobe_match = self._reprobe(profile)
+            runtime_components = _runtime_components_from_match(reprobe_match)
             verification = {
                 "reprobe": {
                     "report_digest": reprobe.report_digest,
                     "detected_at": reprobe.detected_at,
                     "match_status": reprobe_match.get("status"),
                     "components": {
-                        str(item.get("component_id")): True
-                        for item in reprobe_match.get("reusable", ())
-                        if isinstance(item, Mapping) and item.get("component_id")
+                        str(item["component_id"]): True
+                        for item in runtime_components
+                        if item.get("component_id") in _REQUIRED_RUNTIME_COMPONENT_IDS
                     },
                 }
             }
@@ -2499,11 +2696,10 @@ class InstallationManager:
                 reprobe_match,
                 expected_report_digest=current_report.report_digest,
             )
-            components = list(plan.reused_components)
             config_record = replace(current, report_digest=reprobe.report_digest)
             config = RuntimeConfig.confirmed(
                 record=config_record,
-                components=components,
+                components=runtime_components,
                 verified_at=utc_timestamp(),
             )
             self.store.save_runtime_config(config)
@@ -2513,6 +2709,7 @@ class InstallationManager:
                 state="CONFIRMED",
                 verification=verification,
                 side_effects_started=False,
+                worker_pid=0,
             )
             return {
                 "installation": current.to_dict(public=True),
@@ -2645,12 +2842,20 @@ class InstallationManager:
                     state="CONFIRMED",
                     verification=current.verification,
                     side_effects_started=True,
+                    worker_pid=0,
                 )
             return {
                 "installation": current.to_dict(public=True),
                 "runtime_config": existing.to_dict(public=True),
             }
-        reprobe, reprobe_match = self._reprobe(profile)
+        runtime_directory: str | Path = (
+            str(target) if profile.mode == "local" else plan.target_directory
+        )
+        reprobe, reprobe_match = self._reprobe(
+            profile,
+            runtime_directory=runtime_directory,
+        )
+        runtime_components = _runtime_components_from_match(reprobe_match)
         self._persist_reprobe(
             profile,
             reprobe,
@@ -2658,19 +2863,9 @@ class InstallationManager:
             expected_report_digest=report.report_digest,
         )
         if existing is None:
-            components = [
-                {
-                    "component_id": entry.component_id,
-                    "name": entry.name,
-                    "version": entry.version,
-                    "sha256": entry.sha256,
-                    "verified": True,
-                }
-                for entry in plan.entries
-            ]
             existing = RuntimeConfig.confirmed(
                 record=record,
-                components=components,
+                components=runtime_components,
                 verified_at=utc_timestamp(),
                 report_digest=reprobe.report_digest,
             )
@@ -2682,6 +2877,7 @@ class InstallationManager:
                 state="CONFIRMED",
                 verification=current.verification,
                 side_effects_started=True,
+                worker_pid=0,
             )
         return {
             "installation": current.to_dict(public=True),
@@ -2694,8 +2890,9 @@ class InstallationManager:
         target_was_absent = False
         finalized = False
         try:
-            profile, _report, match = self._current_binding(plan.environment_ref)
+            profile, _report, _match = self._current_binding(plan.environment_ref)
             stage_directory = record.stage_directory or _runtime_stage(profile, plan.runtime_id, record.installation_id)
+            target_directory = plan.target_directory
             if profile.mode == "local":
                 expected_stage = (self.root / ".runtime-staging" / f"{plan.runtime_id}-{record.installation_id}").absolute()
                 if stage_directory.startswith(".molly/"):
@@ -2709,8 +2906,14 @@ class InstallationManager:
                 stage_directory = str(stage_path)
                 _owned_directory(stage_path.parent, create=True)
                 target = (self.root / "runtimes" / plan.runtime_id).absolute()
+                target_directory = str(target)
                 target_was_absent = not target.exists() and not target.is_symlink()
-            current = self._update(record, stage_directory=stage_directory, side_effects_started=True)
+            current = self._update(
+                record,
+                stage_directory=stage_directory,
+                target_directory=target_directory,
+                side_effects_started=True,
+            )
             result = self.executor.install(
                 profile,
                 plan,
@@ -2742,18 +2945,16 @@ class InstallationManager:
                 allowed_report_digests.add(persisted_reprobe["report_digest"])
             if report_before_reprobe.report_digest not in allowed_report_digests:
                 raise InstallationConflictError("探测报告在安装期间发生变化，已取消启用")
-            reprobe, reprobe_match = self._reprobe(profile)
-            reusable_ids = {
-                item.get("component_id")
-                for item in reprobe_match.get("reusable", ())
-                if isinstance(item, Mapping)
-            }
+            reprobe, reprobe_match = self._reprobe(
+                profile,
+                runtime_directory=stage_directory,
+            )
+            runtime_components = _runtime_components_from_match(reprobe_match)
             verified_components = {
-                component_id: component_id in set(plan.component_ids) or component_id in reusable_ids
-                for component_id in ("python", "unimol", "reinvent4", "unimol-weights")
+                str(item["component_id"]): True
+                for item in runtime_components
+                if item.get("component_id") in _REQUIRED_RUNTIME_COMPONENT_IDS
             }
-            if not all(verified_components.values()):
-                raise InstallationIntegrityError("安装后 Python、Uni-Mol、REINVENT4 或模型权重未全部验证")
             verification = {
                 **thaw_json(current.verification),
                 "staged": thaw_json(verified),
@@ -2764,6 +2965,7 @@ class InstallationManager:
                     "selected_device": reprobe_match.get("selected_device"),
                     "components": verified_components,
                 },
+                "runtime_components": thaw_json(list(runtime_components)),
             }
             current = self._update(current, verification=verification)
             # Re-check all approval bindings immediately before the atomic
@@ -2796,26 +2998,21 @@ class InstallationManager:
                 reprobe_match,
                 expected_report_digest=latest_report.report_digest,
             )
-            components = []
-            for entry in plan.entries:
-                components.append(
-                    {
-                        "component_id": entry.component_id,
-                        "name": entry.name,
-                        "version": entry.version,
-                        "sha256": entry.sha256,
-                        "verified": True,
-                    }
-                )
             config = RuntimeConfig.confirmed(
                 record=current,
-                components=components,
+                components=runtime_components,
                 verified_at=utc_timestamp(),
                 report_digest=reprobe.report_digest,
             )
             self.store.save_runtime_config(config)
             current = self.store.get_installation(record.installation_id)
-            current = self._update(current, state="CONFIRMED", verification=verification, side_effects_started=True)
+            current = self._update(
+                current,
+                state="CONFIRMED",
+                verification=verification,
+                side_effects_started=True,
+                worker_pid=0,
+            )
             return current
         except BaseException as exc:
             # BaseException intentionally includes a process-style test crash
@@ -2932,6 +3129,7 @@ __all__ = [
     "InstallationIntegrityError",
     "InstallationManager",
     "InstallationRecord",
+    "MAX_PERSISTED_PLANS",
     "INSTALLATION_RECOVERY_STALE_SECONDS",
     "INSTALLATION_STATE_VERSION",
     "INSTALLATION_TIMEOUT_SECONDS",

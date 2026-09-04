@@ -18,7 +18,9 @@ from molly.web.installations import (
     InstallManifest,
     InstallManifestEntry,
     InstallationConfigError,
+    InstallationConflictError,
     InstallationManager,
+    MAX_PERSISTED_PLANS,
     RestrictedInstallExecutor,
 )
 
@@ -91,14 +93,29 @@ def _probe_payload() -> dict[str, object]:
 
 
 class _FixedDetector:
-    def __init__(self, report: EnvironmentReport) -> None:
+    def __init__(
+        self,
+        report: EnvironmentReport,
+        *,
+        runtime_report: EnvironmentReport | None = None,
+    ) -> None:
         self.report = report
+        self.runtime_report = runtime_report
         self.calls = 0
 
     def detect(self, profile: EnvironmentProfile) -> EnvironmentReport:
         self.calls += 1
         assert profile.environment_ref == self.report.environment_ref
         return self.report
+
+    def detect_for_runtime(
+        self,
+        profile: EnvironmentProfile,
+        _runtime_directory: str | Path,
+    ) -> EnvironmentReport:
+        self.calls += 1
+        assert profile.environment_ref == self.report.environment_ref
+        return self.runtime_report or self.report
 
 
 def _environment(
@@ -121,7 +138,14 @@ def _environment(
             else None
         ),
     )
-    detector = _FixedDetector(report)
+    runtime_report = EnvironmentReport.from_probe(
+        profile,
+        _probe_payload(),
+        verified_weight_records={
+            "/opt/unimolv1.pt": {"size_bytes": 1, "sha256": "a" * 64}
+        },
+    )
+    detector = _FixedDetector(report, runtime_report=runtime_report)
     manager = EnvironmentManager(root, detector=detector)  # type: ignore[arg-type]
     saved = manager.upsert_profile(profile_payload)
     manager.detect(saved.environment_ref)
@@ -230,6 +254,175 @@ def test_compatible_environment_requires_one_confirmation_and_persists_runtime(
         if item["environment_ref"] == environment_ref
     ]
     assert len(records) == 1
+
+
+def test_post_install_match_is_required_and_runtime_binds_reused_components(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"target-aware")
+    environment_manager, environment_ref, report = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = installer.build_plan(environment_ref)
+
+    result = installer.confirm(_approval(plan))
+    assert result["installation"]["state"] == "CONFIRMED"
+    config = installer.store.get_runtime_config(environment_ref)
+    assert config is not None
+    assert {
+        item["component_id"] for item in config.components
+    } >= {"python", "unimol", "reinvent4", "unimol-weights"}
+    assert all(item.get("verified") is True for item in config.components)
+
+    # A plan entry alone is not post-install evidence.  Returning the old
+    # report after the target-aware re-probe must fail and leave no config.
+    negative_root = tmp_path / "negative"
+    negative_source = negative_root / "unimolv1.pt"
+    negative_source.parent.mkdir()
+    negative_source.write_bytes(b"target-aware-negative")
+    negative_manager, negative_ref, negative_report = _environment(negative_root)
+    negative_manager.detector.runtime_report = negative_report  # type: ignore[attr-defined]
+    negative_installer = InstallationManager(
+        negative_root / "runtime",
+        environment_manager=negative_manager,
+        manifest=_manifest(negative_source),
+    )
+    negative_plan = negative_installer.build_plan(negative_ref)
+    negative = negative_installer.confirm(_approval(negative_plan))
+    assert negative["installation"]["state"] == "FAILED"
+    assert negative["runtime_config"] is None
+
+
+def test_compatible_confirmation_recovery_reuses_persisted_config_digest(
+    tmp_path: Path,
+) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    first = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+    plan = first.build_plan(environment_ref)
+    original_save = first.store.save_runtime_config
+
+    def save_then_crash(config: object) -> None:
+        original_save(config)  # type: ignore[arg-type]
+        raise SystemExit("crashed after runtime config fsync")
+
+    first.store.save_runtime_config = save_then_crash  # type: ignore[method-assign]
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "VERIFYING"
+    saved = first.store.get_runtime_config(environment_ref)
+    assert saved is not None
+
+    resumed = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+    result = resumed.recover(record.installation_id, force=True)
+    assert result["installation"]["state"] == "CONFIRMED"
+    recovered = resumed.store.get_runtime_config(environment_ref)
+    assert recovered is not None
+    assert recovered.config_digest == saved.config_digest
+
+
+def test_installable_manifest_rejects_zero_resource_estimates(tmp_path: Path) -> None:
+    source = tmp_path / "payload.bin"
+    source.write_bytes(b"payload")
+    with pytest.raises(InstallationConfigError, match="positive download and disk"):
+        InstallManifestEntry(
+            component_id="zero-estimate",
+            name="Zero estimate",
+            version="1",
+            source="test",
+            source_url=source.as_uri(),
+            estimated_download_bytes=0,
+            estimated_disk_bytes=0,
+            estimated_duration_seconds=1,
+            install_subdirectory="component",
+            sha256=sha256_bytes(source.read_bytes()),
+            install_kind="file",
+            install_filename="payload.bin",
+            max_download_bytes=1,
+            required_paths=("payload.bin",),
+        )
+
+
+def test_local_target_and_runtime_config_use_custom_state_root(tmp_path: Path) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"custom-root")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    state_root = tmp_path / ".runtime-staging-state"
+    installer = InstallationManager(
+        state_root,
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = installer.build_plan(environment_ref)
+    result = installer.confirm(_approval(plan))
+    assert result["installation"]["state"] == "CONFIRMED"
+    target = (state_root / "runtimes" / plan.runtime_id).absolute()
+    assert (target / "weights" / "unimolv1.pt").read_bytes() == b"custom-root"
+    assert not (tmp_path / "runtimes" / plan.runtime_id).exists()
+    config = installer.store.get_runtime_config(environment_ref)
+    assert config is not None
+    assert config.target_directory == str(target)
+
+
+def test_different_plans_for_one_environment_are_serialized(tmp_path: Path) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"serialized")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    base = RestrictedInstallExecutor()
+
+    class BlockingExecutor:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            started.set()
+            assert release.wait(2)
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+
+        def rollback(self, *args: object, **kwargs: object) -> None:
+            base.rollback(*args, **kwargs)  # type: ignore[arg-type]
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=BlockingExecutor(),  # type: ignore[arg-type]
+    )
+    first_plan = installer.build_plan(environment_ref)
+    second_plan = installer.build_plan(environment_ref)
+    first_result: list[dict[str, object]] = []
+
+    def run_first() -> None:
+        first_result.append(installer.confirm(_approval(first_plan)))
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    assert started.wait(2)
+    with pytest.raises(InstallationConflictError):
+        installer.confirm(_approval(second_plan))
+    release.set()
+    thread.join(2)
+    assert len(first_result) == 1
+    assert first_result[0]["installation"]["state"] == "CONFIRMED"
+    assert len(list((tmp_path / "runtime" / "runtimes").iterdir())) == 1
+
+
+def test_plan_store_compacts_unreferenced_history_at_capacity(tmp_path: Path) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+    plans = [installer.build_plan(environment_ref) for _ in range(MAX_PERSISTED_PLANS + 2)]
+    state = json.loads((tmp_path / "runtime" / "runtime_installations.json").read_text())
+    assert len(state["plans"]) == MAX_PERSISTED_PLANS
+    assert installer.store.get_plan(plans[-1].plan_id).plan_id == plans[-1].plan_id
 
 
 def test_server_owned_manifest_file_is_a_production_loading_entry(tmp_path: Path) -> None:

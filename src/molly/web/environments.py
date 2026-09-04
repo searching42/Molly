@@ -1890,22 +1890,35 @@ class EnvironmentDetector:
             raise EnvironmentDetectionError("environment probe output exceeded the safety limit")
         return stdout
 
-    def detect(self, profile: EnvironmentProfile) -> EnvironmentReport:
+    def detect(
+        self,
+        profile: EnvironmentProfile,
+        *,
+        run_directory: Path | str | None = None,
+    ) -> EnvironmentReport:
         if not isinstance(profile, EnvironmentProfile):
             raise TypeError("environment detector requires an EnvironmentProfile")
+        if profile.mode == "local":
+            probe_run_directory = (
+                Path(run_directory).absolute()
+                if run_directory is not None
+                else self.local_run_directory
+            )
+        else:
+            probe_run_directory = str(run_directory) if run_directory is not None else ""
         probe_prefix = (
             "import os; os.environ['MOLLY_PROBE_TIMEOUT_SECONDS'] = "
             + repr(str(self.timeout_seconds + 0.5))
             + "\n"
         )
-        if profile.mode == "local":
-            prefix = (
-                probe_prefix
-                + "os.environ['MOLLY_PROBE_RUN_DIRECTORY'] = "
-                + repr(str(self.local_run_directory))
+        if probe_run_directory:
+            probe_prefix += (
+                "os.environ['MOLLY_PROBE_RUN_DIRECTORY'] = "
+                + repr(str(probe_run_directory))
                 + "\n"
             )
-            output = self._run((sys.executable, "-c", prefix + _PROBE_SCRIPT))
+        if profile.mode == "local":
+            output = self._run((sys.executable, "-c", probe_prefix + _PROBE_SCRIPT))
         else:
             output = None
             last_error: Exception | None = None
@@ -1927,6 +1940,15 @@ class EnvironmentDetector:
         if not isinstance(raw, Mapping):
             raise EnvironmentDetectionError("environment probe returned an invalid object")
         return EnvironmentReport.from_probe(profile, raw)
+
+    def detect_for_runtime(
+        self,
+        profile: EnvironmentProfile,
+        runtime_directory: Path | str,
+    ) -> EnvironmentReport:
+        """Probe a server-owned staged/enabled runtime directory."""
+
+        return self.detect(profile, run_directory=runtime_directory)
 
 
 class EnvironmentManager:
