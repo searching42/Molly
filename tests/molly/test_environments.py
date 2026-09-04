@@ -79,14 +79,14 @@ def test_environment_profiles_validate_and_persist_without_private_keys(tmp_path
         {
             "mode": "ssh",
             "display_name": "GPU 工作站",
-            "ssh_alias": "workstation1",
+            "ssh_alias": "compute-alias",
             "user": "researcher",
             "port": 2222,
         }
     )
 
     assert local.mode == "local"
-    assert remote.target_label == "researcher@workstation1:2222"
+    assert remote.target_label == "researcher@compute-alias:2222"
     assert {profile.environment_ref for profile in store.list_profiles()} == {
         local.environment_ref,
         remote.environment_ref,
@@ -141,7 +141,7 @@ def test_detector_uses_only_fixed_local_or_ssh_probe_transport(tmp_path: Path) -
         {
             "mode": "ssh",
             "display_name": "工作站",
-            "ssh_target": "workstation1",
+            "ssh_target": "compute-alias",
             "ssh_user": "researcher",
             "ssh_port": 22,
         }
@@ -151,7 +151,7 @@ def test_detector_uses_only_fixed_local_or_ssh_probe_transport(tmp_path: Path) -
     argv, script, _ = calls[1]
     assert argv[:5] == ("ssh", "-T", "-o", "BatchMode=yes", "-o")
     assert "-l" in argv and "researcher" in argv
-    assert "workstation1" in argv and argv[-2:] == ("python3", "-")
+    assert "compute-alias" in argv and argv[-2:] == ("python3", "-")
     assert script is not None and b"nvidia-smi" in script
     assert all(item not in argv for item in ("sh -c", "sudo", "curl", "wget"))
 
