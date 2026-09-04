@@ -85,6 +85,7 @@ STATUS_LABELS = {
     "INTERRUPTED": "已中断",
     "STOPPED": "已完成",
     "REJECTED": "已拒绝/已取消",
+    "ROLLING_BACK": "正在回滚",
     "FAILED": "执行失败",
     "BUDGET_EXHAUSTED": "已达到服务器安全上限",
 }

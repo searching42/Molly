@@ -209,6 +209,26 @@ def _manifest(source: Path, *, catalog_version: str = "test-1") -> InstallManife
     return InstallManifest(catalog_version=catalog_version, entries=(entry,))
 
 
+def _archive_manifest(source: Path, *, catalog_version: str) -> InstallManifest:
+    payload = source.read_bytes()
+    entry = InstallManifestEntry(
+        component_id="unimol-weights",
+        name="Uni-Mol archive test weight",
+        version="unimolv1-test",
+        source="测试固定归档源",
+        source_url=source.as_uri(),
+        estimated_download_bytes=len(payload),
+        estimated_disk_bytes=64,
+        estimated_duration_seconds=1,
+        install_subdirectory="weights",
+        sha256=sha256_bytes(payload),
+        install_kind="zip",
+        max_download_bytes=len(payload),
+        required_paths=("unimolv1.pt",),
+    )
+    return InstallManifest(catalog_version=catalog_version, entries=(entry,))
+
+
 def _approval(plan: object) -> dict[str, object]:
     value = plan.to_dict(public=True)
     return {
@@ -489,6 +509,48 @@ def test_config_persist_error_after_replace_keeps_enabled_runtime(
     assert saved.target_directory == str(target.absolute())
 
 
+def test_recovery_revalidates_confirmed_runtime_weights_after_crash(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"recover-weight-original")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = first.build_plan(environment_ref)
+    original_save = first.store.save_runtime_config
+
+    def save_then_crash(config: object) -> None:
+        original_save(config)  # type: ignore[arg-type]
+        raise SystemExit("crashed after config commit")
+
+    first.store.save_runtime_config = save_then_crash  # type: ignore[method-assign]
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    saved = first.store.get_runtime_config(environment_ref)
+    assert record is not None and record.state == "ENABLING"
+    assert saved is not None and saved.state == "CONFIRMED"
+    target_file = Path(saved.target_directory) / "weights" / "unimolv1.pt"
+    original_size = target_file.stat().st_size
+    target_file.write_bytes(b"recover-weight-tampered")
+    assert target_file.stat().st_size == original_size
+
+    resumed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    result = resumed.recover(record.installation_id, force=True)
+
+    assert result["installation"]["state"] == "FAILED"
+    assert result["runtime_config"]["status_label"] == "已失效"
+    assert not Path(saved.target_directory).exists()
+
+
 def test_failed_config_commit_clears_report_for_removed_runtime_target(
     tmp_path: Path,
 ) -> None:
@@ -513,6 +575,45 @@ def test_failed_config_commit_clears_report_for_removed_runtime_target(
     assert environment_manager.store.get_detection(environment_ref) is None
     with pytest.raises(InstallationConfigError):
         installer.build_plan(environment_ref)
+
+
+def test_failed_rollback_is_persisted_until_report_clear_and_can_resume(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"rollback-transaction")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = installer.build_plan(environment_ref)
+    original_save = installer.store.save_runtime_config
+    original_clear = environment_manager.store.clear_detection
+
+    def fail_before_save(_config: object) -> None:
+        raise OSError("config commit failed")
+
+    def fail_clear(*args: object, **kwargs: object) -> bool:
+        raise OSError("report clear failed")
+
+    installer.store.save_runtime_config = fail_before_save  # type: ignore[method-assign]
+    environment_manager.store.clear_detection = fail_clear  # type: ignore[method-assign]
+    result = installer.confirm(_approval(plan))
+    assert result["installation"]["state"] == "ROLLING_BACK"
+    record = installer.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ROLLING_BACK"
+    target = tmp_path / "runtime" / "runtimes" / plan.runtime_id
+    assert target.is_dir()
+
+    installer.store.save_runtime_config = original_save  # type: ignore[method-assign]
+    environment_manager.store.clear_detection = original_clear  # type: ignore[method-assign]
+    recovered = installer.recover(record.installation_id, force=True)
+
+    assert recovered["installation"]["state"] == "FAILED"
+    assert not target.exists()
+    assert environment_manager.store.get_detection(environment_ref) is None
 
 
 def test_invalidated_runtime_allows_a_new_confirmation_transaction(tmp_path: Path) -> None:
@@ -911,9 +1012,11 @@ def test_simulated_ssh_failure_has_no_runtime_config(tmp_path: Path) -> None:
     environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
     calls = 0
 
-    def runner(_argv: Sequence[str], _input_bytes: bytes | None, _timeout: float) -> tuple[int, bytes]:
+    def runner(_argv: Sequence[str], input_bytes: bytes | None, _timeout: float) -> tuple[int, bytes]:
         nonlocal calls
         calls += 1
+        if input_bytes is not None and b'"operation":"rollback"' in input_bytes:
+            return 0, b'{"ok":true}'
         return 1, b"remote helper failed"
 
     installer = InstallationManager(
@@ -928,6 +1031,46 @@ def test_simulated_ssh_failure_has_no_runtime_config(tmp_path: Path) -> None:
     assert calls == 2  # failed install plus bounded best-effort rollback
     assert result["installation"]["state"] == "FAILED"
     assert result["runtime_config"] is None
+
+
+def test_ssh_rollback_failure_stays_recoverable_until_retry(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"remote-rollback-retry")
+    environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
+    calls: list[str] = []
+
+    def runner(
+        _argv: Sequence[str], input_bytes: bytes | None, _timeout: float
+    ) -> tuple[int, bytes]:
+        assert input_bytes is not None
+        if b'"operation":"rollback"' in input_bytes:
+            calls.append("rollback")
+            if calls.count("rollback") == 1:
+                return 1, b"remote cleanup temporarily unavailable"
+            return 0, b'{"ok":true}'
+        calls.append("install")
+        return 1, b"remote helper failed"
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=RestrictedInstallExecutor(runner=runner),
+    )
+    plan = installer.build_plan(environment_ref)
+    first = installer.confirm(_approval(plan))
+
+    assert first["installation"]["state"] == "ROLLING_BACK"
+    record = installer.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ROLLING_BACK"
+
+    recovered = installer.recover(record.installation_id, force=True)
+
+    assert recovered["installation"]["state"] == "FAILED"
+    assert recovered["installation"]["rollback_completed"] is True
+    assert calls == ["install", "rollback", "rollback"]
 
 
 def test_simulated_ssh_finalize_crash_recovers_from_remote_transaction_status(
@@ -1121,6 +1264,68 @@ def test_ssh_enabling_recovery_uses_final_target_evidence(
     assert observed[-1]["verified_files"][0]["path"] == target_evidence["path"]
 
 
+def test_ssh_verify_accepts_atomic_rename_gap_for_finalize_recovery(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"atomic-rename-gap")
+    environment_manager, environment_ref, _ = _environment(tmp_path, mode="ssh")
+    profile = environment_manager.store.get_profile(environment_ref)
+    manifest = _manifest(source)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=manifest,
+    )
+    plan = installer.build_plan(environment_ref)
+    evidence = {
+        "component_id": "unimol-weights",
+        "path": "/remote/target/weights/unimolv1.pt",
+        "size_bytes": len(source.read_bytes()),
+        "sha256": sha256_bytes(source.read_bytes()),
+    }
+    operations: list[str] = []
+
+    def runner(
+        _argv: Sequence[str], input_bytes: bytes | None, _timeout: float
+    ) -> tuple[int, bytes]:
+        assert input_bytes is not None
+        if b'"operation":"finalize"' in input_bytes:
+            operations.append("finalize")
+            return 0, b'{"ok":true,"state":"ENABLED","target_exists":true}'
+        operations.append("status")
+        return 0, json.dumps(
+            {
+                "ok": True,
+                "state": "VERIFIED",
+                "verified": True,
+                "target_exists": True,
+                "stage_exists": False,
+                "verified_files": [evidence],
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    executor = RestrictedInstallExecutor(runner=runner)
+    verified = executor.verify(
+        profile,
+        plan,
+        plan.target_directory,
+        {},
+        transaction_id="installation-atomic-rename-gap",
+    )
+    executor.finalize(
+        profile,
+        plan,
+        plan.target_directory,
+        transaction_id="installation-atomic-rename-gap",
+    )
+
+    assert verified["remote_state"] == "VERIFIED"
+    assert verified["target_exists"] is True
+    assert operations == ["status", "finalize"]
+
+
 def test_client_cannot_expand_the_fixed_component_allowlist(tmp_path: Path) -> None:
     source = tmp_path / "unimolv1.pt"
     source.write_bytes(b"allowlist")
@@ -1162,13 +1367,54 @@ def test_connection_or_catalog_change_invalidates_confirmed_runtime(tmp_path: Pa
     )
     assert changed_installer.runtime_public(environment_ref)["status_label"] == "已失效"
     changed_plan = changed_installer.build_plan(environment_ref)
-    assert changed_plan.status == "READY_TO_CONFIRM"
+    assert changed_plan.status == "READY_TO_INSTALL"
     changed_result = changed_installer.confirm(_approval(changed_plan))
     assert changed_result["installation"]["state"] == "CONFIRMED"
     changed_config = changed_installer.store.get_runtime_config(environment_ref)
     assert changed_config is not None
     assert changed_config.catalog_digest == changed.digest
-    assert changed_config.target_directory == original_target
+    assert changed_config.target_directory != original_target
+    assert (
+        Path(changed_config.target_directory) / "weights" / "unimolv1.pt"
+    ).read_bytes() == source.read_bytes()
+
+
+def test_archive_catalog_change_reinstalls_changed_weight_artifact(
+    tmp_path: Path,
+) -> None:
+    old_archive = tmp_path / "old.zip"
+    with zipfile.ZipFile(old_archive, "w") as output:
+        output.writestr("unimolv1.pt", b"OLD-WEIGHT")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_archive_manifest(old_archive, catalog_version="archive-1"),
+    )
+    first_plan = first.build_plan(environment_ref)
+    assert first.confirm(_approval(first_plan))["installation"]["state"] == "CONFIRMED"
+    first_config = first.store.get_runtime_config(environment_ref)
+    assert first_config is not None
+
+    new_archive = tmp_path / "new.zip"
+    with zipfile.ZipFile(new_archive, "w") as output:
+        output.writestr("unimolv1.pt", b"NEW-WEIGHT")
+    changed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_archive_manifest(new_archive, catalog_version="archive-2"),
+    )
+    changed_plan = changed.build_plan(environment_ref)
+
+    assert changed_plan.status == "READY_TO_INSTALL"
+    result = changed.confirm(_approval(changed_plan))
+    changed_config = changed.store.get_runtime_config(environment_ref)
+    assert result["installation"]["state"] == "CONFIRMED"
+    assert changed_config is not None
+    assert changed_config.runtime_id != first_config.runtime_id
+    assert (
+        Path(changed_config.target_directory) / "weights" / "unimolv1.pt"
+    ).read_bytes() == b"NEW-WEIGHT"
 
 
 def test_environment_install_http_surface_exposes_one_digest_bound_confirmation(

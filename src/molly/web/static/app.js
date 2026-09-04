@@ -663,6 +663,9 @@ const renderEnvironmentInstallPlan = (detection) => {
     if (installation.state === "FAILED") {
       return `<div class="environment-install-card environment-install-failure"><strong>安装失败，隔离目录已回滚</strong><span>${html(installation.error || "请重新检测并生成安装计划")}</span></div>`;
     }
+    if (installation.state === "ROLLING_BACK") {
+      return '<div class="environment-install-card environment-install-failure"><strong>正在回滚，运行环境暂不可用</strong><span>清理尚未完成；系统会在下一次恢复时继续处理，完成前不会登记为可用环境。</span></div>';
+    }
     return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
   }
   if (plan?.status === "ALREADY_CONFIRMED" || existingRuntime?.status_label === "已确认") {

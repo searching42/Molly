@@ -748,6 +748,7 @@ class InstallPlan:
         *,
         selected_component_ids: Sequence[str] | None = None,
         existing_runtime: Any | None = None,
+        force_reinstall: bool = False,
     ) -> "InstallPlan":
         if not isinstance(match, Mapping):
             raise InstallationConfigError("environment match is invalid")
@@ -760,6 +761,12 @@ class InstallPlan:
                 raise InstallationConfigError("environment missing-component entry is invalid")
             component_id = _safe_id(item.get("component_id"), field="missing component_id")
             missing_by_id[component_id] = item
+
+        if force_reinstall:
+            missing_by_id.setdefault(
+                "unimol-weights",
+                {"component_id": "unimol-weights", "reason": "固定清单已变化，需要重新验证并安装模型权重"},
+            )
 
         if selected_component_ids is None:
             selected = tuple(component_id for component_id in missing_by_id if component_id != "runtime-directory")
@@ -824,7 +831,10 @@ class InstallPlan:
         )
         plan_id = new_server_id("install-plan")
         reused_components = tuple(
-            item for item in match.get("reusable", ()) if isinstance(item, Mapping)
+            item
+            for item in match.get("reusable", ())
+            if isinstance(item, Mapping)
+            and item.get("component_id") not in missing_by_id
         )
         if already_confirmed and getattr(existing_runtime, "components", ()):
             reused_components = tuple(getattr(existing_runtime, "components"))
@@ -947,6 +957,7 @@ class InstallationRecord:
             "INSTALLING",
             "VERIFYING",
             "ENABLING",
+            "ROLLING_BACK",
             "CONFIRMED",
             "FAILED",
             "ROLLED_BACK",
@@ -1395,7 +1406,13 @@ class RuntimeInstallationStore:
             for raw in value["installations"].values():
                 if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
                     return InstallationRecord.from_dict(raw), False
-            active_states = {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING"}
+            active_states = {
+                "APPROVED",
+                "INSTALLING",
+                "VERIFYING",
+                "ENABLING",
+                "ROLLING_BACK",
+            }
             confirmed_runtime_keys = {
                 (raw.get("runtime_id"), raw.get("installation_id"))
                 for raw in value["runtime_configs"].values()
@@ -1503,7 +1520,11 @@ class RuntimeInstallationStore:
             if raw is None:
                 raise InstallationConfigError("installation was not found")
             current = InstallationRecord.from_dict(raw)
-            if current.state not in {"INSTALLING", "VERIFYING", "ENABLING"}:
+            if current.state not in {
+                "INSTALLING",
+                "VERIFYING",
+                "ENABLING",
+            }:
                 return current
             try:
                 age = max(0.0, time.time() - _parse_timestamp(current.updated_at))
@@ -1529,6 +1550,10 @@ class RuntimeInstallationStore:
             existing = value["runtime_configs"].get(config.runtime_id)
             if existing is not None:
                 current = RuntimeConfig.from_dict(existing)
+                if current.state == "INVALIDATED":
+                    value["runtime_configs"][config.runtime_id] = config.to_dict()
+                    self._write_state(value)
+                    return
                 if current.config_digest != config.config_digest:
                     raise InstallationConflictError("runtime ID is already bound to different content")
                 return
@@ -1633,7 +1658,7 @@ class InstallExecutor(Protocol):
         *,
         finalized: bool,
         transaction_id: str | None = None,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 def _fixed_ssh_argv(profile: EnvironmentProfile) -> tuple[str, ...]:
@@ -1949,8 +1974,8 @@ def main(request):
         target_exists = target.is_dir() and not target.is_symlink()
         stage_exists = stage.is_dir() and not stage.is_symlink()
         remote_state = state.get("state")
-        verified = (remote_state == "VERIFIED" and stage_exists) or (remote_state == "ENABLED" and target_exists)
-        evidence_root = target if remote_state == "ENABLED" else stage
+        verified = remote_state in {"VERIFIED", "ENABLED"} and (stage_exists or target_exists)
+        evidence_root = target if target_exists else stage
         print(json.dumps({"ok": True, "state": remote_state, "verified": verified, "target_exists": target_exists, "stage_exists": stage_exists, "verified_files": verified_files(evidence_root, request.get("entries", [])) if verified else []}, separators=(",", ":")))
         return
     if operation == "finalize":
@@ -2111,7 +2136,7 @@ class RestrictedInstallExecutor:
         *,
         finalized: bool,
         transaction_id: str | None = None,
-    ) -> None:
+    ) -> bool:
         if profile.mode == "ssh":
             try:
                 self._remote_call(
@@ -2124,9 +2149,10 @@ class RestrictedInstallExecutor:
                     transaction_id=transaction_id,
                 )
             except Exception:
-                # The transaction remains failed; never hide the original
-                # installation error behind best-effort cleanup.
-                return
+                # A remote cleanup failure is itself recoverable.  The manager
+                # keeps the durable transaction in ROLLING_BACK so a later
+                # recovery can retry the idempotent helper operation.
+                return False
         else:
             stage = Path(stage_directory)
             if _is_safe_runtime_path(stage) and (stage.exists() or stage.is_symlink()):
@@ -2141,6 +2167,7 @@ class RestrictedInstallExecutor:
                         target.unlink()
                     else:
                         shutil.rmtree(target)
+        return True
 
     def _install_entry(self, entry: InstallManifestEntry, stage: Path, deadline: float) -> dict[str, Any]:
         if not entry.installable or not entry.sha256:
@@ -2613,6 +2640,11 @@ class InstallationManager:
     ) -> InstallPlan:
         profile, report, match = self._current_binding(environment_ref)
         existing_runtime = self.runtime_for_environment(environment_ref)
+        force_reinstall = bool(
+            existing_runtime is not None
+            and existing_runtime.state == "INVALIDATED"
+            and existing_runtime.catalog_digest != self.manifest.digest
+        )
         plan = InstallPlan.build(
             profile,
             report,
@@ -2620,6 +2652,7 @@ class InstallationManager:
             self.manifest,
             selected_component_ids=selected_component_ids,
             existing_runtime=existing_runtime,
+            force_reinstall=force_reinstall,
         )
         self.store.save_plan(plan)
         return plan
@@ -3092,6 +3125,8 @@ class InstallationManager:
     def recover(self, installation_id: str, *, force: bool = False) -> dict[str, Any]:
         record = self.store.get_installation(installation_id)
         plan = self.store.get_plan(record.plan_id)
+        if record.state == "ROLLING_BACK":
+            return self._recover_rollback(record, plan)
         if plan.status == "READY_TO_CONFIRM":
             if not force and record.state == "VERIFYING" and _process_alive(record.worker_pid):
                 raise InstallationConflictError("installation worker is still active")
@@ -3120,6 +3155,148 @@ class InstallationManager:
             "runtime_config": config.to_dict(public=True) if config else None,
         }
 
+    def _transaction_reprobe_digests(self, record: InstallationRecord) -> set[str]:
+        if not isinstance(record.verification, Mapping):
+            return set()
+        digests: set[str] = set()
+        for key in ("reprobe", "final_reprobe"):
+            value = record.verification.get(key)
+            digest = value.get("report_digest") if isinstance(value, Mapping) else None
+            if isinstance(digest, str):
+                digests.add(digest)
+        return digests
+
+    def _failed_report_is_cleared(
+        self,
+        plan: InstallPlan,
+        record: InstallationRecord,
+    ) -> bool:
+        expected_digests = self._transaction_reprobe_digests(record)
+        if not expected_digests:
+            return True
+        try:
+            detection = self.environment_manager.store.get_detection(
+                plan.environment_ref
+            )
+        except Exception:
+            return False
+        if detection is None:
+            return True
+        report = detection.get("report") if isinstance(detection, Mapping) else None
+        if not isinstance(report, Mapping):
+            return False
+        current_digest = report.get("report_digest")
+        if not isinstance(current_digest, str) or current_digest not in expected_digests:
+            # A newer detection belongs to the connection's current state and
+            # must not be removed as part of this old rollback.
+            return True
+        try:
+            cleared = self.environment_manager.store.clear_detection(
+                plan.environment_ref,
+                expected_report_digest=current_digest,
+            )
+        except Exception:
+            return False
+        if cleared:
+            return True
+        try:
+            current = self.environment_manager.store.get_detection(
+                plan.environment_ref
+            )
+        except Exception:
+            return False
+        if current is None:
+            return True
+        current_report = current.get("report") if isinstance(current, Mapping) else None
+        return not isinstance(current_report, Mapping) or current_report.get("report_digest") not in expected_digests
+
+    def _enter_rollback(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        exc: BaseException,
+        *,
+        finalized: bool,
+    ) -> InstallationRecord:
+        current = self.store.get_installation(record.installation_id)
+        if current.state == "ROLLING_BACK":
+            return current
+        verification = thaw_json(current.verification)
+        verification["rollback_finalized"] = bool(finalized)
+        return self._update(
+            current,
+            state="ROLLING_BACK",
+            verification=verification,
+            error=_safe_install_error(exc),
+            rollback_completed=False,
+            worker_pid=0,
+            side_effects_started=current.side_effects_started,
+        )
+
+    def _complete_rollback(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        *,
+        profile: EnvironmentProfile | None,
+    ) -> InstallationRecord:
+        current = self.store.get_installation(record.installation_id)
+        config = self.store.get_runtime_config(plan.environment_ref)
+        if config is not None and config.state == "CONFIRMED":
+            try:
+                self.store.mark_runtime_invalidated(config.runtime_id)
+            except InstallationError:
+                return current
+        if not self._failed_report_is_cleared(plan, current):
+            return current
+        finalized = bool(
+            isinstance(current.verification, Mapping)
+            and current.verification.get("rollback_finalized")
+        )
+        if profile is not None and current.stage_directory:
+            rollback_result = self.executor.rollback(
+                profile,
+                plan,
+                current.stage_directory,
+                finalized=finalized,
+                transaction_id=current.installation_id,
+            )
+            if rollback_result is False:
+                return current
+        latest = self.store.get_installation(current.installation_id)
+        return self._update(
+            latest,
+            state="FAILED",
+            rollback_completed=True,
+            worker_pid=0,
+            side_effects_started=latest.side_effects_started,
+        )
+
+    def _rollback_result(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        *,
+        profile: EnvironmentProfile | None,
+    ) -> dict[str, Any]:
+        try:
+            current = self._complete_rollback(record, plan, profile=profile)
+        except Exception:
+            current = self.store.get_installation(record.installation_id)
+        config = self.store.get_runtime_config(plan.environment_ref)
+        return {
+            "installation": current.to_dict(public=True),
+            "runtime_config": config.to_dict(public=True) if config else None,
+        }
+
+    def _recover_rollback(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+    ) -> dict[str, Any]:
+        profile = self.environment_manager.store.get_profile(plan.environment_ref)
+        return self._rollback_result(record, plan, profile=profile)
+
     def _recover_enabling(
         self,
         record: InstallationRecord,
@@ -3127,7 +3304,17 @@ class InstallationManager:
     ) -> dict[str, Any]:
         """Finish the tiny window between atomic enable and config persistence."""
 
-        profile, report, _ = self._current_binding(plan.environment_ref)
+        try:
+            profile, report, _ = self._current_binding(plan.environment_ref)
+        except InstallationError as exc:
+            profile = self.environment_manager.store.get_profile(plan.environment_ref)
+            rolling_back = self._enter_rollback(
+                record,
+                plan,
+                exc,
+                finalized=True,
+            )
+            return self._rollback_result(rolling_back, plan, profile=profile)
         allowed_report_digests = {record.report_digest}
         if isinstance(record.verification, Mapping):
             for key in ("reprobe", "final_reprobe"):
@@ -3146,6 +3333,11 @@ class InstallationManager:
         ):
             raise InstallationConflictError("运行配置已绑定到其他安装计划")
         existing_confirmed = existing is not None and existing.state == "CONFIRMED" and existing.report_digest == report.report_digest
+        expected_weight_records: Mapping[str, Mapping[str, Any]] | None = None
+        if isinstance(record.verification, Mapping):
+            persisted_weight_records = record.verification.get("verified_weight_records")
+            if isinstance(persisted_weight_records, Mapping):
+                expected_weight_records = thaw_json(persisted_weight_records)
         if profile.mode == "local":
             target = (self.root / "runtimes" / plan.runtime_id).absolute()
             runtime_directory: str | Path = str(target)
@@ -3154,6 +3346,8 @@ class InstallationManager:
                 # before os.replace.  Put the transaction back into the
                 # normal resumable path; never treat a missing target as
                 # successfully enabled.
+                if existing_confirmed and existing is not None:
+                    self.store.mark_runtime_invalidated(existing.runtime_id)
                 reset = self._update(record, state="APPROVED", error="")
                 claimed, should_execute = self.store.claim_execution(reset.installation_id)
                 if not should_execute:
@@ -3203,6 +3397,25 @@ class InstallationManager:
                 final_result = remote_verification
             if remote_verification.get("remote_state") != "ENABLED" or not remote_verification.get("target_exists"):
                 raise InstallationIntegrityError("恢复后远端 runtime 未确认启用")
+        try:
+            weight_records = self._verified_weight_records(
+                profile,
+                plan,
+                runtime_directory,
+                final_result,
+                expected_records=expected_weight_records,
+            )
+        except InstallationError as exc:
+            if not existing_confirmed or existing is None:
+                raise
+            self.store.mark_runtime_invalidated(existing.runtime_id)
+            rolling_back = self._enter_rollback(
+                record,
+                plan,
+                exc,
+                finalized=True,
+            )
+            return self._rollback_result(rolling_back, plan, profile=profile)
         if existing_confirmed:
             current = self.store.get_installation(record.installation_id)
             if current.state != "CONFIRMED":
@@ -3219,18 +3432,6 @@ class InstallationManager:
             }
         runtime_directory: str | Path = (
             str(target) if profile.mode == "local" else plan.target_directory
-        )
-        expected_weight_records: Mapping[str, Mapping[str, Any]] | None = None
-        if isinstance(record.verification, Mapping):
-            persisted_weight_records = record.verification.get("verified_weight_records")
-            if isinstance(persisted_weight_records, Mapping):
-                expected_weight_records = thaw_json(persisted_weight_records)
-        weight_records = self._verified_weight_records(
-            profile,
-            plan,
-            runtime_directory,
-            final_result,
-            expected_records=expected_weight_records,
         )
         reprobe, reprobe_match = self._reprobe(
             profile,
@@ -3641,53 +3842,28 @@ class InstallationManager:
         stage_directory: str,
         finalized: bool,
     ) -> InstallationRecord:
-        latest: InstallationRecord | None = None
         try:
-            latest = self.store.get_installation(record.installation_id)
-        except InstallationError:
-            pass
-        # A final target probe is persisted before the runtime config.  If
-        # the later commit fails and rollback removes that target, the probe
-        # is no longer a valid existing-environment report.  Clear it with a
-        # report-digest CAS so a concurrent fresh detection is never erased;
-        # the next plan must explicitly discover the host again.
-        if latest is not None and isinstance(latest.verification, Mapping):
-            final_reprobe = latest.verification.get("final_reprobe")
-            final_report_digest = (
-                final_reprobe.get("report_digest")
-                if isinstance(final_reprobe, Mapping)
-                else None
-            )
-            if isinstance(final_report_digest, str):
-                try:
-                    self.environment_manager.store.clear_detection(
-                        plan.environment_ref,
-                        expected_report_digest=final_report_digest,
-                    )
-                except Exception:
-                    pass
-        if profile is not None and stage_directory:
-            try:
-                self.executor.rollback(
-                    profile,
-                    plan,
-                    stage_directory,
-                    finalized=finalized,
-                    transaction_id=record.installation_id,
-                )
-            except Exception:
-                pass
-        try:
-            latest = latest or self.store.get_installation(record.installation_id)
-            return self._update(
-                latest,
-                state="FAILED",
-                error=_safe_install_error(exc),
-                rollback_completed=True,
-                side_effects_started=latest.side_effects_started,
+            rolling_back = self._enter_rollback(
+                record,
+                plan,
+                exc,
+                finalized=finalized,
             )
         except Exception as update_exc:
             raise InstallationExecutionError("安装失败且无法持久化失败状态") from update_exc
+        try:
+            return self._complete_rollback(
+                rolling_back,
+                plan,
+                profile=profile,
+            )
+        except SystemExit:
+            raise
+        except Exception:
+            try:
+                return self.store.get_installation(record.installation_id)
+            except Exception as update_exc:
+                raise InstallationExecutionError("安装失败且无法持久化失败状态") from update_exc
 
     def runtime_for_environment(self, environment_ref: str) -> RuntimeConfig | None:
         config = self.store.get_runtime_config(environment_ref)
