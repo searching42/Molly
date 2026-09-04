@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -1266,17 +1267,24 @@ class RuntimeInstallationStore:
                 del plans[plan_id]
                 continue
 
-            runtime_installation_ids = {
+            confirmed_runtime_installation_ids = {
                 str(raw.get("installation_id"))
                 for raw in runtime_configs.values()
-                if isinstance(raw, Mapping) and raw.get("installation_id")
+                if isinstance(raw, Mapping)
+                and raw.get("state") == "CONFIRMED"
+                and raw.get("installation_id")
             }
             terminal = [
                 (created_key(raw), installation_id, str(raw.get("plan_id")))
                 for installation_id, raw in installations.items()
                 if isinstance(raw, Mapping)
-                and raw.get("state") in {"FAILED", "ROLLED_BACK"}
-                and installation_id not in runtime_installation_ids
+                and (
+                    raw.get("state") in {"FAILED", "ROLLED_BACK"}
+                    or (
+                        raw.get("state") == "CONFIRMED"
+                        and installation_id not in confirmed_runtime_installation_ids
+                    )
+                )
             ]
             if not terminal:
                 break
@@ -1387,13 +1395,22 @@ class RuntimeInstallationStore:
             for raw in value["installations"].values():
                 if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
                     return InstallationRecord.from_dict(raw), False
-            active_states = {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "CONFIRMED"}
+            active_states = {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING"}
+            confirmed_runtime_keys = {
+                (raw.get("runtime_id"), raw.get("installation_id"))
+                for raw in value["runtime_configs"].values()
+                if isinstance(raw, Mapping) and raw.get("state") == "CONFIRMED"
+            }
             for raw in value["installations"].values():
                 if not isinstance(raw, Mapping):
                     continue
                 if raw.get("environment_ref") != plan.environment_ref:
                     continue
-                if raw.get("state") in active_states:
+                if raw.get("state") in active_states or (
+                    raw.get("state") == "CONFIRMED"
+                    and (raw.get("runtime_id"), raw.get("installation_id"))
+                    in confirmed_runtime_keys
+                ):
                     raise InstallationConflictError(
                         "当前连接已有另一个安装或确认事务正在进行"
                     )
@@ -1800,6 +1817,41 @@ def component_complete(stage, item):
         )
     return any(path.is_file() and not path.is_symlink() for path in destination.rglob("*"))
 
+def digest_file(path):
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        while True:
+            block = source.read(64 * 1024)
+            if not block:
+                break
+            size += len(block)
+            if size > MAX_DISK_BYTES:
+                raise ValueError("verified file exceeds fixed disk limit")
+            digest.update(block)
+    return size, digest.hexdigest()
+
+def verified_files(stage, entries):
+    result = []
+    stage = pathlib.Path(stage).resolve()
+    for item in entries:
+        raw_paths = item.get("required_paths", [])
+        if not raw_paths and item.get("install_kind") == "file":
+            raw_paths = [item.get("install_filename", "")]
+        for raw_path in raw_paths:
+            relative = safe_rel(raw_path)
+            candidate = (stage / safe_rel(item["install_subdirectory"]) / relative).resolve()
+            if not candidate.is_file() or candidate.is_symlink() or not candidate.is_relative_to(stage):
+                continue
+            size, digest = digest_file(candidate)
+            result.append({
+                "component_id": item.get("component_id"),
+                "path": str(candidate),
+                "size_bytes": size,
+                "sha256": digest,
+            })
+    return result
+
 def main(request):
     operation = request.get("operation")
     transaction_id = request.get("transaction_id")
@@ -1815,7 +1867,7 @@ def main(request):
     target = owned_path(request.get("target_directory"))
     if operation == "install":
         if state.get("state") == "ENABLED" and target.is_dir() and not target.is_symlink():
-            print(json.dumps({"ok": True, "verified": True, "state": "ENABLED", "target_exists": True}, separators=(",", ":")))
+            print(json.dumps({"ok": True, "verified": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
         if stage.exists() and stage.is_symlink():
             raise ValueError("staging directory cannot be a symlink")
@@ -1855,19 +1907,20 @@ def main(request):
             completed.add(item["component_id"])
             write_state(transaction_id, {"state": "INSTALLING", "plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": request.get("stage_directory"), "target_directory": request.get("target_directory"), "completed_component_ids": sorted(completed)})
         write_state(transaction_id, {"state": "VERIFIED", "plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": request.get("stage_directory"), "target_directory": request.get("target_directory"), "completed_component_ids": sorted(completed)})
-        print(json.dumps({"ok": True, "verified": True, "state": "VERIFIED", "target_exists": False}, separators=(",", ":")))
+        print(json.dumps({"ok": True, "verified": True, "state": "VERIFIED", "target_exists": False, "verified_files": verified_files(stage, request.get("entries", []))}, separators=(",", ":")))
         return
     if operation == "status":
         target_exists = target.is_dir() and not target.is_symlink()
         stage_exists = stage.is_dir() and not stage.is_symlink()
         remote_state = state.get("state")
         verified = (remote_state == "VERIFIED" and stage_exists) or (remote_state == "ENABLED" and target_exists)
-        print(json.dumps({"ok": True, "state": remote_state, "verified": verified, "target_exists": target_exists, "stage_exists": stage_exists}, separators=(",", ":")))
+        evidence_root = target if remote_state == "ENABLED" else stage
+        print(json.dumps({"ok": True, "state": remote_state, "verified": verified, "target_exists": target_exists, "stage_exists": stage_exists, "verified_files": verified_files(evidence_root, request.get("entries", [])) if verified else []}, separators=(",", ":")))
         return
     if operation == "finalize":
         target_exists = target.is_dir() and not target.is_symlink()
         if state.get("state") == "ENABLED" and target_exists:
-            print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True}, separators=(",", ":")))
+            print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
         if state.get("state") != "VERIFIED":
             raise ValueError("remote transaction is not ready to finalize")
@@ -1880,7 +1933,7 @@ def main(request):
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage, target)
         write_state(transaction_id, {**state, "state": "ENABLED"})
-        print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True}, separators=(",", ":")))
+        print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
         return
     if operation == "rollback":
         if request.get("finalized") and state.get("state") == "ENABLED" and target.is_dir() and not target.is_symlink():
@@ -2199,6 +2252,25 @@ def _verified_file(path: Path, expected_sha256: str, expected_size: int) -> bool
         return False
 
 
+def _file_digest(path: Path) -> tuple[int, str]:
+    if path.is_symlink() or not path.is_file():
+        raise InstallationIntegrityError("固定验证文件不可读")
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            while block := handle.read(64 * 1024):
+                size += len(block)
+                if size > MAX_EXTRACTED_FILE_BYTES:
+                    raise InstallationIntegrityError("固定验证文件超过磁盘上限")
+                digest.update(block)
+    except OSError as exc:
+        raise InstallationIntegrityError("固定验证文件不可读") from exc
+    if size <= 0:
+        raise InstallationIntegrityError("固定验证文件为空")
+    return size, digest.hexdigest()
+
+
 def _download_fixed(opener: Any, entry: InstallManifestEntry, destination: Path, timeout_seconds: float) -> None:
     deadline = time.monotonic() + min(float(timeout_seconds), INSTALLATION_TIMEOUT_SECONDS)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2485,9 +2557,12 @@ class InstallationManager:
         allowed_report_digests = {plan.report_digest}
         existing = self.store.get_installation_for_plan(plan.plan_id)
         if existing is not None and isinstance(existing.verification, Mapping):
-            reprobe = existing.verification.get("reprobe")
-            if isinstance(reprobe, Mapping) and isinstance(reprobe.get("report_digest"), str):
-                allowed_report_digests.add(reprobe["report_digest"])
+            for key in ("reprobe", "final_reprobe"):
+                reprobe = existing.verification.get(key)
+                if isinstance(reprobe, Mapping) and isinstance(
+                    reprobe.get("report_digest"), str
+                ):
+                    allowed_report_digests.add(reprobe["report_digest"])
         if report.report_digest not in allowed_report_digests:
             raise InstallationConflictError("环境检测报告已变化，请重新检测并生成安装计划")
         if self.manifest.catalog_version != plan.catalog_version or self.manifest.digest != plan.catalog_digest:
@@ -2548,23 +2623,112 @@ class InstallationManager:
         profile: EnvironmentProfile,
         *,
         runtime_directory: str | Path | None = None,
+        verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[EnvironmentReport, Mapping[str, Any]]:
         detector = self.environment_manager.detector
         if runtime_directory is not None:
             detect_for_runtime = getattr(detector, "detect_for_runtime", None)
-            report = (
-                detect_for_runtime(profile, runtime_directory)
-                if callable(detect_for_runtime)
-                else detector.detect(profile)
-            )
+            if callable(detect_for_runtime):
+                try:
+                    parameters = inspect.signature(detect_for_runtime).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                accepts_records = "verified_weight_records" in parameters or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+                report = (
+                    detect_for_runtime(
+                        profile,
+                        runtime_directory,
+                        verified_weight_records=verified_weight_records,
+                    )
+                    if accepts_records
+                    else detect_for_runtime(profile, runtime_directory)
+                )
+            else:
+                report = detector.detect(profile)
         else:
             report = detector.detect(profile)
         if not isinstance(report, EnvironmentReport):
             raise InstallationIntegrityError("安装后重新探测没有返回有效报告")
         if report.connection_digest != profile.connection_digest:
             raise InstallationIntegrityError("安装后重新探测未绑定当前连接")
+        if verified_weight_records:
+            report = EnvironmentReport.from_probe(
+                profile,
+                report.to_dict(include_digest=False),
+                verified_weight_records=verified_weight_records,
+            )
         match = match_environment(profile, report)
         return report, match
+
+    def _verified_weight_records(
+        self,
+        profile: EnvironmentProfile,
+        plan: InstallPlan,
+        runtime_directory: str | Path,
+        result: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Build trusted weight evidence for the target-aware re-probe.
+
+        Local files are hashed from the staged/enabled directory itself.  SSH
+        returns the same evidence from the fixed remote helper after it has
+        verified and copied each required file.  A missing or malformed
+        record is intentionally left absent so the subsequent match remains
+        ``PLAN_REQUIRED`` instead of being promoted by a plan entry alone.
+        """
+
+        records: dict[str, dict[str, Any]] = {}
+        weight_entries = [
+            entry for entry in plan.entries if entry.component_id == "unimol-weights"
+        ]
+        if profile.mode == "local":
+            base = Path(runtime_directory).absolute().resolve()
+            for entry in weight_entries:
+                relative_paths = entry.required_paths or (
+                    (entry.install_filename,) if entry.install_kind == "file" else ()
+                )
+                for relative in relative_paths:
+                    candidate = (
+                        base / entry.install_subdirectory / relative
+                    ).resolve()
+                    if not candidate.is_relative_to(base):
+                        raise InstallationIntegrityError(
+                            "权重验证路径不属于目标运行目录"
+                        )
+                    if not candidate.is_file() or candidate.is_symlink():
+                        continue
+                    size, digest = _file_digest(candidate)
+                    records[str(candidate)] = {
+                        "size_bytes": size,
+                        "sha256": digest,
+                    }
+            return records
+
+        raw_files = result.get("verified_files", ()) if isinstance(result, Mapping) else ()
+        if not isinstance(raw_files, Sequence) or isinstance(
+            raw_files, (str, bytes, bytearray)
+        ):
+            return records
+        for raw in raw_files:
+            if not isinstance(raw, Mapping) or raw.get("component_id") != "unimol-weights":
+                continue
+            path = raw.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            try:
+                digest = validate_sha256(raw.get("sha256"), field="verified weight digest")
+                size = _bounded_int(
+                    raw.get("size_bytes"),
+                    field="verified weight size",
+                    minimum=1,
+                    maximum=MAX_EXTRACTED_FILE_BYTES,
+                )
+            except InstallationError:
+                continue
+            records[path] = {"size_bytes": size, "sha256": digest}
+        return records
 
     def _persist_reprobe(
         self,
@@ -2773,9 +2937,13 @@ class InstallationManager:
 
         profile, report, _ = self._current_binding(plan.environment_ref)
         allowed_report_digests = {record.report_digest}
-        persisted_reprobe = record.verification.get("reprobe") if isinstance(record.verification, Mapping) else None
-        if isinstance(persisted_reprobe, Mapping) and isinstance(persisted_reprobe.get("report_digest"), str):
-            allowed_report_digests.add(persisted_reprobe["report_digest"])
+        if isinstance(record.verification, Mapping):
+            for key in ("reprobe", "final_reprobe"):
+                persisted_reprobe = record.verification.get(key)
+                if isinstance(persisted_reprobe, Mapping) and isinstance(
+                    persisted_reprobe.get("report_digest"), str
+                ):
+                    allowed_report_digests.add(persisted_reprobe["report_digest"])
         if report.report_digest not in allowed_report_digests or profile.connection_digest != record.connection_digest:
             raise InstallationConflictError("恢复前连接或探测报告已变化")
         existing = self.store.get_runtime_config(plan.environment_ref)
@@ -2788,6 +2956,7 @@ class InstallationManager:
         existing_confirmed = existing is not None and existing.state == "CONFIRMED" and existing.report_digest == report.report_digest
         if profile.mode == "local":
             target = (self.root / "runtimes" / plan.runtime_id).absolute()
+            runtime_directory: str | Path = str(target)
             if not target.is_dir() or target.is_symlink():
                 # The worker may have crashed after recording ENABLING but
                 # before os.replace.  Put the transaction back into the
@@ -2810,7 +2979,13 @@ class InstallationManager:
                 (record.verification.get("install_result", {}) if isinstance(record.verification, Mapping) else {}),
                 transaction_id=record.installation_id,
             )
+            final_result: Mapping[str, Any] = (
+                record.verification.get("install_result", {})
+                if isinstance(record.verification, Mapping)
+                else {}
+            )
         else:
+            runtime_directory = plan.target_directory
             remote_verification = self.executor.verify(
                 profile,
                 plan,
@@ -2818,6 +2993,7 @@ class InstallationManager:
                 (record.verification.get("install_result", {}) if isinstance(record.verification, Mapping) else {}),
                 transaction_id=record.installation_id,
             )
+            final_result = remote_verification
             if remote_verification.get("remote_state") != "ENABLED":
                 self.executor.finalize(
                     profile,
@@ -2851,11 +3027,34 @@ class InstallationManager:
         runtime_directory: str | Path = (
             str(target) if profile.mode == "local" else plan.target_directory
         )
+        weight_records = self._verified_weight_records(
+            profile,
+            plan,
+            runtime_directory,
+            final_result,
+        )
+        if not weight_records and isinstance(record.verification, Mapping):
+            persisted_weight_records = record.verification.get("verified_weight_records")
+            if isinstance(persisted_weight_records, Mapping):
+                weight_records = thaw_json(persisted_weight_records)
         reprobe, reprobe_match = self._reprobe(
             profile,
             runtime_directory=runtime_directory,
+            verified_weight_records=weight_records,
         )
         runtime_components = _runtime_components_from_match(reprobe_match)
+        verification = {
+            **thaw_json(record.verification),
+            "final_reprobe": {
+                "report_digest": reprobe.report_digest,
+                "detected_at": reprobe.detected_at,
+                "match_status": reprobe_match.get("status"),
+                "selected_device": reprobe_match.get("selected_device"),
+            },
+            "runtime_components": thaw_json(list(runtime_components)),
+            "verified_weight_records": thaw_json(weight_records),
+        }
+        current = self._update(record, verification=verification)
         self._persist_reprobe(
             profile,
             reprobe,
@@ -2864,7 +3063,7 @@ class InstallationManager:
         )
         if existing is None:
             existing = RuntimeConfig.confirmed(
-                record=record,
+                record=current,
                 components=runtime_components,
                 verified_at=utc_timestamp(),
                 report_digest=reprobe.report_digest,
@@ -2945,9 +3144,16 @@ class InstallationManager:
                 allowed_report_digests.add(persisted_reprobe["report_digest"])
             if report_before_reprobe.report_digest not in allowed_report_digests:
                 raise InstallationConflictError("探测报告在安装期间发生变化，已取消启用")
+            stage_weight_records = self._verified_weight_records(
+                profile,
+                plan,
+                stage_directory,
+                result,
+            )
             reprobe, reprobe_match = self._reprobe(
                 profile,
                 runtime_directory=stage_directory,
+                verified_weight_records=stage_weight_records,
             )
             runtime_components = _runtime_components_from_match(reprobe_match)
             verified_components = {
@@ -2966,6 +3172,7 @@ class InstallationManager:
                     "components": verified_components,
                 },
                 "runtime_components": thaw_json(list(runtime_components)),
+                "verified_weight_records": thaw_json(stage_weight_records),
             }
             current = self._update(current, verification=verification)
             # Re-check all approval bindings immediately before the atomic
@@ -2982,27 +3189,58 @@ class InstallationManager:
                 transaction_id=record.installation_id,
             )
             finalized = True
+            final_runtime_directory: str | Path = (
+                str(target) if profile.mode == "local" else plan.target_directory
+            )
+            final_result: Mapping[str, Any] = result
             if profile.mode == "ssh":
-                enabled = self.executor.verify(
+                final_result = self.executor.verify(
                     profile,
                     plan,
                     stage_directory,
                     result,
                     transaction_id=record.installation_id,
                 )
-                if enabled.get("remote_state") != "ENABLED" or not enabled.get("target_exists"):
+                if final_result.get("remote_state") != "ENABLED" or not final_result.get("target_exists"):
                     raise InstallationIntegrityError("远端 runtime 原子启用后未通过状态验证")
+            _, final_binding_report, _ = self._current_binding(plan.environment_ref)
+            if final_binding_report.report_digest != latest_report.report_digest:
+                raise InstallationConflictError("连接或探测报告在启用期间发生变化，已取消启用")
+            final_weight_records = self._verified_weight_records(
+                profile,
+                plan,
+                final_runtime_directory,
+                final_result,
+            )
+            final_reprobe, final_match = self._reprobe(
+                profile,
+                runtime_directory=final_runtime_directory,
+                verified_weight_records=final_weight_records,
+            )
+            final_runtime_components = _runtime_components_from_match(final_match)
+            verification = {
+                **verification,
+                "final_reprobe": {
+                    "report_digest": final_reprobe.report_digest,
+                    "detected_at": final_reprobe.detected_at,
+                    "match_status": final_match.get("status"),
+                    "selected_device": final_match.get("selected_device"),
+                },
+                "runtime_components": thaw_json(list(final_runtime_components)),
+                "verified_weight_records": thaw_json(final_weight_records),
+            }
+            current = self._update(current, verification=verification)
             self._persist_reprobe(
                 profile,
-                reprobe,
-                reprobe_match,
-                expected_report_digest=latest_report.report_digest,
+                final_reprobe,
+                final_match,
+                expected_report_digest=final_binding_report.report_digest,
             )
             config = RuntimeConfig.confirmed(
                 record=current,
-                components=runtime_components,
+                components=final_runtime_components,
                 verified_at=utc_timestamp(),
-                report_digest=reprobe.report_digest,
+                report_digest=final_reprobe.report_digest,
             )
             self.store.save_runtime_config(config)
             current = self.store.get_installation(record.installation_id)

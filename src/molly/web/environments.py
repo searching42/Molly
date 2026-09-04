@@ -1895,6 +1895,7 @@ class EnvironmentDetector:
         profile: EnvironmentProfile,
         *,
         run_directory: Path | str | None = None,
+        verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> EnvironmentReport:
         if not isinstance(profile, EnvironmentProfile):
             raise TypeError("environment detector requires an EnvironmentProfile")
@@ -1939,16 +1940,26 @@ class EnvironmentDetector:
             raise EnvironmentDetectionError("environment probe returned invalid JSON") from exc
         if not isinstance(raw, Mapping):
             raise EnvironmentDetectionError("environment probe returned an invalid object")
-        return EnvironmentReport.from_probe(profile, raw)
+        return EnvironmentReport.from_probe(
+            profile,
+            raw,
+            verified_weight_records=verified_weight_records,
+        )
 
     def detect_for_runtime(
         self,
         profile: EnvironmentProfile,
         runtime_directory: Path | str,
+        *,
+        verified_weight_records: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> EnvironmentReport:
         """Probe a server-owned staged/enabled runtime directory."""
 
-        return self.detect(profile, run_directory=runtime_directory)
+        return self.detect(
+            profile,
+            run_directory=runtime_directory,
+            verified_weight_records=verified_weight_records,
+        )
 
 
 class EnvironmentManager:

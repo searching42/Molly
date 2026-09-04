@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -209,6 +210,33 @@ def test_detector_uses_only_fixed_local_or_ssh_probe_transport(tmp_path: Path) -
     assert script is not None and b"nvidia-smi" in script
     assert b"MOLLY_PROBE_TIMEOUT_SECONDS" in script
     assert all(item not in argv for item in ("sh -c", "sudo", "curl", "wget"))
+
+
+def test_real_runtime_probe_applies_verified_weight_evidence(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    weight = runtime / "weights" / "unimolv1.pt"
+    weight.parent.mkdir(parents=True)
+    payload = b"real probe weight"
+    weight.write_bytes(payload)
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+
+    report = EnvironmentDetector(timeout_seconds=5).detect_for_runtime(
+        profile,
+        runtime,
+        verified_weight_records={
+            str(weight): {
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        },
+    )
+    candidate = next(
+        item
+        for item in report.data["weights"]["entries"]
+        if Path(item["path"]).resolve() == weight.resolve()
+    )
+    assert candidate["verification_status"] == "verified"
+    assert report.data["weights"]["verification_status"] == "verified"
 
 
 def test_environment_manager_persists_report_and_match(tmp_path: Path) -> None:

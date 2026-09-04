@@ -111,11 +111,40 @@ class _FixedDetector:
     def detect_for_runtime(
         self,
         profile: EnvironmentProfile,
-        _runtime_directory: str | Path,
+        runtime_directory: str | Path,
+        *,
+        verified_weight_records: Mapping[str, Mapping[str, object]] | None = None,
     ) -> EnvironmentReport:
         self.calls += 1
         assert profile.environment_ref == self.report.environment_ref
-        return self.runtime_report or self.report
+        report = self.runtime_report or self.report
+        payload = report.to_dict(include_digest=False)
+        weights = payload.get("weights")
+        trusted_weights: dict[str, dict[str, object]] = {}
+        disk = payload.get("disk")
+        if isinstance(disk, dict):
+            disk["path"] = str(runtime_directory)
+            disk["exists"] = True
+            disk["writable"] = True
+            disk["parent_writable"] = True
+        if isinstance(weights, dict):
+            for item in weights.get("entries", ()):
+                if isinstance(item, dict) and item.get("name"):
+                    item["path"] = str(Path(runtime_directory) / "weights" / item["name"])
+                    candidate = Path(item["path"])
+                    if candidate.is_file():
+                        item["size_bytes"] = candidate.stat().st_size
+                    if item.get("verification_status") == "verified" and item.get("sha256"):
+                        trusted_weights[item["path"]] = {
+                            "sha256": item["sha256"],
+                            "size_bytes": item.get("size_bytes", 0),
+                        }
+        trusted_weights.update(verified_weight_records or {})
+        return EnvironmentReport.from_probe(
+            profile,
+            payload,
+            verified_weight_records=trusted_weights,
+        )
 
 
 def _environment(
@@ -261,7 +290,7 @@ def test_post_install_match_is_required_and_runtime_binds_reused_components(
 ) -> None:
     source = tmp_path / "unimolv1.pt"
     source.write_bytes(b"target-aware")
-    environment_manager, environment_ref, report = _environment(tmp_path)
+    environment_manager, environment_ref, _ = _environment(tmp_path)
     installer = InstallationManager(
         tmp_path / "runtime",
         environment_manager=environment_manager,
@@ -284,7 +313,13 @@ def test_post_install_match_is_required_and_runtime_binds_reused_components(
     negative_source = negative_root / "unimolv1.pt"
     negative_source.parent.mkdir()
     negative_source.write_bytes(b"target-aware-negative")
-    negative_manager, negative_ref, negative_report = _environment(negative_root)
+    negative_manager, negative_ref, _ = _environment(negative_root)
+    negative_payload = _probe_payload()
+    negative_payload["weights"] = {"entries": [], "total_bytes": 0}
+    negative_report = EnvironmentReport.from_probe(
+        negative_manager.store.get_profile(negative_ref),
+        negative_payload,
+    )
     negative_manager.detector.runtime_report = negative_report  # type: ignore[attr-defined]
     negative_installer = InstallationManager(
         negative_root / "runtime",
@@ -323,6 +358,25 @@ def test_compatible_confirmation_recovery_reuses_persisted_config_digest(
     recovered = resumed.store.get_runtime_config(environment_ref)
     assert recovered is not None
     assert recovered.config_digest == saved.config_digest
+
+
+def test_invalidated_runtime_allows_a_new_confirmation_transaction(tmp_path: Path) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    installer = InstallationManager(tmp_path / "runtime", environment_manager=environment_manager)
+
+    first_plan = installer.build_plan(environment_ref)
+    first = installer.confirm(_approval(first_plan))
+    assert first["installation"]["state"] == "CONFIRMED"
+    first_config = installer.store.get_runtime_config(environment_ref)
+    assert first_config is not None
+    installer.store.mark_runtime_invalidated(first_config.runtime_id)
+
+    second_plan = installer.build_plan(environment_ref)
+    assert second_plan.status == "READY_TO_CONFIRM"
+    second = installer.confirm(_approval(second_plan))
+    assert second["installation"]["state"] == "CONFIRMED"
+    assert second["runtime_config"]["status_label"] == "已确认"
+    assert second["runtime_config"]["runtime_id"] != first_config.runtime_id
 
 
 def test_installable_manifest_rejects_zero_resource_estimates(tmp_path: Path) -> None:
@@ -366,6 +420,12 @@ def test_local_target_and_runtime_config_use_custom_state_root(tmp_path: Path) -
     config = installer.store.get_runtime_config(environment_ref)
     assert config is not None
     assert config.target_directory == str(target)
+    detection = environment_manager.store.get_detection(environment_ref)
+    assert detection is not None
+    final_report = detection["report"]
+    assert final_report["disk"]["path"] == str(target)
+    assert final_report["weights"]["entries"][0]["path"] == str(target / "weights" / "unimolv1.pt")
+    assert str(state_root / ".runtime-staging") not in json.dumps(final_report)
 
 
 def test_different_plans_for_one_environment_are_serialized(tmp_path: Path) -> None:
