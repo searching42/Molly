@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import sys
 import tempfile
@@ -609,6 +610,7 @@ def _default_runner(
                 stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=(os.name == "posix"),
             )
         except OSError as exc:
             raise EnvironmentDetectionError(
@@ -630,7 +632,37 @@ def _default_runner(
         )
 
         async def stop_process() -> None:
-            if process.returncode is None:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+            else:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=0.75)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+            else:
                 try:
                     process.kill()
                 except ProcessLookupError:
@@ -683,6 +715,7 @@ _PROBE_SCRIPT = dedent(
     import shutil
     import subprocess
     import sys
+    import threading
     import time
 
     def text(value, limit=256):
@@ -690,6 +723,47 @@ _PROBE_SCRIPT = dedent(
         return value.replace("\x00", "")[:limit]
 
     MAX_SUBPROCESS_OUTPUT_BYTES = 64 * 1024
+    _ACTIVE_PROCESS_GROUPS = set()
+
+    def terminate_process_group(group_id):
+        kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+        if os.name == "posix":
+            try:
+                os.killpg(group_id, kill_signal)
+                return
+            except ProcessLookupError:
+                return
+            except OSError:
+                pass
+        try:
+            os.kill(group_id, kill_signal)
+        except (OSError, ProcessLookupError):
+            pass
+
+    def cleanup_active_process_groups(signum, _frame):
+        for group_id in tuple(_ACTIVE_PROCESS_GROUPS):
+            terminate_process_group(group_id)
+        raise SystemExit(128 + signum)
+
+    for signal_name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        signal_value = getattr(signal, signal_name, None)
+        if signal_value is not None:
+            signal.signal(signal_value, cleanup_active_process_groups)
+
+    def enforce_probe_deadline():
+        try:
+            budget = float(os.environ.get("MOLLY_PROBE_TIMEOUT_SECONDS", "0"))
+        except (TypeError, ValueError):
+            budget = 0
+        if budget <= 0:
+            return
+        time.sleep(budget)
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except OSError:
+            pass
+
+    threading.Thread(target=enforce_probe_deadline, daemon=True).start()
 
     def bounded_command(path, args=("--version",), timeout=5):
         try:
@@ -699,6 +773,7 @@ _PROBE_SCRIPT = dedent(
             )
         except OSError:
             return 1, ""
+        _ACTIVE_PROCESS_GROUPS.add(process.pid)
         selector = selectors.DefaultSelector()
         registered = {}
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
@@ -710,17 +785,8 @@ _PROBE_SCRIPT = dedent(
         aborted = False
 
         def terminate_process():
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except OSError:
-                    try:
-                        process.kill()
-                    except OSError:
-                        pass
-            else:
+            terminate_process_group(process.pid)
+            if process.poll() is None and os.name != "posix":
                 try:
                     process.kill()
                 except OSError:
@@ -764,6 +830,7 @@ _PROBE_SCRIPT = dedent(
             aborted = True
             return 1, ""
         finally:
+            _ACTIVE_PROCESS_GROUPS.discard(process.pid)
             if aborted or process.poll() is None:
                 terminate_process()
             for stream in tuple(registered):
@@ -1773,10 +1840,18 @@ class EnvironmentDetector:
     def detect(self, profile: EnvironmentProfile) -> EnvironmentReport:
         if not isinstance(profile, EnvironmentProfile):
             raise TypeError("environment detector requires an EnvironmentProfile")
+        probe_prefix = (
+            "import os; os.environ['MOLLY_PROBE_TIMEOUT_SECONDS'] = "
+            + repr(str(self.timeout_seconds + 0.5))
+            + "\n"
+        )
         if profile.mode == "local":
-            prefix = "import os; os.environ['MOLLY_PROBE_RUN_DIRECTORY'] = " + repr(
-                str(self.local_run_directory)
-            ) + "\n"
+            prefix = (
+                probe_prefix
+                + "os.environ['MOLLY_PROBE_RUN_DIRECTORY'] = "
+                + repr(str(self.local_run_directory))
+                + "\n"
+            )
             output = self._run((sys.executable, "-c", prefix + _PROBE_SCRIPT))
         else:
             output = None
@@ -1785,7 +1860,7 @@ class EnvironmentDetector:
                 try:
                     output = self._run(
                         self._ssh_argv(profile, interpreter),
-                        input_bytes=(_PROBE_SCRIPT + "\n").encode("utf-8"),
+                        input_bytes=(probe_prefix + _PROBE_SCRIPT + "\n").encode("utf-8"),
                     )
                     break
                 except EnvironmentDetectionError as exc:

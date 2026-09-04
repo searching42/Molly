@@ -206,6 +206,7 @@ def test_detector_uses_only_fixed_local_or_ssh_probe_transport(tmp_path: Path) -
     assert separator < argv.index("compute-alias")
     assert argv[separator + 2 :] == ("python3", "-")
     assert script is not None and b"nvidia-smi" in script
+    assert b"MOLLY_PROBE_TIMEOUT_SECONDS" in script
     assert all(item not in argv for item in ("sh -c", "sudo", "curl", "wget"))
 
 
@@ -429,6 +430,45 @@ def test_probe_child_timeout_kills_descendants_in_its_process_group(
     report = EnvironmentDetector(local_run_directory=tmp_path / "runtimes").detect(profile)
 
     assert report.data["gpu"]["available"] is False
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert not marker.exists()
+
+
+def test_outer_probe_timeout_cleans_inner_process_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "posix":
+        pytest.skip("process-group cleanup is covered on POSIX probe hosts")
+    marker = tmp_path / "outer-descendant-survived.txt"
+    child_code = (
+        "import time; time.sleep(1.5); "
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('survived')"
+    )
+    fake_conda = tmp_path / "conda"
+    fake_conda.write_text(
+        "#!" + sys.executable + "\n"
+        "import subprocess, sys, time\n"
+        "if sys.argv[1:] == ['env', 'list', '--json']:\n"
+        f"    subprocess.Popen([sys.executable, '-c', {child_code!r}], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "    sys.stdout.close()\n"
+        "    sys.stderr.close()\n"
+        "    time.sleep(30)\n"
+        "else:\n"
+        "    print('{\\\"envs\\\": []}')\n",
+        encoding="utf-8",
+    )
+    fake_conda.chmod(fake_conda.stat().st_mode | 0o111)
+    monkeypatch.setenv(
+        "PATH",
+        str(tmp_path) + os.pathsep + os.environ.get("PATH", ""),
+    )
+
+    profile = EnvironmentProfile.from_payload({"mode": "local", "display_name": "本地"})
+    with pytest.raises(EnvironmentDetectionError, match="timed out"):
+        EnvironmentDetector(timeout_seconds=1, local_run_directory=tmp_path / "runtimes").detect(profile)
+
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline and not marker.exists():
         time.sleep(0.05)
