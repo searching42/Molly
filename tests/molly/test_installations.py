@@ -6,8 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -26,6 +29,7 @@ from molly.web.installations import (
     MAX_PERSISTED_RUNTIME_CONFIGS,
     MAX_PERSISTED_PLANS,
     RestrictedInstallExecutor,
+    _REMOTE_INSTALL_SCRIPT,
     RuntimeConfig,
 )
 
@@ -632,6 +636,136 @@ def test_enabling_recovery_integrity_failure_rolls_back_without_config(
     assert result["installation"]["state"] == "FAILED"
     assert result["runtime_config"] is None
     assert not target_file.exists()
+
+
+def test_concurrent_enabling_recovery_cannot_rollback_winning_confirmation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"concurrent-recovery")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    base = RestrictedInstallExecutor()
+
+    class CrashAfterEnable:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+            raise SystemExit("crashed before recovery")
+
+        def rollback(self, *args: object, **kwargs: object) -> bool:
+            return bool(base.rollback(*args, **kwargs))  # type: ignore[arg-type]
+
+    first = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=CrashAfterEnable(),  # type: ignore[arg-type]
+    )
+    plan = first.build_plan(environment_ref)
+    with pytest.raises(SystemExit):
+        first.confirm(_approval(plan))
+    record = first.store.get_installation_for_plan(plan.plan_id)
+    assert record is not None and record.state == "ENABLING"
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingExecutor:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            started.set()
+            assert release.wait(2)
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+
+        def rollback(self, *args: object, **kwargs: object) -> bool:
+            return bool(base.rollback(*args, **kwargs))  # type: ignore[arg-type]
+
+    resumed = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=BlockingExecutor(),  # type: ignore[arg-type]
+    )
+    results: list[dict[str, object]] = []
+
+    def recover() -> None:
+        results.append(resumed.recover(record.installation_id, force=True))
+
+    first_thread = threading.Thread(target=recover)
+    first_thread.start()
+    assert started.wait(2)
+
+    second_result = resumed.recover(record.installation_id, force=True)
+    assert second_result["installation"]["state"] == "RECOVERING"
+    assert resumed.store.get_runtime_config(environment_ref) is None
+
+    release.set()
+    first_thread.join(2)
+    assert len(results) == 1
+    assert results[0]["installation"]["state"] == "CONFIRMED"
+    config = resumed.store.get_runtime_config(environment_ref)
+    assert config is not None and config.state == "CONFIRMED"
+    assert Path(config.target_directory).is_dir()
+
+
+def test_web_exposes_active_installation_and_blocks_connection_migration(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"active-connection-binding")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    plan = installer.build_plan(environment_ref)
+    record, created = installer.store.claim_approval(plan)
+    assert created and record.state == "APPROVED"
+    app = create_application(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        installation_manager=installer,
+    )
+    try:
+        status, listed = app.dispatch("GET", "/api/environments")
+        assert status == 200
+        assert listed["environments"][0]["installation"]["state"] == "APPROVED"
+
+        status, detail = app.dispatch(
+            "GET", f"/api/environments/{environment_ref}"
+        )
+        assert status == 200
+        assert detail["installation"]["state"] == "APPROVED"
+        assert detail["detection"]["installation"]["state"] == "APPROVED"
+
+        status, rejected = app.dispatch(
+            "POST",
+            "/api/environments",
+            {
+                "environment_ref": environment_ref,
+                "display_name": "迁移中的环境",
+                "mode": "ssh",
+                "ssh_target": "compute.example",
+                "ssh_user": "tester",
+                "ssh_port": 2222,
+            },
+        )
+        assert status == 409
+        assert rejected["error_type"] == "ENVIRONMENT_INSTALLATION_ACTIVE"
+        assert environment_manager.store.get_profile(environment_ref).mode == "local"
+    finally:
+        app.close()
 
 
 def test_failed_config_commit_clears_report_for_removed_runtime_target(
@@ -1267,6 +1401,63 @@ def test_ssh_finalize_response_loss_removes_remote_enabled_target(
     assert result["runtime_config"] is None
     assert target_exists is False
     assert calls == ["install", "status", "finalize", "rollback"]
+
+
+def test_remote_rollback_refuses_unowned_target_after_rename_gap(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "remote-home"
+    runtime_root = home / ".local" / "share" / "molly" / "runtimes"
+    transaction_root = runtime_root / ".transactions"
+    target = runtime_root / "runtime-unowned"
+    stage = runtime_root / ".staging" / "runtime-unowned-installation"
+    transaction_root.mkdir(parents=True)
+    target.mkdir(parents=True)
+    (target / "unrelated.txt").write_text("do not delete", encoding="utf-8")
+    plan_digest = "a" * 64
+    (transaction_root / "installation-unowned.json").write_text(
+        json.dumps(
+            {
+                "state": "VERIFIED",
+                "plan_digest": plan_digest,
+                "runtime_id": "runtime-unowned",
+                "stage_directory": str(stage),
+                "target_directory": str(target),
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = {
+        "operation": "rollback",
+        "transaction_id": "installation-unowned",
+        "plan_digest": plan_digest,
+        "runtime_id": "runtime-unowned",
+        "stage_directory": str(stage),
+        "target_directory": str(target),
+        "finalized": False,
+        "entries": [],
+    }
+    source = (
+        _REMOTE_INSTALL_SCRIPT
+        + "\ntry:\n"
+        + "    main("
+        + repr(request)
+        + ")\n"
+        + "except Exception as exc:\n"
+        + "    print(json.dumps({'ok': False, 'error': str(exc)}))\n"
+        + "    raise SystemExit(2)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        env={**os.environ, "HOME": str(home)},
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert target.is_dir()
+    assert (target / "unrelated.txt").read_text(encoding="utf-8") == "do not delete"
 
 
 def test_simulated_ssh_finalize_crash_recovers_from_remote_transaction_status(

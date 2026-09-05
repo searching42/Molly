@@ -623,14 +623,29 @@ const environmentStatusLabels = {
   CONFIRMED: "已确认",
   PLAN_REQUIRED: "需要安装计划",
   BLOCKED: "需要处理",
+  APPROVED: "等待执行",
+  INSTALLING: "正在安装",
+  VERIFYING: "正在验证",
+  ENABLING: "正在启用",
+  RECOVERING: "正在恢复",
   ROLLING_BACK: "正在回滚",
 };
+
+const recoverableInstallationStates = new Set([
+  "APPROVED",
+  "INSTALLING",
+  "VERIFYING",
+  "ENABLING",
+  "RECOVERING",
+  "ROLLING_BACK",
+]);
 
 const environmentStatusClass = (status) => {
   if (status === "CONFIRMED") return "status-stopped";
   if (status === "READY") return "status-stopped";
   if (status === "BLOCKED") return "status-failed";
   if (status === "ROLLING_BACK") return "status-failed";
+  if (recoverableInstallationStates.has(status)) return "status-waiting_approval";
   if (status === "PLAN_REQUIRED") return "status-waiting_approval";
   return "status-new";
 };
@@ -643,8 +658,8 @@ const renderEnvironmentCards = () => {
   return `<div class="environment-list">${profiles.map((profile) => {
     const status = profile.status || "UNDETECTED";
     const installation = profile.installation || null;
-    const recoveryAction = installation?.state === "ROLLING_BACK"
-      ? `<button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(profile.environment_ref)}" type="button">继续清理</button>`
+    const recoveryAction = recoverableInstallationStates.has(installation?.state)
+      ? `<button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(profile.environment_ref)}" type="button">${installation.state === "ROLLING_BACK" ? "继续清理" : "继续恢复"}</button>`
       : "";
     return `<article class="environment-card">
       <div class="environment-card-head">
@@ -669,8 +684,9 @@ const renderEnvironmentInstallPlan = (detection) => {
     if (installation.state === "FAILED") {
       return `<div class="environment-install-card environment-install-failure"><strong>安装失败，隔离目录已回滚</strong><span>${html(installation.error || "请重新检测并生成安装计划")}</span></div>`;
     }
-    if (installation.state === "ROLLING_BACK") {
-      return `<div class="environment-install-card environment-install-failure"><strong>正在回滚，运行环境暂不可用</strong><span>清理尚未完成；完成前不会登记为可用环境。</span><button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(environmentRef)}" type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>继续清理</button></div>`;
+    if (recoverableInstallationStates.has(installation.state)) {
+      const isRollback = installation.state === "ROLLING_BACK";
+      return `<div class="environment-install-card environment-install-failure"><strong>${isRollback ? "正在回滚，运行环境暂不可用" : "安装事务尚未完成"}</strong><span>${isRollback ? "清理尚未完成；完成前不会登记为可用环境。" : "检测到可恢复的安装事务；完成前不会登记为可用环境。"}</span><button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(environmentRef)}" type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>${isRollback ? "继续清理" : "继续恢复"}</button></div>`;
     }
     return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
   }

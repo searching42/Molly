@@ -79,8 +79,9 @@ MAX_STATE_RECORDS_ON_READ = max(MAX_PERSISTED_PLANS, MAX_PERSISTED_RUNTIME_CONFI
 RUNTIME_MANIFEST_ENV = "MOLLY_RUNTIME_MANIFEST_PATH"
 _STORE_THREAD_LOCK = threading.RLock()
 _ACTIVE_INSTALLATION_STATES = frozenset(
-    {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "ROLLING_BACK"}
+    {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "RECOVERING", "ROLLING_BACK"}
 )
+_RECOVERY_THREAD_LEASES: set[str] = set()
 
 
 class InstallationError(RuntimeError):
@@ -963,6 +964,7 @@ class InstallationRecord:
             "INSTALLING",
             "VERIFYING",
             "ENABLING",
+            "RECOVERING",
             "ROLLING_BACK",
             "CONFIRMED",
             "FAILED",
@@ -1521,6 +1523,56 @@ class RuntimeInstallationStore:
             self._write_state(value)
             return updated, True
 
+    def claim_recovery(
+        self,
+        installation_id: str,
+        *,
+        force: bool = False,
+    ) -> tuple[InstallationRecord, bool]:
+        """Atomically acquire the lease used by ENABLING recovery.
+
+        The durable RECOVERING state protects across processes.  The small
+        in-process set also prevents two ``force=True`` callers in one server
+        process from stealing one another's lease while a recovery is running.
+        """
+
+        _safe_id(installation_id, field="installation_id")
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(installation_id)
+            if raw is None:
+                raise InstallationConfigError("installation was not found")
+            current = InstallationRecord.from_dict(raw)
+            if current.state not in {"ENABLING", "RECOVERING"}:
+                return current, False
+            if installation_id in _RECOVERY_THREAD_LEASES:
+                return current, False
+            if current.worker_pid and _process_alive(current.worker_pid):
+                # ``force`` is for reclaiming a durable lease after a crash,
+                # not for stealing a lease held by another live process.
+                # A same-process force call remains useful for deterministic
+                # recovery tests and for an interrupted worker whose durable
+                # record predates the in-process lease set.
+                if not force or current.worker_pid != os.getpid():
+                    return current, False
+            updated = replace(
+                current,
+                state="RECOVERING",
+                revision=current.revision + 1,
+                updated_at=utc_timestamp(),
+                error="",
+                worker_pid=os.getpid(),
+            )
+            value["installations"][installation_id] = updated.to_dict()
+            self._write_state(value)
+            _RECOVERY_THREAD_LEASES.add(installation_id)
+            return updated, True
+
+    @staticmethod
+    def release_recovery(installation_id: str) -> None:
+        with _STORE_THREAD_LOCK:
+            _RECOVERY_THREAD_LEASES.discard(installation_id)
+
     def update_installation(
         self,
         record: InstallationRecord,
@@ -1556,11 +1608,7 @@ class RuntimeInstallationStore:
             if raw is None:
                 raise InstallationConfigError("installation was not found")
             current = InstallationRecord.from_dict(raw)
-            if current.state not in {
-                "INSTALLING",
-                "VERIFYING",
-                "ENABLING",
-            }:
+            if current.state not in {"INSTALLING", "VERIFYING", "ENABLING"}:
                 return current
             try:
                 age = max(0.0, time.time() - _parse_timestamp(current.updated_at))
@@ -1734,6 +1782,7 @@ MAX_DISK_BYTES = 4 * 1024 * 1024 * 1024
 MAX_TIMEOUT = 3600.0
 RUNTIME_BASE = (pathlib.Path.home() / ".local/share/molly/runtimes").resolve()
 TRANSACTION_BASE = RUNTIME_BASE / ".transactions"
+OWNERSHIP_MARKER = ".molly-ownership.json"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1780,6 +1829,48 @@ def write_state(transaction_id, value):
     finally:
         if temporary.exists():
             temporary.unlink()
+
+def ownership_payload(transaction_id, plan_digest, runtime_id):
+    return {
+        "transaction_id": transaction_id,
+        "plan_digest": plan_digest,
+        "runtime_id": runtime_id,
+    }
+
+def ownership_matches(directory, transaction_id, plan_digest, runtime_id):
+    marker = pathlib.Path(directory) / OWNERSHIP_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        with marker.open(encoding="utf-8") as source:
+            value = json.load(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return value == ownership_payload(transaction_id, plan_digest, runtime_id)
+
+def ensure_ownership_marker(stage, transaction_id, plan_digest, runtime_id):
+    marker = pathlib.Path(stage) / OWNERSHIP_MARKER
+    if marker.is_symlink():
+        raise ValueError("runtime ownership marker cannot be a symlink")
+    if marker.exists():
+        if not ownership_matches(stage, transaction_id, plan_digest, runtime_id):
+            raise ValueError("runtime ownership marker does not match the transaction")
+        return
+    descriptor = -1
+    try:
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor = -1
+            json.dump(ownership_payload(transaction_id, plan_digest, runtime_id), output, separators=(",", ":"))
+            output.flush()
+            os.fsync(output.fileno())
+    except FileExistsError:
+        pass
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not ownership_matches(stage, transaction_id, plan_digest, runtime_id):
+        raise ValueError("runtime ownership marker could not be established")
 
 def safe_rel(value):
     path = pathlib.PurePosixPath(value)
@@ -1969,11 +2060,14 @@ def main(request):
     target = owned_path(request.get("target_directory"))
     if operation == "install":
         if state.get("state") == "ENABLED" and target.is_dir() and not target.is_symlink():
+            if not ownership_matches(target, transaction_id, plan_digest, request.get("runtime_id")):
+                raise ValueError("enabled runtime ownership marker does not match the transaction")
             print(json.dumps({"ok": True, "verified": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
         if stage.exists() and stage.is_symlink():
             raise ValueError("staging directory cannot be a symlink")
         stage.mkdir(parents=True, exist_ok=True)
+        ensure_ownership_marker(stage, transaction_id, plan_digest, request.get("runtime_id"))
         completed = set(state.get("completed_component_ids", []))
         write_state(transaction_id, {"state": "INSTALLING", "plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": request.get("stage_directory"), "target_directory": request.get("target_directory"), "completed_component_ids": sorted(completed)})
         for item in request.get("entries", []):
@@ -2013,26 +2107,36 @@ def main(request):
         print(json.dumps({"ok": True, "verified": True, "state": "VERIFIED", "target_exists": False, "verified_files": verified_files(stage, request.get("entries", []))}, separators=(",", ":")))
         return
     if operation == "status":
-        target_exists = target.is_dir() and not target.is_symlink()
-        stage_exists = stage.is_dir() and not stage.is_symlink()
+        target_present = target.is_dir() and not target.is_symlink()
+        stage_present = stage.is_dir() and not stage.is_symlink()
+        target_exists = target_present and ownership_matches(target, transaction_id, plan_digest, request.get("runtime_id"))
+        stage_exists = stage_present and ownership_matches(stage, transaction_id, plan_digest, request.get("runtime_id"))
         remote_state = state.get("state")
         verified = remote_state in {"VERIFIED", "ENABLED"} and (stage_exists or target_exists)
         evidence_root = target if target_exists else stage
-        print(json.dumps({"ok": True, "state": remote_state, "verified": verified, "target_exists": target_exists, "stage_exists": stage_exists, "verified_files": verified_files(evidence_root, request.get("entries", [])) if verified else []}, separators=(",", ":")))
+        print(json.dumps({"ok": True, "state": remote_state, "verified": verified, "target_exists": target_exists, "stage_exists": stage_exists, "unowned_target_exists": target_present and not target_exists, "verified_files": verified_files(evidence_root, request.get("entries", [])) if verified else []}, separators=(",", ":")))
         return
     if operation == "finalize":
-        target_exists = target.is_dir() and not target.is_symlink()
-        if state.get("state") == "ENABLED" and target_exists:
+        target_present = target.is_dir() and not target.is_symlink()
+        stage_present = stage.is_dir() and not stage.is_symlink()
+        target_exists = target_present and ownership_matches(target, transaction_id, plan_digest, request.get("runtime_id"))
+        if state.get("state") == "ENABLED" and target_present:
+            if not target_exists:
+                raise ValueError("enabled runtime target ownership marker does not match")
             print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
         if state.get("state") != "VERIFIED":
             raise ValueError("remote transaction is not ready to finalize")
-        if target_exists and not stage.exists():
+        if target_present and not stage_present:
+            if not target_exists:
+                raise ValueError("runtime target ownership marker does not match")
             write_state(transaction_id, {**state, "state": "ENABLED"})
             print(json.dumps({"ok": True, "state": "ENABLED", "target_exists": True, "verified_files": verified_files(target, request.get("entries", []))}, separators=(",", ":")))
             return
-        if target.exists() or target.is_symlink() or not stage.is_dir() or stage.is_symlink():
+        if target.exists() or target.is_symlink() or not stage_present:
             raise ValueError("remote runtime target or staging directory is unsafe")
+        if not ownership_matches(stage, transaction_id, plan_digest, request.get("runtime_id")):
+            raise ValueError("staging ownership marker does not match the transaction")
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage, target)
         write_state(transaction_id, {**state, "state": "ENABLED"})
@@ -2045,12 +2149,21 @@ def main(request):
         # an enabled target behind.  The VERIFIED/stage-missing case is the
         # same rename window before the state write.
         remote_state = state.get("state")
-        if (
+        target_present = target.is_dir() and not target.is_symlink()
+        stage_present = stage.is_dir() and not stage.is_symlink()
+        target_owned = target_present and ownership_matches(target, transaction_id, plan_digest, request.get("runtime_id"))
+        stage_owned = stage_present and ownership_matches(stage, transaction_id, plan_digest, request.get("runtime_id"))
+        remove_target = (
             remote_state == "ENABLED"
-            or (remote_state == "VERIFIED" and not stage.exists())
-        ) and target.is_dir() and not target.is_symlink():
+            or (remote_state == "VERIFIED" and not stage_present)
+        ) and target_present
+        if remove_target and not target_owned:
+            raise ValueError("runtime target ownership marker does not match")
+        if stage_present and not stage_owned:
+            raise ValueError("staging ownership marker does not match")
+        if remove_target:
             shutil.rmtree(target)
-        if stage.is_dir() and not stage.is_symlink():
+        if stage_present:
             shutil.rmtree(stage)
         write_state(transaction_id, {**state, "state": "ROLLED_BACK"})
         print(json.dumps({"ok": True}, separators=(",", ":")))
@@ -3195,10 +3308,21 @@ class InstallationManager:
             if not force and record.state == "VERIFYING" and _process_alive(record.worker_pid):
                 raise InstallationConflictError("installation worker is still active")
             return self._confirm_existing_environment(plan, resume=True)
-        if record.state == "ENABLING":
-            if not force and _process_alive(record.worker_pid):
-                raise InstallationConflictError("installation worker is still active")
-            return self._recover_enabling(record, plan)
+        if record.state in {"ENABLING", "RECOVERING"}:
+            claimed, should_recover = self.store.claim_recovery(
+                record.installation_id,
+                force=force,
+            )
+            if not should_recover:
+                config = self.store.get_runtime_config(plan.environment_ref)
+                return {
+                    "installation": claimed.to_dict(public=True),
+                    "runtime_config": config.to_dict(public=True) if config else None,
+                }
+            try:
+                return self._recover_enabling(claimed, plan)
+            finally:
+                self.store.release_recovery(record.installation_id)
         record = self.store.recover_stale(
             installation_id,
             stale_after_seconds=0,
@@ -3283,7 +3407,7 @@ class InstallationManager:
         finalized: bool,
     ) -> InstallationRecord:
         current = self.store.get_installation(record.installation_id)
-        if current.state == "ROLLING_BACK":
+        if current.state in {"CONFIRMED", "ROLLING_BACK"}:
             return current
         verification = thaw_json(current.verification)
         verification["rollback_finalized"] = bool(finalized)
@@ -3305,6 +3429,8 @@ class InstallationManager:
         profile: EnvironmentProfile | None,
     ) -> InstallationRecord:
         current = self.store.get_installation(record.installation_id)
+        if current.state == "CONFIRMED":
+            return current
         config = self.store.get_runtime_config(plan.environment_ref)
         if config is not None and config.state == "CONFIRMED":
             try:
