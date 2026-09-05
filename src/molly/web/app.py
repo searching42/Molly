@@ -60,6 +60,7 @@ from .installations import (
     InstallationError,
     InstallationExecutionError,
     InstallationIntegrityError,
+    InstallationIOBusy,
     InstallationManager,
 )
 from molly.plugins.br1_inverse_design.dataset import validate_raw_dataset_source
@@ -203,6 +204,11 @@ def _safe_exception_response(exc: BaseException) -> tuple[int, dict[str, Any]]:
         return 400, {
             "error_type": "INSTALLATION_CONFIG_INVALID",
             "message": "安装计划或确认信息无效",
+        }
+    if isinstance(exc, InstallationIOBusy):
+        return 409, {
+            "error_type": "INSTALLATION_IO_BUSY",
+            "message": "上一安装操作仍在执行，请稍后点击继续恢复",
         }
     if isinstance(exc, InstallationConflictError):
         return 409, {

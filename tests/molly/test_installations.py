@@ -1646,6 +1646,8 @@ def test_remote_rollback_refuses_unowned_target_after_rename_gap(
     request = {
         "operation": "rollback",
         "transaction_id": "installation-unowned",
+        "worker_token": "worker-unowned",
+        "lease_epoch": 1,
         "plan_digest": plan_digest,
         "runtime_id": "runtime-unowned",
         "stage_directory": str(stage),
@@ -1909,20 +1911,12 @@ def test_ssh_verify_accepts_atomic_rename_gap_for_finalize_recovery(
             separators=(",", ":"),
         ).encode("utf-8")
 
-    executor = RestrictedInstallExecutor(runner=runner)
-    verified = executor.verify(
-        profile,
-        plan,
-        plan.target_directory,
-        {},
-        transaction_id="installation-atomic-rename-gap",
-    )
-    executor.finalize(
-        profile,
-        plan,
-        plan.target_directory,
-        transaction_id="installation-atomic-rename-gap",
-    )
+    installer.executor = RestrictedInstallExecutor(runner=runner)
+    approved, _ = installer._claim_approval(plan)
+    owner, _ = installer._claim_worker(approved.installation_id, operation="install")
+    with installer._worker_lease(owner):
+        verified = installer._executor_io("verify", profile, plan, plan.target_directory, {}, transaction_id=owner.installation_id)
+        installer._executor_io("finalize", profile, plan, plan.target_directory, transaction_id=owner.installation_id)
 
     assert verified["remote_state"] == "VERIFIED"
     assert verified["target_exists"] is True

@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from functools import wraps
 import hashlib
 import inspect
 import json
@@ -99,6 +100,10 @@ class InstallationConflictError(InstallationError):
 
 class InstallationLeaseLost(InstallationConflictError):
     """The caller no longer owns the installation; it must stop without cleanup."""
+
+
+class InstallationIOBusy(InstallationConflictError):
+    """An earlier local/remote I/O call must finish before recovery proceeds."""
 
 
 class InstallationExecutionError(InstallationError):
@@ -1257,6 +1262,19 @@ class RuntimeConfig:
         )
 
 
+def _claim_without_io_overlap(method):
+    @wraps(method)
+    def claim(store, installation_id, *args, **kwargs):
+        with store.io_lock(installation_id).acquire(blocking=False) as acquired:
+            if not acquired:
+                return store.get_installation(installation_id), False
+            return method(store, installation_id, *args, **kwargs)
+    return claim
+
+
+_EXECUTOR_LEASE: ContextVar[InstallationRecord | None] = ContextVar("executor_lease", default=None)
+
+
 class RuntimeInstallationStore:
     """Atomic, owner-only persistence with transaction-level CAS."""
 
@@ -1306,6 +1324,22 @@ class RuntimeInstallationStore:
             or current.lease_epoch != owner.lease_epoch
         ):
             raise InstallationLeaseLost("安装执行权已由其他 worker 接管")
+
+    def io_lock(self, installation_id: str) -> StateMutationLock:
+        _safe_id(installation_id, field="installation_id")
+        return StateMutationLock(self.root / ".runtime-io" / installation_id)
+
+    @contextmanager
+    def io_guard(self, expected: InstallationRecord | None = None):
+        owner = self._lease_context.get() or expected
+        if owner is None:
+            raise InstallationLeaseLost("安装 I/O 缺少执行租约")
+        with self.io_lock(owner.installation_id).acquire():
+            with self.worker_guard(owner):
+                pass
+            yield owner
+            with self.worker_guard(owner):
+                pass
 
     @contextmanager
     def worker_context(self, owner: InstallationRecord):
@@ -1594,6 +1628,7 @@ class RuntimeInstallationStore:
             self._write_state(value)
             return record, True
 
+    @_claim_without_io_overlap
     def claim_execution(
         self,
         installation_id: str,
@@ -1636,6 +1671,7 @@ class RuntimeInstallationStore:
             self._write_state(value)
             return updated, True
 
+    @_claim_without_io_overlap
     def claim_recovery(
         self,
         installation_id: str,
@@ -2017,7 +2053,7 @@ def _fixed_ssh_argv(profile: EnvironmentProfile) -> tuple[str, ...]:
 
 
 _REMOTE_INSTALL_SCRIPT = r'''
-import hashlib, json, os, pathlib, re, shutil, stat, sys, tarfile, tempfile, time, urllib.request, zipfile
+import fcntl, hashlib, json, os, pathlib, re, shutil, stat, sys, tarfile, tempfile, time, urllib.request, zipfile
 
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_DISK_BYTES = 4 * 1024 * 1024 * 1024
@@ -2026,6 +2062,13 @@ RUNTIME_BASE = (pathlib.Path.home() / ".local/share/molly/runtimes").resolve()
 TRANSACTION_BASE = RUNTIME_BASE / ".transactions"
 OWNERSHIP_MARKER = ".molly-ownership.json"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+ACTIVE_LEASE = {}
+
+class RemoteIOBusy(Exception):
+    pass
+
+class RemoteLeaseLost(Exception):
+    pass
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -2077,6 +2120,7 @@ def ownership_payload(transaction_id, plan_digest, runtime_id):
         "transaction_id": transaction_id,
         "plan_digest": plan_digest,
         "runtime_id": runtime_id,
+        **ACTIVE_LEASE,
     }
 
 def ownership_matches(directory, transaction_id, plan_digest, runtime_id):
@@ -2088,7 +2132,8 @@ def ownership_matches(directory, transaction_id, plan_digest, runtime_id):
             value = json.load(source)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return value == ownership_payload(transaction_id, plan_digest, runtime_id)
+    expected = ownership_payload(transaction_id, plan_digest, runtime_id)
+    return all(value.get(key) == item for key, item in expected.items())
 
 def ensure_ownership_marker(stage, transaction_id, plan_digest, runtime_id):
     marker = pathlib.Path(stage) / OWNERSHIP_MARKER
@@ -2287,7 +2332,72 @@ def verified_files(stage, entries):
             })
     return result
 
+def bind_remote_marker(directory, request):
+    marker = directory / OWNERSHIP_MARKER
+    if not marker.exists() and not marker.is_symlink():
+        return
+    if marker.is_symlink() or not marker.is_file():
+        raise ValueError("unsafe ownership marker")
+    previous = json.loads(marker.read_text())
+    identity = {key: request[key] for key in ("transaction_id", "plan_digest", "runtime_id")}
+    if any(previous.get(key) != value for key, value in identity.items()):
+        raise ValueError("ownership marker is bound to another runtime")
+    if previous.get("lease_epoch", 0) > request["lease_epoch"] or (
+        previous.get("lease_epoch") == request["lease_epoch"]
+        and previous.get("worker_token") != request["worker_token"]
+    ):
+        raise RemoteLeaseLost("old runtime epoch")
+    descriptor, name = tempfile.mkstemp(prefix=".ownership-", dir=directory)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump({**identity, **ACTIVE_LEASE}, output, sort_keys=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(name, marker)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
 def main(request):
+    global ACTIVE_LEASE
+    transaction_id = request.get("transaction_id")
+    transaction_path(transaction_id)
+    stage = owned_path(request.get("stage_directory"))
+    target = owned_path(request.get("target_directory"))
+    plan_digest = request.get("plan_digest")
+    if not isinstance(plan_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
+        raise ValueError("missing plan digest")
+    token, epoch = request.get("worker_token"), request.get("lease_epoch")
+    if not isinstance(token, str) or not ID_RE.fullmatch(token) or type(epoch) is not int or epoch < 1:
+        raise RemoteLeaseLost("missing worker token or epoch")
+    TRANSACTION_BASE.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(TRANSACTION_BASE / (transaction_id + ".io.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RemoteIOBusy("previous remote I/O is still active") from exc
+        if request.get("operation") == "inspect":
+            # Inspection of a prior confirmed runtime never adopts its lease
+            # or changes its directory. It still shares the remote I/O lock.
+            ACTIVE_LEASE = {}
+        else:
+            previous = read_state(transaction_id + ".lease")
+            identity = {"plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": str(stage), "target_directory": str(target)}
+            if previous and any(previous.get(key) != value for key, value in identity.items()):
+                raise ValueError("remote lease binding changed")
+            if previous and (epoch < previous["lease_epoch"] or (epoch == previous["lease_epoch"] and token != previous["worker_token"])):
+                raise RemoteLeaseLost("old remote worker token or epoch")
+            ACTIVE_LEASE = {"worker_token": token, "lease_epoch": epoch}
+            write_state(transaction_id + ".lease", {**identity, **ACTIVE_LEASE})
+            for directory in (stage, target):
+                if directory.is_dir():
+                    bind_remote_marker(directory, request)
+        _main_owned(request)
+    finally:
+        os.close(descriptor)
+
+def _main_owned(request):
     operation = request.get("operation")
     transaction_id = request.get("transaction_id")
     transaction_path(transaction_id)
@@ -2348,7 +2458,7 @@ def main(request):
         write_state(transaction_id, {"state": "VERIFIED", "plan_digest": plan_digest, "runtime_id": request.get("runtime_id"), "stage_directory": request.get("stage_directory"), "target_directory": request.get("target_directory"), "completed_component_ids": sorted(completed)})
         print(json.dumps({"ok": True, "verified": True, "state": "VERIFIED", "target_exists": False, "verified_files": verified_files(stage, request.get("entries", []))}, separators=(",", ":")))
         return
-    if operation == "status":
+    if operation in {"status", "inspect"}:
         target_present = target.is_dir() and not target.is_symlink()
         stage_present = stage.is_dir() and not stage.is_symlink()
         target_exists = target_present and ownership_matches(target, transaction_id, plan_digest, request.get("runtime_id"))
@@ -2451,6 +2561,7 @@ class RestrictedInstallExecutor:
                 completed_component_ids=completed_component_ids,
             )
         stage = _owned_directory(Path(stage_directory), create=True)
+        _bind_local_runtime(stage, plan, transaction_id)
         deadline = time.monotonic() + min(float(timeout_seconds), INSTALLATION_TIMEOUT_SECONDS)
         completed = set(completed_component_ids)
         results: list[dict[str, Any]] = []
@@ -2469,6 +2580,11 @@ class RestrictedInstallExecutor:
             results.append(result)
             if progress is not None:
                 progress(entry.component_id)
+        downloads = stage / ".downloads"
+        if downloads.is_symlink():
+            raise InstallationIntegrityError("临时下载目录不能是符号链接")
+        if downloads.exists():
+            shutil.rmtree(downloads)
         return {"transport": "local", "verified": True, "components": results}
 
     def verify(
@@ -2499,14 +2615,10 @@ class RestrictedInstallExecutor:
                 "verified_files": thaw_json(status.get("verified_files", [])),
             }
         stage = Path(stage_directory)
+        _bind_local_runtime(stage, plan, transaction_id, read_only=True)
         for entry in plan.entries:
             if not _component_is_complete(stage, entry):
                 raise InstallationIntegrityError(f"{entry.name} 安装后缺少固定验证文件")
-        downloads = stage / ".downloads"
-        if downloads.exists() or downloads.is_symlink():
-            if downloads.is_symlink():
-                raise InstallationIntegrityError("临时下载目录不能是符号链接")
-            shutil.rmtree(downloads)
         return {"staged_components": list(plan.component_ids), "transport_verified": True}
 
     def finalize(
@@ -2528,6 +2640,7 @@ class RestrictedInstallExecutor:
             )
             return
         stage = _owned_directory(Path(stage_directory), create=False)
+        _bind_local_runtime(stage, plan, transaction_id)
         target = _local_target_from_stage(stage, plan.runtime_id)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
@@ -2554,6 +2667,8 @@ class RestrictedInstallExecutor:
                     finalized=finalized,
                     transaction_id=transaction_id,
                 )
+            except InstallationLeaseLost:
+                raise
             except Exception:
                 # A remote cleanup failure is itself recoverable.  The manager
                 # keeps the durable transaction in ROLLING_BACK so a later
@@ -2561,6 +2676,10 @@ class RestrictedInstallExecutor:
                 return False
         else:
             stage = Path(stage_directory)
+            paths = (stage, _local_target_from_stage(stage, plan.runtime_id)) if finalized else (stage,)
+            for path in paths:
+                if path.exists():
+                    _bind_local_runtime(path, plan, transaction_id)
             if _is_safe_runtime_path(stage) and (stage.exists() or stage.is_symlink()):
                 if stage.is_symlink():
                     stage.unlink()
@@ -2626,12 +2745,21 @@ class RestrictedInstallExecutor:
     ) -> Mapping[str, Any]:
         if operation not in {"install", "status", "finalize", "rollback"}:
             raise InstallationConfigError("unsupported remote installation operation")
+        owner = _EXECUTOR_LEASE.get()
+        if owner is None:
+            raise InstallationLeaseLost("SSH 安装缺少 worker token/epoch")
+        if transaction_id != owner.installation_id:
+            if operation != "status":
+                raise InstallationLeaseLost("SSH 安装请求不属于当前事务")
+            operation = "inspect"
         request = {
             "operation": operation,
             "stage_directory": stage_directory,
             "target_directory": plan.target_directory,
             "finalized": finalized,
             "transaction_id": transaction_id or "unknown",
+            "worker_token": owner.worker_token,
+            "lease_epoch": owner.lease_epoch,
             "runtime_id": plan.runtime_id,
             "plan_digest": plan.plan_digest,
             "completed_component_ids": list(completed_component_ids),
@@ -2646,6 +2774,12 @@ class RestrictedInstallExecutor:
                 + "    main(json.loads("
                 + repr(request_json)
                 + "))\n"
+                + "except RemoteIOBusy:\n"
+                + "    print(json.dumps({'ok': False, 'error_type': 'INSTALLATION_IO_BUSY'}))\n"
+                + "    raise SystemExit(3)\n"
+                + "except RemoteLeaseLost:\n"
+                + "    print(json.dumps({'ok': False, 'error_type': 'INSTALLATION_LEASE_LOST'}))\n"
+                + "    raise SystemExit(4)\n"
                 + "except Exception as exc:\n"
                 + "    print(json.dumps({'ok': False, 'error': str(exc)[:512]}, separators=(',', ':')))\n"
                 + "    raise SystemExit(2)\n"
@@ -2657,6 +2791,10 @@ class RestrictedInstallExecutor:
             )
         except Exception as exc:
             raise InstallationExecutionError("SSH 安装传输失败") from exc
+        if returncode == 3:
+            raise InstallationIOBusy("远端安装 I/O 尚未退出，请稍后恢复")
+        if returncode == 4:
+            raise InstallationLeaseLost("远端拒绝旧 worker token/epoch")
         if returncode != 0:
             raise InstallationExecutionError("SSH 固定安装工具执行失败")
         try:
@@ -2666,6 +2804,46 @@ class RestrictedInstallExecutor:
         if not isinstance(value, Mapping) or not bool(value.get("ok")):
             raise InstallationExecutionError("SSH 安装工具未确认成功")
         return dict(value)
+
+
+def _bind_local_runtime(path: Path, plan: InstallPlan, transaction_id: str | None, *, read_only: bool = False) -> None:
+    owner = _EXECUTOR_LEASE.get()
+    if owner is None:
+        raise InstallationLeaseLost("本地安装 I/O 缺少租约")
+    if path.is_symlink() or not path.is_dir():
+        raise InstallationIntegrityError("runtime 路径不是安全目录")
+    inspect_existing = transaction_id != owner.installation_id and read_only
+    if transaction_id != owner.installation_id and not inspect_existing:
+        raise InstallationLeaseLost("本地安装 I/O 不属于当前事务")
+    marker = path / ".molly-ownership.json"
+    identity = {"transaction_id": transaction_id, "plan_digest": plan.plan_digest, "runtime_id": plan.runtime_id}
+    previous = {}
+    if marker.is_symlink():
+        raise InstallationIntegrityError("runtime 所有权标记不能是符号链接")
+    if marker.exists():
+        previous = json.loads(marker.read_text(encoding="utf-8"))
+        if any(previous.get(key) != value for key, value in identity.items()):
+            raise InstallationIntegrityError("runtime 所有权标记不属于当前事务")
+        if not inspect_existing and (
+            previous.get("lease_epoch", 0) > owner.lease_epoch
+            or (previous.get("lease_epoch") == owner.lease_epoch and previous.get("worker_token") != owner.worker_token)
+        ):
+            raise InstallationLeaseLost("本地 runtime 拒绝旧 epoch")
+    if read_only:
+        return
+    payload = {**identity, "lease_epoch": owner.lease_epoch, "worker_token": owner.worker_token}
+    if previous == payload:
+        return
+    descriptor, name = tempfile.mkstemp(prefix=".ownership-", dir=path)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(payload, output, sort_keys=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, marker)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _is_safe_runtime_path(path: Path) -> bool:
@@ -3602,7 +3780,7 @@ class InstallationManager:
                     else {}
                 )
                 if profile.mode == "ssh":
-                    previous_result = self.executor.verify(
+                    previous_result = self._executor_io("verify",
                         profile,
                         previous_plan,
                         previous_record.stage_directory,
@@ -3699,6 +3877,8 @@ class InstallationManager:
                 "runtime_config": config.to_dict(public=True),
                 "idempotent_replay": not created,
             }
+        except InstallationIOBusy:
+            raise
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -3894,7 +4074,7 @@ class InstallationManager:
         *,
         profile: EnvironmentProfile | None,
     ) -> InstallationRecord:
-        with self.store.worker_guard(record):
+        with self.store.io_guard(record):
             return self._complete_rollback_guarded(record, plan, profile=profile)
 
     def _complete_rollback_guarded(
@@ -3919,7 +4099,7 @@ class InstallationManager:
         if current.stage_directory and profile is None:
             return current
         if profile is not None and current.stage_directory:
-            rollback_result = self.executor.rollback(
+            rollback_result = self._executor_io("rollback",
                 profile,
                 plan,
                 current.stage_directory,
@@ -3970,6 +4150,8 @@ class InstallationManager:
         with self._worker_lease(record):
             try:
                 return self._recover_enabling_checked(record, plan)
+            except InstallationIOBusy:
+                raise
             except Exception as exc:
                 self.store.assert_worker(record)
                 try:
@@ -4034,7 +4216,7 @@ class InstallationManager:
                     "installation": completed.to_dict(public=True),
                     "runtime_config": config.to_dict(public=True) if config else None,
                 }
-            self.executor.verify(
+            self._executor_io("verify",
                 profile,
                 plan,
                 str(target),
@@ -4048,7 +4230,7 @@ class InstallationManager:
             )
         else:
             runtime_directory = plan.target_directory
-            remote_verification = self.executor.verify(
+            remote_verification = self._executor_io("verify",
                 profile,
                 plan,
                 record.stage_directory,
@@ -4063,7 +4245,7 @@ class InstallationManager:
                     record.stage_directory,
                     transaction_id=record.installation_id,
                 )
-                remote_verification = self.executor.verify(
+                remote_verification = self._executor_io("verify",
                     profile,
                     plan,
                     record.stage_directory,
@@ -4183,7 +4365,8 @@ class InstallationManager:
                 # The public plan uses the stable .molly path.  The persisted local
                 # path is still derived server-side and never accepted from JSON.
                 stage_directory = str(stage_path)
-                _owned_directory(stage_path.parent, create=True)
+                with self.store.io_guard(record):
+                    _owned_directory(stage_path.parent, create=True)
                 target = (self.root / "runtimes" / plan.runtime_id).absolute()
                 target_directory = str(target)
                 target_was_absent = not target.exists() and not target.is_symlink()
@@ -4193,7 +4376,7 @@ class InstallationManager:
                 target_directory=target_directory,
                 side_effects_started=True,
             )
-            result = self.executor.install(
+            result = self._executor_io("install",
                 profile,
                 plan,
                 stage_directory,
@@ -4210,7 +4393,7 @@ class InstallationManager:
                 state="VERIFYING",
                 verification={"install_result": thaw_json(result)},
             )
-            verified = self.executor.verify(
+            verified = self._executor_io("verify",
                 profile,
                 plan,
                 stage_directory,
@@ -4275,7 +4458,7 @@ class InstallationManager:
             )
             final_result: Mapping[str, Any] = result
             if profile.mode == "ssh":
-                final_result = self.executor.verify(
+                final_result = self._executor_io("verify",
                     profile,
                     plan,
                     stage_directory,
@@ -4334,6 +4517,8 @@ class InstallationManager:
                 worker_pid=0,
             )
             return current
+        except InstallationIOBusy:
+            raise
         except BaseException as exc:
             # BaseException intentionally includes a process-style test crash
             # only after the last durable update.  We do not try to mutate the
@@ -4386,8 +4571,15 @@ class InstallationManager:
         )
 
     def _finalize_runtime(self, *args: Any, **kwargs: Any) -> None:
-        with self.store.worker_guard():
-            self.executor.finalize(*args, **kwargs)
+        self._executor_io("finalize", *args, **kwargs)
+
+    def _executor_io(self, operation: str, *args: Any, **kwargs: Any):
+        with self.store.io_guard() as owner:
+            binding = _EXECUTOR_LEASE.set(owner)
+            try:
+                return getattr(self.executor, operation)(*args, **kwargs)
+            finally:
+                _EXECUTOR_LEASE.reset(binding)
 
     def _update(self, record: InstallationRecord, **changes: Any) -> InstallationRecord:
         updated = replace(record, **changes, revision=record.revision + 1, updated_at=utc_timestamp())
@@ -4480,7 +4672,7 @@ class InstallationManager:
                 return None
         else:
             try:
-                status = self.executor.verify(
+                status = self._executor_io("verify",
                     profile,
                     plan,
                     stage_directory,

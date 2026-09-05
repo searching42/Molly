@@ -149,12 +149,6 @@ def test_expired_worker_cannot_mutate_or_rollback_new_owner(tmp_path, monkeypatc
                 result = {"verified": True}
             protected.mkdir()
             (protected / "weight.pt").write_bytes(b"keep this runtime")
-            paused.set()
-            assert resume.wait(5)
-            if late_action == "progress":
-                kwargs["progress"]("unimol-weights")
-            elif late_action == "failure":
-                raise OSError("old worker resumed with an error")
             return result
 
         def rollback(self, *args, **kwargs):
@@ -170,6 +164,22 @@ def test_expired_worker_cannot_mutate_or_rollback_new_owner(tmp_path, monkeypatc
     )
     # Simulate a lost heartbeat while the request worker is paused.
     monkeypatch.setattr(old.store, "heartbeat_worker", lambda *args, **kwargs: False)
+    real_io = old._executor_io
+
+    def pause_between_io_calls(operation, *args, **kwargs):
+        result = real_io(operation, *args, **kwargs)
+        if operation == "install":
+            # Expired ownership may be transferred BETWEEN serialized I/O
+            # calls. A late callback/result must still keep its old fence.
+            paused.set()
+            assert resume.wait(5)
+            if late_action == "progress":
+                kwargs["progress"]("unimol-weights")
+            elif late_action == "failure":
+                raise OSError("old worker resumed with an error")
+        return result
+
+    monkeypatch.setattr(old, "_executor_io", pause_between_io_calls)
     plan = old.build_plan(ref)
     worker = threading.Thread(target=lambda: results.append(old.confirm(_approval(plan))))
     claimed = None
