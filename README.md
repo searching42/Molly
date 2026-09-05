@@ -192,6 +192,29 @@ If the shell reports `molly: command not found`, use the project-local
 `.venv/bin/molly` entrypoint after installing the package into that virtual
 environment.
 
+The model settings page also supports server-owned local and SSH environment
+connection profiles. “检测环境” runs a bounded, fixed read-only probe for the
+operating system, GPU/CUDA, Python tooling, Uni-Mol, REINVENT4, disk space,
+write access, and existing weights. Molly first reports whether an existing
+environment can be reused; missing components are shown as a fixed-version,
+isolated installation preview. This discovery preview never downloads,
+installs, or executes an arbitrary command. SSH uses the server's configured
+transport and credentials; private keys, shell commands, and download URLs
+are not accepted from the browser. When a complete server-owned manifest is
+available, the page can generate a digest-bound installation plan and presents
+one confirmation before downloading. Installation uses a temporary isolated
+directory, fixed source/version/hash, bounded transport, atomic enable, and a
+persisted confirmed runtime configuration. The default scientific catalog
+fails closed when an artifact SHA-256 has not yet been entered; it never
+guesses a hash or downloads from a client-supplied URL.
+
+Production deployments provide the reviewed, owner-only fixed manifest at
+`.molly/runtime_install_manifest.json`, or set the server-side
+`MOLLY_RUNTIME_MANIFEST_PATH` variable (the same path can be passed to
+`create_application`). The manifest must contain exact HTTPS artifact URLs,
+versions, sizes, installation kind, required verification paths, and lowercase
+SHA-256 values; browser requests cannot replace it.
+
 ### BR1 real end-to-end run
 
 Normal web mode exposes only worker profiles that are complete and registered

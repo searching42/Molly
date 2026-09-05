@@ -6,6 +6,11 @@ const state = {
   detail: null,
   selectedRunId: null,
   editingProvider: null,
+  editingEnvironment: null,
+  environmentDetection: null,
+  environmentInstallPlan: null,
+  environmentInstallInFlight: false,
+  environmentError: "",
   files: [],
   goal: "",
   profileId: "",
@@ -612,6 +617,176 @@ const renderProviderCards = () => {
   `).join("")}</div>`;
 };
 
+const environmentStatusLabels = {
+  UNDETECTED: "尚未检测",
+  READY: "可直接复用",
+  CONFIRMED: "已确认",
+  PLAN_REQUIRED: "需要安装计划",
+  BLOCKED: "需要处理",
+  APPROVED: "等待执行",
+  INSTALLING: "正在安装",
+  VERIFYING: "正在验证",
+  ENABLING: "正在启用",
+  RECOVERING: "正在恢复",
+  ROLLING_BACK: "正在回滚",
+};
+
+const recoverableInstallationStates = new Set([
+  "APPROVED",
+  "INSTALLING",
+  "VERIFYING",
+  "ENABLING",
+  "RECOVERING",
+  "ROLLING_BACK",
+]);
+
+const environmentStatusClass = (status) => {
+  if (status === "CONFIRMED") return "status-stopped";
+  if (status === "READY") return "status-stopped";
+  if (status === "BLOCKED") return "status-failed";
+  if (status === "ROLLING_BACK") return "status-failed";
+  if (recoverableInstallationStates.has(status)) return "status-waiting_approval";
+  if (status === "PLAN_REQUIRED") return "status-waiting_approval";
+  return "status-new";
+};
+
+const renderEnvironmentCards = () => {
+  const profiles = state.bootstrap?.environments || [];
+  if (!profiles.length) {
+    return '<div class="empty-state"><h3>尚未配置运行环境</h3><p>添加本地或 SSH 连接后，点击“检测环境”查看可复用组件和安装预览。</p></div>';
+  }
+  return `<div class="environment-list">${profiles.map((profile) => {
+    const status = profile.status || "UNDETECTED";
+    const installation = profile.installation || null;
+    const recoveryAction = recoverableInstallationStates.has(installation?.state)
+      ? `<button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(profile.environment_ref)}" type="button">${installation.state === "ROLLING_BACK" ? "继续清理" : "继续恢复"}</button>`
+      : "";
+    return `<article class="environment-card">
+      <div class="environment-card-head">
+        <div><div class="environment-name">${html(profile.name)}</div><div class="environment-target">${html(profile.target_label)}</div></div>
+        <span class="status-pill ${environmentStatusClass(status)}">${html(environmentStatusLabels[status] || status)}</span>
+      </div>
+      <div class="environment-card-meta"><span>${html(profile.mode_label)}</span><span>${profile.selected_device ? `优先设备：${html(profile.selected_device)}` : "尚未选择设备"}</span></div>
+      <div class="environment-actions"><button class="secondary-button" data-edit-environment="${html(profile.environment_ref)}" type="button">编辑</button><button class="secondary-button" data-detect-environment="${html(profile.environment_ref)}" type="button">检测环境</button>${recoveryAction}</div>
+    </article>`;
+  }).join("")}</div>`;
+};
+
+const renderEnvironmentInstallPlan = (detection) => {
+  const environmentRef = detection.environment?.environment_ref || state.editingEnvironment?.environment_ref || "";
+  const plan = state.environmentInstallPlan;
+  const existingRuntime = detection.runtime_config || state.editingEnvironment?.runtime_config;
+  const installation = plan?.installation || detection.installation || state.editingEnvironment?.installation;
+  if (installation) {
+    if (installation.state === "CONFIRMED") {
+      return `<div class="environment-install-card environment-install-success"><strong>运行环境已确认</strong><span>固定版本已验证并原子启用；后续新建任务会自动匹配该环境。</span></div>`;
+    }
+    if (installation.state === "FAILED") {
+      return `<div class="environment-install-card environment-install-failure"><strong>安装失败，隔离目录已回滚</strong><span>${html(installation.error || "请重新检测并生成安装计划")}</span></div>`;
+    }
+    if (recoverableInstallationStates.has(installation.state)) {
+      const isRollback = installation.state === "ROLLING_BACK";
+      return `<div class="environment-install-card environment-install-failure"><strong>${isRollback ? "正在回滚，运行环境暂不可用" : "安装事务尚未完成"}</strong><span>${isRollback ? "清理尚未完成；完成前不会登记为可用环境。" : "检测到可恢复的安装事务；完成前不会登记为可用环境。"}</span><button class="secondary-button" data-recover-environment-install="${html(installation.installation_id)}" data-recover-environment="${html(environmentRef)}" type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>${isRollback ? "继续清理" : "继续恢复"}</button></div>`;
+    }
+    return `<div class="environment-install-card"><strong>安装正在执行</strong><span>系统正在安装并验证固定清单，完成后会登记运行配置。请稍候。</span></div>`;
+  }
+  if (plan?.status === "ALREADY_CONFIRMED" || existingRuntime?.status_label === "已确认") {
+    return '<div class="environment-install-card environment-install-success"><strong>运行环境已确认</strong><span>当前连接已有已验证运行配置，后续任务会复用它；如连接或固定清单变化，系统会要求重新确认。</span></div>';
+  }
+  if (!plan) {
+    return `<div class="environment-install-card"><div><strong>${(detection.match || {}).status === "READY" ? "确认现有兼容环境" : "受限安装"}</strong><span>先生成服务端固定清单方案；这一步只读取配置，不下载或安装。</span></div><button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">${(detection.match || {}).status === "READY" ? "生成确认方案" : "生成安装计划"}</button></div>`;
+  }
+  const items = (plan.items || []).map((item) => `<div class="environment-install-item">
+    <div class="environment-plan-item-head"><strong>${html(item.name || item.component_id)}</strong><span>${html(item.version || "—")}</span></div>
+    <div class="environment-plan-grid"><span>来源</span><span>${html(item.source || "—")}</span><span>许可</span><span>${html(item.license_name || (item.requires_license ? "需要用户提供许可证/凭据" : "按固定清单记录"))}</span><span>下载</span><span>${formatBytes(item.estimated_download_bytes || 0)}</span><span>磁盘</span><span>${formatBytes(item.estimated_disk_bytes || 0)}</span><span>目标目录</span><code>${html(item.install_location || plan.target_directory || "—")}</code></div>
+    ${item.requires_license ? '<div class="environment-plan-warning">许可证或凭据缺失时会暂停，不会自动绕过。</div>' : ""}
+  </div>`).join("") || '<div class="environment-empty">当前没有需要安装的组件。</div>';
+  const blockers = (plan.blockers || []).map((item) => `<li>${html(item)}</li>`).join("");
+  const reused = (plan.reused_components || []).map((item) => `<span>${html(item.name || item.component_id)}${item.version ? ` · ${html(item.version)}` : ""}${item.environment?.name ? `（${html(item.environment.name)}）` : ""}</span>`).join("") || "无";
+  const blocked = !["READY_TO_INSTALL", "READY_TO_CONFIRM"].includes(plan.status);
+  const reuseOnly = plan.status === "READY_TO_CONFIRM";
+  return `<div class="environment-install-card ${blocked ? "is-blocked" : ""}">
+    <div class="environment-install-head"><div><strong>${blocked ? "安装已暂停" : reuseOnly ? "复用环境前一次确认" : "安装前一次确认"}</strong><span>${blocked ? "固定清单、许可证或资源约束尚未满足。" : reuseOnly ? "确认后会重新探测并登记当前兼容环境；不会下载或安装。" : "确认后才会下载和安装；所有内容只进入新的隔离目录。"}</span></div><span class="status-pill ${blocked ? "status-failed" : "status-waiting_approval"}">${blocked ? "需要处理" : "待确认"}</span></div>
+    <div class="environment-install-summary"><span>运行位置：${html(detection.environment?.target_label || "当前连接")}</span><span>设备：${html(plan.selected_device || "CPU")}</span><span>预计下载：${formatBytes(plan.estimated_download_bytes || 0)}</span><span>预计磁盘：${formatBytes(plan.estimated_disk_bytes || 0)}</span><span>预计耗时：${formatDuration(plan.estimated_duration_seconds || 0)}</span><span>目标目录：${html(plan.target_directory || "—")}</span></div>
+    ${reuseOnly ? `<div class="environment-install-reuse"><strong>将复用</strong>${reused}</div>` : ""}
+    <div class="environment-install-list">${items}</div>
+    ${blockers ? `<div class="environment-install-blockers"><strong>风险与暂停原因</strong><ul>${blockers}</ul></div>` : `<div class="environment-install-risk">${reuseOnly ? "风险：确认只登记重新探测到的现有兼容环境，不下载或修改环境。" : "风险：安装过程有超时、大小上限、SHA-256 校验、临时目录和原子启用保护，不覆盖已有环境。"}</div>`}
+    ${blocked ? `<button class="secondary-button" data-build-environment-plan="${html(environmentRef)}" type="button">重新生成安装计划</button>` : `<label class="environment-install-confirm"><input id="environment-install-confirm" type="checkbox" />我已确认运行位置、固定版本、来源、许可、资源估算和${reuseOnly ? "当前兼容环境" : "隔离目标目录"}</label><div class="environment-install-actions"><button class="primary-button" data-confirm-environment-install type="button" ${state.environmentInstallInFlight ? "disabled" : ""}>${reuseOnly ? "确认并登记" : "确认并安装"}</button></div>`}
+  </div>`;
+};
+
+const renderEnvironmentDetection = (detection) => {
+  if (!detection) return '<div class="environment-empty">请选择一个连接并点击“检测环境”。检测只会读取环境信息，不会下载或安装任何内容。</div>';
+  const report = detection.report || {};
+  const system = report.system || {};
+  const disk = report.disk || {};
+  const gpu = report.gpu || {};
+  const python = report.python || {};
+  const unimol = report.unimol || {};
+  const reinvent = report.reinvent4 || {};
+  const weights = report.weights || {};
+  const match = detection.match || {};
+  const plan = match.plan || {};
+  const compatibility = match.compatibility || {};
+  const selectedUnimolEnvironment = match.selected_unimol_environment || null;
+  const selectedReinventEnvironment = match.selected_reinvent4_environment || null;
+  const managers = Object.entries(python.managers || {}).filter(([, value]) => value?.available);
+  const pythonEnvironments = match.python_environments || python.environments || [];
+  const compatiblePythonEnvironments = pythonEnvironments.filter((item) => item.unimol_compatible || item.reinvent4_compatible);
+  const devices = (gpu.devices || []).map((device) => `${device.name || "GPU"} · ${formatBytes(Number(device.memory_mib || 0) * 1024 * 1024)} 显存`).join("；") || "未检测到 GPU";
+  const repositories = (reinvent.repositories || []).filter((item) => item.exists).map((item) => item.path).join("；") || "未找到 REINVENT4 仓库";
+  const reusable = (match.reusable || []).map((item) => `<li>${html(item.name)}${item.version ? ` · ${html(item.version)}` : ""}${item.environment?.name ? `（${html(item.environment.name)}）` : ""}</li>`).join("") || "暂无可复用组件";
+  const missing = (match.missing || []).map((item) => `<li>${html(item.reason || item.name || item.component_id)}</li>`).join("") || "无缺失组件";
+  const planItems = (plan.items || []).map((item) => `<div class="environment-plan-item">
+    <div class="environment-plan-item-head"><strong>${html(item.name)}</strong><span>${html(item.version || "—")}</span></div>
+    <div class="environment-plan-grid"><span>来源</span><span>${html(item.source || "—")}</span><span>预计下载</span><span>${formatBytes(item.estimated_download_bytes || 0)}</span><span>预计占用</span><span>${formatBytes(item.estimated_disk_bytes || 0)}</span><span>预计耗时</span><span>${formatDuration(item.estimated_duration_seconds || 0)}</span><span>安装位置</span><code>${html(item.install_location || "—")}</code></div>
+    ${item.requires_license ? '<div class="environment-plan-warning">需要用户先确认 REINVENT4 许可证或凭据，系统不会自动绕过。</div>' : ""}
+  </div>`).join("") || '<div class="environment-empty">当前组件均可复用，不需要安装。</div>';
+  const status = match.status || "PLAN_REQUIRED";
+  return `<div class="environment-report">
+    <div class="notice environment-read-only"><div class="notice-icon" aria-hidden="true">ⓘ</div><div><strong>只读检测完成</strong>${html(detection.environment?.target_label || report.target_label || "")} · ${html(report.detected_at || "")}。本次不会下载、安装或修改环境。</div></div>
+    <div class="environment-report-grid">
+      <div class="environment-component"><strong>系统与磁盘</strong><span>${html(system.os || "未知")} · ${html(system.architecture || "未知")}</span><span>可用磁盘：${formatBytes(disk.available_bytes || 0)}</span><span>${disk.writable ? "运行目录可写" : disk.parent_writable ? "运行目录待创建" : "运行目录不可写"}</span></div>
+      <div class="environment-component"><strong>GPU / CUDA</strong><span>${html(devices)}</span><span>${gpu.cuda?.available ? `CUDA：${html(gpu.cuda.version || "已检测到")}` : "CUDA 未确认"}</span></div>
+      <div class="environment-component"><strong>Python 环境</strong><span>${pythonEnvironments.length ? `已枚举 ${html(pythonEnvironments.length)} 个独立解释器` : html(python.version || "未检测到 Python")} · ${html(python.implementation || "")}</span><span>${managers.length ? `工具：${html(managers.map(([name]) => name).join("、"))}` : "未检测到 Conda/Mamba/uv"}</span><span>${compatiblePythonEnvironments.length ? `可复用组件分布在 ${html(compatiblePythonEnvironments.length)} 个环境中` : "未找到兼容组件环境"}</span></div>
+      <div class="environment-component"><strong>科学组件</strong><span>Uni-Mol：${selectedUnimolEnvironment && compatibility.unimol?.compatible ? `已匹配 ${html(compatibility.unimol.detected_version || "兼容版本")}（${html(selectedUnimolEnvironment.name || "独立环境")}）` : unimol.installed ? html(unimol.version || "已安装") : "未安装"}</span><span>REINVENT4：${selectedReinventEnvironment ? `已匹配 ${html(compatibility.reinvent4?.detected_version || "兼容版本")}（${html(selectedReinventEnvironment.name || "独立环境")}）${compatibility.reinvent4?.compatible ? "" : " · 许可证待确认"}` : reinvent.installed ? html(reinvent.version || "已安装") : "未安装"}</span><span>${html(repositories)}</span></div>
+      <div class="environment-component"><strong>模型权重</strong><span>${weights.entries?.length ? `${html(weights.entries.length)} 个候选文件 · ${formatBytes(weights.total_bytes || 0)}` : "未找到候选权重"}</span><span>${weights.verification_status === "verified" ? "已完成固定清单哈希验证" : "候选文件待固定清单哈希验证，不能直接复用"}</span></div>
+      <div class="environment-component"><strong>执行建议</strong><span>${html(match.selected_candidate === "existing" ? "优先复用现有环境" : "需要先准备隔离环境")}</span><span>使用：${html(match.selected_device || "CPU")}</span></div>
+    </div>
+    <div class="environment-match">
+      <div class="environment-match-head"><div><h3>环境匹配结果</h3><p class="field-hint">${html(environmentStatusLabels[status] || status)} · ${html(match.selected_device || "CPU")} · ${html(match.selected_candidate === "existing" ? "现有环境" : "隔离目录预览")}</p></div><span class="status-pill ${environmentStatusClass(status)}">${html(environmentStatusLabels[status] || status)}</span></div>
+      <div class="environment-match-columns"><div><strong>可复用</strong><ul>${reusable}</ul></div><div><strong>需要准备</strong><ul>${missing}</ul></div></div>
+    </div>
+    <div class="environment-plan"><div class="environment-plan-head"><div><h3>固定清单预览</h3><p class="field-hint">这里仅展示探测结果中的候选来源；真正安装前还要生成受限方案并完成一次集中确认。</p></div><span>${formatBytes(plan.estimated_download_bytes || 0)} 下载 · ${formatBytes(plan.estimated_disk_bytes || 0)} 磁盘 · ${formatDuration(plan.estimated_duration_seconds || 0)}</span></div><div class="environment-plan-list">${planItems}</div></div>
+    ${renderEnvironmentInstallPlan(detection)}
+  </div>`;
+};
+
+const renderEnvironmentForm = () => {
+  const editing = state.editingEnvironment || {};
+  const mode = editing.mode === "ssh" ? "ssh" : "local";
+  return `<form class="card environment-form stack" id="environment-form">
+    <h3>${editing.environment_ref ? "编辑运行环境" : "添加运行环境"}</h3>
+    <div class="field"><label class="field-label" for="environment-name">环境名称</label><input id="environment-name" type="text" maxlength="80" value="${html(editing.name || "")}" placeholder="例如：本地 GPU 或远程工作站" required /></div>
+    <fieldset class="environment-mode"><legend class="field-label">运行位置</legend><label><input type="radio" name="environment-mode" value="local" ${mode === "local" ? "checked" : ""} /> 本地运行</label><label><input type="radio" name="environment-mode" value="ssh" ${mode === "ssh" ? "checked" : ""} /> SSH 运行</label></fieldset>
+    <div id="ssh-fields" class="stack" ${mode === "ssh" ? "" : "hidden"}>
+      <div class="field"><label class="field-label" for="environment-target">SSH 别名/主机</label><input id="environment-target" type="text" maxlength="255" value="${html(editing.ssh_target || "")}" placeholder="例如：远程工作站别名" /><span class="field-hint">只使用服务器端 SSH 配置和凭据，不在网页输入私钥。</span></div>
+      <div class="field-row"><div class="field"><label class="field-label" for="environment-user">用户</label><input id="environment-user" type="text" maxlength="64" value="${html(editing.ssh_user || "")}" placeholder="例如：benton" /></div><div class="field"><label class="field-label" for="environment-port">端口</label><input id="environment-port" type="number" min="1" max="65535" value="${html(editing.ssh_port || 22)}" /></div></div>
+    </div>
+    <div class="environment-form-note">检测将执行固定的只读探测：系统、GPU/CUDA、Python 工具、Uni-Mol、REINVENT4、磁盘、权重和兼容性。不会执行任意 Shell、sudo、下载或安装。</div>
+    <div class="form-actions"><button class="primary-button" type="submit">保存运行环境</button><button class="secondary-button" data-detect-environment-form type="button">检测环境</button>${editing.environment_ref ? '<button class="secondary-button" data-clear-environment type="button">取消编辑</button>' : ""}</div>
+  </form>`;
+};
+
+const renderEnvironmentSection = () => `
+  <section class="card environment-section">
+    <div class="section-heading"><div><h2>运行环境</h2><p class="page-toolbar-copy">配置本地或 SSH 连接，先只读检测并生成复用/安装预览。安装执行和登记会在后续确认流程中完成。</p></div><span class="status-pill status-new">只读发现</span></div>
+    <div class="environment-layout"><div>${renderEnvironmentCards()}</div>${renderEnvironmentForm()}</div>
+    ${state.environmentError ? `<div class="notice failure-notice environment-error"><div class="notice-icon" aria-hidden="true">!</div><div><strong>环境检测未完成</strong>${html(state.environmentError)}</div></div>` : ""}
+    <div class="environment-detection-panel">${renderEnvironmentDetection(state.environmentDetection)}</div>
+  </section>
+`;
+
 const renderProviders = () => {
   const editing = state.editingProvider;
   return `
@@ -631,12 +806,13 @@ const renderProviders = () => {
         ${editing ? '<div class="provider-check" id="provider-check"></div>' : ""}
       </form>
     </div>
+    ${renderEnvironmentSection()}
   `;
 };
 
 const render = ({ force = false, preserveInteractive = false } = {}) => {
   if (!state.bootstrap) return;
-  const fingerprint = JSON.stringify({ view: state.view, bootstrap: state.bootstrap, detail: state.detail, files: state.files, plan: state.plan, planConfirmed: state.planConfirmed, editingProvider: state.editingProvider });
+  const fingerprint = JSON.stringify({ view: state.view, bootstrap: state.bootstrap, detail: state.detail, files: state.files, plan: state.plan, planConfirmed: state.planConfirmed, editingProvider: state.editingProvider, editingEnvironment: state.editingEnvironment, environmentDetection: state.environmentDetection, environmentInstallPlan: state.environmentInstallPlan, environmentInstallInFlight: state.environmentInstallInFlight });
   if (!force && fingerprint === state.renderFingerprint) return;
   const focusedId = preserveInteractive ? document.activeElement?.id : "";
   const openDetails = preserveInteractive
@@ -934,6 +1110,216 @@ const bindPageEvents = () => {
       render({ force: true, preserveInteractive: true });
       showToast("API Key 已保存到本机服务端");
     } catch (error) { showToast(error.message, true); } finally { setBusy(false); }
+  }));
+
+  const environmentForm = document.getElementById("environment-form");
+  const syncEnvironmentMode = () => {
+    const mode = document.querySelector('input[name="environment-mode"]:checked')?.value || "local";
+    const sshFields = document.getElementById("ssh-fields");
+    if (sshFields) {
+      sshFields.hidden = mode !== "ssh";
+      sshFields.querySelectorAll("input").forEach((input) => { input.disabled = mode !== "ssh"; });
+    }
+  };
+  document.querySelectorAll('input[name="environment-mode"]').forEach((input) => input.addEventListener("change", syncEnvironmentMode));
+  syncEnvironmentMode();
+
+  const readEnvironmentForm = () => {
+    const mode = document.querySelector('input[name="environment-mode"]:checked')?.value || "local";
+    const value = {
+      display_name: document.getElementById("environment-name")?.value.trim() || "",
+      mode,
+    };
+    if (state.editingEnvironment?.environment_ref) value.environment_ref = state.editingEnvironment.environment_ref;
+    if (mode === "ssh") {
+      value.ssh_target = document.getElementById("environment-target")?.value.trim() || "";
+      value.ssh_user = document.getElementById("environment-user")?.value.trim() || "";
+      value.ssh_port = Number(document.getElementById("environment-port")?.value || 22);
+    }
+    return value;
+  };
+
+  const detectEnvironment = async (environmentRef) => {
+    state.environmentError = "";
+    state.environmentInstallPlan = null;
+    try {
+      setBusy(true);
+      state.environmentDetection = await request(`/api/environments/${encodeURIComponent(environmentRef)}/detect`, { method: "POST", body: "{}" });
+      await loadBootstrap();
+      state.view = "providers";
+      render({ force: true, preserveInteractive: true });
+      showToast("环境检测完成，已生成复用和安装预览");
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally { setBusy(false); }
+  };
+
+  const buildEnvironmentInstallPlan = async (environmentRef) => {
+    state.environmentError = "";
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(environmentRef)}/install/plan`, {
+        method: "POST",
+        body: "{}",
+      });
+      state.environmentInstallPlan = result.plan;
+      render({ force: true, preserveInteractive: true });
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmEnvironmentInstall = async () => {
+    const plan = state.environmentInstallPlan;
+    const checkbox = document.getElementById("environment-install-confirm");
+    if (!plan || !["READY_TO_INSTALL", "READY_TO_CONFIRM"].includes(plan.status)) return;
+    if (!checkbox?.checked) {
+      showToast("请先确认完整安装方案", true);
+      checkbox?.focus();
+      return;
+    }
+    state.environmentError = "";
+    state.environmentInstallInFlight = true;
+    render({ force: true, preserveInteractive: true });
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(plan.environment_ref)}/install/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          confirm: true,
+          plan_id: plan.plan_id,
+          plan_digest: plan.plan_digest,
+          connection_digest: plan.connection_digest,
+          report_digest: plan.report_digest,
+        }),
+      });
+      state.environmentInstallPlan = { ...plan, installation: result.installation, runtime_config: result.runtime_config };
+      await loadBootstrap();
+      const detail = await request(`/api/environments/${encodeURIComponent(plan.environment_ref)}`);
+      state.environmentDetection = detail.detection;
+      render({ force: true, preserveInteractive: true });
+      showToast(result.installation?.state === "CONFIRMED" ? "运行环境已确认并登记" : "安装状态已更新");
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally {
+      state.environmentInstallInFlight = false;
+      setBusy(false);
+      render({ force: true, preserveInteractive: true });
+    }
+  };
+
+  const recoverEnvironmentInstall = async (environmentRef, installationId) => {
+    if (!environmentRef || !installationId || state.environmentInstallInFlight) return;
+    state.environmentError = "";
+    state.environmentInstallInFlight = true;
+    render({ force: true, preserveInteractive: true });
+    try {
+      setBusy(true);
+      const result = await request(`/api/environments/${encodeURIComponent(environmentRef)}/install/recover`, {
+        method: "POST",
+        body: JSON.stringify({ installation_id: installationId }),
+      });
+      const currentPlan = state.environmentInstallPlan || {};
+      state.environmentInstallPlan = { ...currentPlan, environment_ref: environmentRef, installation: result.installation, runtime_config: result.runtime_config };
+      await loadBootstrap();
+      const detail = await request(`/api/environments/${encodeURIComponent(environmentRef)}`);
+      state.editingEnvironment = state.bootstrap.environments.find((item) => item.environment_ref === environmentRef) || state.editingEnvironment;
+      state.environmentDetection = detail.detection;
+      render({ force: true, preserveInteractive: true });
+      const stateAfterRecovery = result.installation?.state;
+      showToast(
+        stateAfterRecovery === "CONFIRMED"
+          ? "运行环境已恢复并确认"
+          : stateAfterRecovery === "FAILED"
+            ? "回滚已完成"
+            : "恢复状态已更新",
+      );
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally {
+      state.environmentInstallInFlight = false;
+      setBusy(false);
+      render({ force: true, preserveInteractive: true });
+    }
+  };
+
+  const saveEnvironment = async ({ detect = false } = {}) => {
+    state.environmentError = "";
+    const value = readEnvironmentForm();
+    try {
+      setBusy(true);
+      const saved = await request("/api/environments", { method: "POST", body: JSON.stringify(value) });
+      state.editingEnvironment = saved.environment;
+      state.environmentDetection = null;
+      state.environmentInstallPlan = null;
+      await loadBootstrap();
+      state.editingEnvironment = state.bootstrap.environments.find((item) => item.environment_ref === saved.environment.environment_ref) || saved.environment;
+      if (detect) {
+        state.environmentDetection = await request(`/api/environments/${encodeURIComponent(saved.environment.environment_ref)}/detect`, { method: "POST", body: "{}" });
+        await loadBootstrap();
+      }
+      state.view = "providers";
+      render({ force: true, preserveInteractive: true });
+      showToast(detect ? "环境检测完成，已生成复用和安装预览" : "运行环境连接配置已保存");
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+      showToast(error.message, true);
+    } finally { setBusy(false); }
+  };
+
+  if (environmentForm) environmentForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveEnvironment();
+  });
+  document.querySelectorAll("[data-detect-environment-form]").forEach((button) => button.addEventListener("click", async () => {
+    await saveEnvironment({ detect: true });
+  }));
+  document.querySelectorAll("[data-detect-environment]").forEach((button) => button.addEventListener("click", async () => {
+    await detectEnvironment(button.dataset.detectEnvironment);
+  }));
+  document.querySelectorAll("[data-build-environment-plan]").forEach((button) => button.addEventListener("click", async () => {
+    await buildEnvironmentInstallPlan(button.dataset.buildEnvironmentPlan);
+  }));
+  document.querySelectorAll("[data-confirm-environment-install]").forEach((button) => button.addEventListener("click", async () => {
+    await confirmEnvironmentInstall();
+  }));
+  document.querySelectorAll("[data-recover-environment-install]").forEach((button) => button.addEventListener("click", async () => {
+    await recoverEnvironmentInstall(button.dataset.recoverEnvironment, button.dataset.recoverEnvironmentInstall);
+  }));
+  document.querySelectorAll("[data-edit-environment]").forEach((button) => button.addEventListener("click", async () => {
+    const profile = state.bootstrap?.environments?.find((item) => item.environment_ref === button.dataset.editEnvironment);
+    if (!profile) return;
+    state.editingEnvironment = profile;
+    state.environmentDetection = null;
+    state.environmentInstallPlan = null;
+    state.environmentError = "";
+    render({ force: true, preserveInteractive: true });
+    if (!profile.detection_available) return;
+    try {
+      const value = await request(`/api/environments/${encodeURIComponent(profile.environment_ref)}`);
+      state.environmentDetection = value.detection;
+      render({ force: true, preserveInteractive: true });
+    } catch (error) {
+      state.environmentError = error.message;
+      render({ force: true, preserveInteractive: true });
+    }
+  }));
+  document.querySelectorAll("[data-clear-environment]").forEach((button) => button.addEventListener("click", () => {
+    state.editingEnvironment = null;
+    state.environmentDetection = null;
+    state.environmentInstallPlan = null;
+    state.environmentError = "";
+    render({ force: true, preserveInteractive: true });
   }));
 };
 
