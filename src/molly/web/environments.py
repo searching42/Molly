@@ -27,11 +27,6 @@ import threading
 from textwrap import dedent
 from typing import Any
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows has no fcntl
-    fcntl = None
-
 from molly.core.ids import (
     canonical_json_bytes,
     normalize_timestamp,
@@ -40,6 +35,7 @@ from molly.core.ids import (
     validate_identifier,
     validate_sha256,
 )
+from molly.core.state_lock import StateMutationLock
 
 
 ENVIRONMENT_CONFIG_VERSION = 1
@@ -143,9 +139,6 @@ def _connection_digest(
             }
         )
     )
-
-
-_STORE_THREAD_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,7 +339,8 @@ class EnvironmentConfigStore:
         self.root = configured.absolute()
         self.profiles_path = self.root / "environment_profiles.json"
         self.reports_path = self.root / "environment_reports.json"
-        self.lock_path = self.root / ".environment.lock"
+        self.coordination_lock = StateMutationLock(self.root)
+        self.lock_path = self.coordination_lock.path
 
     @contextmanager
     def _write_lock(self):
@@ -354,18 +348,8 @@ class EnvironmentConfigStore:
 
         if self.root.is_symlink():
             raise EnvironmentConfigError("environment settings root cannot be a symlink")
-        self.root.mkdir(parents=True, exist_ok=True)
-        with _STORE_THREAD_LOCK:
-            descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            try:
-                os.fchmod(descriptor, 0o600)
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX)
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
+        with self.coordination_lock.acquire():
+            yield
 
     @staticmethod
     def _check_file(path: Path) -> None:

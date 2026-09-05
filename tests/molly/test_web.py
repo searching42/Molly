@@ -503,6 +503,7 @@ def test_static_surface_is_available_without_a_frontend_dependency(tmp_path: Pat
     assert "install/recover" in script_text
     assert "ROLLING_BACK" in script_text
     assert "recoverableInstallationStates" in script_text
+    assert "运行环境已恢复并确认" in script_text
     assert "apply_install_plan" not in script_text
 
 

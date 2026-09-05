@@ -1233,7 +1233,14 @@ const bindPageEvents = () => {
       state.editingEnvironment = state.bootstrap.environments.find((item) => item.environment_ref === environmentRef) || state.editingEnvironment;
       state.environmentDetection = detail.detection;
       render({ force: true, preserveInteractive: true });
-      showToast(result.installation?.state === "FAILED" ? "回滚已完成" : "回滚状态已更新");
+      const stateAfterRecovery = result.installation?.state;
+      showToast(
+        stateAfterRecovery === "CONFIRMED"
+          ? "运行环境已恢复并确认"
+          : stateAfterRecovery === "FAILED"
+            ? "回滚已完成"
+            : "恢复状态已更新",
+      );
     } catch (error) {
       state.environmentError = error.message;
       render({ force: true, preserveInteractive: true });

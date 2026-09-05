@@ -16,7 +16,7 @@ be approved.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 import hashlib
 import inspect
@@ -34,11 +34,6 @@ from urllib.parse import unquote, urlsplit
 import urllib.request
 import zipfile
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows has no fcntl
-    fcntl = None
-
 from molly.core.ids import (
     canonical_json_bytes,
     new_server_id,
@@ -49,6 +44,7 @@ from molly.core.ids import (
     validate_identifier,
     validate_sha256,
 )
+from molly.core.state_lock import StateMutationLock
 
 from .environments import (
     COMPATIBILITY_CATALOG,
@@ -66,6 +62,8 @@ INSTALLATION_STATE_VERSION = 1
 RUNTIME_CONFIG_VERSION = 1
 INSTALLATION_TIMEOUT_SECONDS = 3_600.0
 INSTALLATION_RECOVERY_STALE_SECONDS = 300.0
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 1.0
+WORKER_LEASE_STALE_SECONDS = 15.0
 MAX_INSTALL_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_INSTALL_DISK_BYTES = 4 * 1024 * 1024 * 1024
 MAX_INSTALL_OUTPUT_BYTES = 512 * 1024
@@ -77,10 +75,10 @@ MAX_PERSISTED_RUNTIME_CONFIGS = 128
 # older version that did not compact runtime-config history.
 MAX_STATE_RECORDS_ON_READ = max(MAX_PERSISTED_PLANS, MAX_PERSISTED_RUNTIME_CONFIGS) * 2
 RUNTIME_MANIFEST_ENV = "MOLLY_RUNTIME_MANIFEST_PATH"
-_STORE_THREAD_LOCK = threading.RLock()
 _ACTIVE_INSTALLATION_STATES = frozenset(
     {"APPROVED", "INSTALLING", "VERIFYING", "ENABLING", "RECOVERING", "ROLLING_BACK"}
 )
+_RECOVERY_THREAD_LOCK = threading.RLock()
 _RECOVERY_THREAD_LEASES: set[str] = set()
 
 
@@ -937,6 +935,10 @@ class InstallationRecord:
     side_effects_started: bool = False
     consent_at: str = ""
     worker_pid: int = 0
+    worker_instance_id: str = ""
+    worker_token: str = ""
+    worker_heartbeat_at: str = ""
+    worker_operation: str = ""
 
     def __post_init__(self) -> None:
         for value, field in (
@@ -996,6 +998,29 @@ class InstallationRecord:
             object.__setattr__(self, "consent_at", _timestamp(self.consent_at, field="consent_at"))
         if isinstance(self.worker_pid, bool) or not isinstance(self.worker_pid, int) or self.worker_pid < 0:
             raise InstallationConfigError("worker_pid is invalid")
+        for value, field in (
+            (self.worker_instance_id, "worker_instance_id"),
+            (self.worker_token, "worker_token"),
+            (self.worker_operation, "worker_operation"),
+        ):
+            if not isinstance(value, str) or len(value) > 128:
+                raise InstallationConfigError(f"{field} is invalid")
+        if self.worker_instance_id:
+            _safe_id(self.worker_instance_id, field="worker_instance_id")
+        if self.worker_token:
+            _safe_id(self.worker_token, field="worker_token")
+        if self.worker_operation not in {"", "install", "confirm", "enable"}:
+            raise InstallationConfigError("worker_operation is invalid")
+        if self.worker_heartbeat_at:
+            object.__setattr__(
+                self,
+                "worker_heartbeat_at",
+                _timestamp(self.worker_heartbeat_at, field="worker_heartbeat_at"),
+            )
+        if bool(self.worker_instance_id) != bool(self.worker_token):
+            raise InstallationConfigError("worker lease identity is incomplete")
+        if self.worker_token and not self.worker_heartbeat_at:
+            raise InstallationConfigError("worker lease heartbeat is missing")
 
     def to_dict(self, *, public: bool = False) -> dict[str, Any]:
         value = {
@@ -1025,10 +1050,18 @@ class InstallationRecord:
         }
         if not public:
             value["worker_pid"] = self.worker_pid
+            value["worker_instance_id"] = self.worker_instance_id
+            value["worker_token"] = self.worker_token
+            value["worker_heartbeat_at"] = self.worker_heartbeat_at
+            value["worker_operation"] = self.worker_operation
         else:
             value.pop("stage_directory")
             value.pop("target_directory")
             value.pop("worker_pid", None)
+            value.pop("worker_instance_id", None)
+            value.pop("worker_token", None)
+            value.pop("worker_heartbeat_at", None)
+            value.pop("worker_operation", None)
             value["verification"] = _public_hash_safe(value["verification"])
             value["binding"] = {
                 "connection_digest": self.connection_digest,
@@ -1074,6 +1107,10 @@ class InstallationRecord:
             side_effects_started=value.get("side_effects_started", False),
             consent_at=value.get("consent_at", ""),
             worker_pid=value.get("worker_pid", 0),
+            worker_instance_id=value.get("worker_instance_id", ""),
+            worker_token=value.get("worker_token", ""),
+            worker_heartbeat_at=value.get("worker_heartbeat_at", ""),
+            worker_operation=value.get("worker_operation", ""),
         )
 
 
@@ -1215,30 +1252,34 @@ class RuntimeConfig:
 class RuntimeInstallationStore:
     """Atomic, owner-only persistence with transaction-level CAS."""
 
-    def __init__(self, root: Path | str) -> None:
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        coordination_lock: StateMutationLock | None = None,
+        coordination_root: Path | str | None = None,
+    ) -> None:
         configured = Path(root)
         if configured.is_symlink():
             raise InstallationConfigError("installation settings root cannot be a symlink")
         self.root = configured.absolute()
         self.state_path = self.root / "runtime_installations.json"
-        self.lock_path = self.root / ".runtime-installations.lock"
+        if coordination_lock is not None and coordination_root is not None:
+            raise InstallationConfigError(
+                "provide either coordination_lock or coordination_root, not both"
+            )
+        self.coordination_lock = coordination_lock or StateMutationLock(
+            coordination_root or self.root
+        )
+        self.lock_path = self.coordination_lock.path
+        self.environment_store: Any | None = None
 
     @contextmanager
     def _write_lock(self):
         if self.root.is_symlink():
             raise InstallationConfigError("installation settings root cannot be a symlink")
-        self.root.mkdir(parents=True, exist_ok=True)
-        with _STORE_THREAD_LOCK:
-            descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            try:
-                os.fchmod(descriptor, 0o600)
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX)
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
+        with self.coordination_lock.acquire():
+            yield
 
     def _check_file(self) -> None:
         if self.state_path.is_symlink():
@@ -1447,6 +1488,15 @@ class RuntimeInstallationStore:
 
         with self._write_lock():
             value = self._read_state()
+            if self.environment_store is not None:
+                try:
+                    profile = self.environment_store.get_profile(plan.environment_ref)
+                except Exception as exc:
+                    raise InstallationConfigError(
+                        "安装计划绑定的运行环境已不存在"
+                    ) from exc
+                if profile.connection_digest != plan.connection_digest:
+                    raise InstallationConflictError("安装计划绑定的运行环境已变化")
             for raw in value["installations"].values():
                 if isinstance(raw, Mapping) and raw.get("plan_id") == plan.plan_id:
                     return InstallationRecord.from_dict(raw), False
@@ -1502,7 +1552,19 @@ class RuntimeInstallationStore:
             self._write_state(value)
             return record, True
 
-    def claim_execution(self, installation_id: str) -> tuple[InstallationRecord, bool]:
+    def claim_execution(
+        self,
+        installation_id: str,
+        *,
+        worker_instance_id: str = "",
+        worker_token: str = "",
+    ) -> tuple[InstallationRecord, bool]:
+        if worker_instance_id:
+            _safe_id(worker_instance_id, field="worker_instance_id")
+        if worker_token:
+            _safe_id(worker_token, field="worker_token")
+        if bool(worker_instance_id) != bool(worker_token):
+            raise InstallationConfigError("worker lease identity is incomplete")
         with self._write_lock():
             value = self._read_state()
             raw = value["installations"].get(installation_id)
@@ -1511,12 +1573,17 @@ class RuntimeInstallationStore:
             current = InstallationRecord.from_dict(raw)
             if current.state != "APPROVED":
                 return current, False
+            heartbeat = utc_timestamp() if worker_token else ""
             updated = replace(
                 current,
                 state="INSTALLING",
                 revision=current.revision + 1,
                 updated_at=utc_timestamp(),
                 worker_pid=os.getpid(),
+                worker_instance_id=worker_instance_id,
+                worker_token=worker_token,
+                worker_heartbeat_at=heartbeat,
+                worker_operation="install" if worker_token else "",
                 side_effects_started=False,
             )
             value["installations"][installation_id] = updated.to_dict()
@@ -1528,33 +1595,62 @@ class RuntimeInstallationStore:
         installation_id: str,
         *,
         force: bool = False,
+        worker_instance_id: str = "",
+        worker_token: str = "",
+        lease_active: bool = False,
+        operation: str | None = None,
     ) -> tuple[InstallationRecord, bool]:
-        """Atomically acquire the lease used by ENABLING recovery.
+        """Atomically acquire the lease used by a resumable worker.
 
-        The durable RECOVERING state protects across processes.  The small
-        in-process set also prevents two ``force=True`` callers in one server
-        process from stealing one another's lease while a recovery is running.
+        The durable RECOVERING state protects across processes.  The service
+        instance/token and heartbeat distinguish a live worker from a request
+        thread that has exited while the Web server remains alive.  The small
+        in-process set also prevents two force callers in one server process
+        from stealing one another's recovery lease.
         """
 
         _safe_id(installation_id, field="installation_id")
+        if worker_instance_id:
+            _safe_id(worker_instance_id, field="worker_instance_id")
+        if worker_token:
+            _safe_id(worker_token, field="worker_token")
+        if bool(worker_instance_id) != bool(worker_token):
+            raise InstallationConfigError("worker lease identity is incomplete")
+        if operation is not None and operation not in {"install", "confirm", "enable"}:
+            raise InstallationConfigError("worker operation is invalid")
         with self._write_lock():
             value = self._read_state()
             raw = value["installations"].get(installation_id)
             if raw is None:
                 raise InstallationConfigError("installation was not found")
             current = InstallationRecord.from_dict(raw)
-            if current.state not in {"ENABLING", "RECOVERING"}:
+            if current.state not in {"INSTALLING", "VERIFYING", "ENABLING", "RECOVERING"}:
                 return current, False
             if installation_id in _RECOVERY_THREAD_LEASES:
                 return current, False
-            if current.worker_pid and _process_alive(current.worker_pid):
-                # ``force`` is for reclaiming a durable lease after a crash,
-                # not for stealing a lease held by another live process.
-                # A same-process force call remains useful for deterministic
-                # recovery tests and for an interrupted worker whose durable
-                # record predates the in-process lease set.
-                if not force or current.worker_pid != os.getpid():
+            same_service = bool(
+                worker_instance_id
+                and current.worker_instance_id == worker_instance_id
+            )
+            if current.worker_token:
+                if same_service and lease_active:
                     return current, False
+                # Never steal a lease with a fresh heartbeat from another
+                # service instance.  ``force`` only bypasses a legacy PID
+                # lease or a stale durable worker token.
+                if not same_service and _worker_lease_fresh(current):
+                    return current, False
+            elif current.worker_pid and _process_alive(current.worker_pid) and not force:
+                # Records written before worker tokens were introduced remain
+                # conservative: only an explicit recovery request may reclaim
+                # their PID lease.
+                return current, False
+            chosen_operation = operation or current.worker_operation
+            if not chosen_operation:
+                chosen_operation = "enable" if current.state in {"ENABLING", "RECOVERING"} else "install"
+            chosen_instance = worker_instance_id or f"service-{os.getpid()}"
+            chosen_token = worker_token or new_server_id("worker")
+            heartbeat = utc_timestamp()
             updated = replace(
                 current,
                 state="RECOVERING",
@@ -1562,16 +1658,81 @@ class RuntimeInstallationStore:
                 updated_at=utc_timestamp(),
                 error="",
                 worker_pid=os.getpid(),
+                worker_instance_id=chosen_instance,
+                worker_token=chosen_token,
+                worker_heartbeat_at=heartbeat,
+                worker_operation=chosen_operation,
             )
             value["installations"][installation_id] = updated.to_dict()
             self._write_state(value)
-            _RECOVERY_THREAD_LEASES.add(installation_id)
+            with _RECOVERY_THREAD_LOCK:
+                _RECOVERY_THREAD_LEASES.add(installation_id)
             return updated, True
 
     @staticmethod
     def release_recovery(installation_id: str) -> None:
-        with _STORE_THREAD_LOCK:
+        with _RECOVERY_THREAD_LOCK:
             _RECOVERY_THREAD_LEASES.discard(installation_id)
+
+    def heartbeat_worker(
+        self,
+        installation_id: str,
+        *,
+        worker_instance_id: str,
+        worker_token: str,
+    ) -> bool:
+        _safe_id(installation_id, field="installation_id")
+        _safe_id(worker_instance_id, field="worker_instance_id")
+        _safe_id(worker_token, field="worker_token")
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(installation_id)
+            if raw is None:
+                return False
+            current = InstallationRecord.from_dict(raw)
+            if (
+                current.worker_instance_id != worker_instance_id
+                or current.worker_token != worker_token
+                or current.state not in {"INSTALLING", "VERIFYING", "ENABLING", "RECOVERING"}
+            ):
+                return False
+            value["installations"][installation_id] = replace(
+                current,
+                worker_heartbeat_at=utc_timestamp(),
+            ).to_dict()
+            self._write_state(value)
+            return True
+
+    def release_worker_lease(
+        self,
+        installation_id: str,
+        *,
+        worker_instance_id: str,
+        worker_token: str,
+    ) -> bool:
+        _safe_id(installation_id, field="installation_id")
+        _safe_id(worker_instance_id, field="worker_instance_id")
+        _safe_id(worker_token, field="worker_token")
+        with self._write_lock():
+            value = self._read_state()
+            raw = value["installations"].get(installation_id)
+            if raw is None:
+                return False
+            current = InstallationRecord.from_dict(raw)
+            if (
+                current.worker_instance_id != worker_instance_id
+                or current.worker_token != worker_token
+            ):
+                return False
+            value["installations"][installation_id] = replace(
+                current,
+                worker_pid=0,
+                worker_instance_id="",
+                worker_token="",
+                worker_heartbeat_at="",
+            ).to_dict()
+            self._write_state(value)
+            return True
 
     def update_installation(
         self,
@@ -1589,6 +1750,18 @@ class RuntimeInstallationStore:
                 raise InstallationConflictError("installation changed concurrently")
             if record.revision != expected_revision + 1:
                 raise InstallationConflictError("installation revision is not monotonic")
+            if (
+                record.worker_token
+                and record.worker_token == current.worker_token
+                and record.worker_instance_id == current.worker_instance_id
+            ):
+                # Heartbeats intentionally do not consume installation
+                # revisions.  Preserve the newest heartbeat when a worker
+                # subsequently performs a normal CAS update.
+                record = replace(
+                    record,
+                    worker_heartbeat_at=current.worker_heartbeat_at,
+                )
             value["installations"][record.installation_id] = record.to_dict()
             self._write_state(value)
             return record
@@ -1623,6 +1796,10 @@ class RuntimeInstallationStore:
                 updated_at=utc_timestamp(),
                 error="",
                 worker_pid=0,
+                worker_instance_id="",
+                worker_token="",
+                worker_heartbeat_at="",
+                worker_operation="",
             )
             value["installations"][installation_id] = updated.to_dict()
             self._write_state(value)
@@ -1705,6 +1882,16 @@ def _process_alive(process_id: int) -> bool:
     except (OSError, ValueError):
         return False
     return True
+
+
+def _worker_lease_fresh(record: InstallationRecord) -> bool:
+    if not record.worker_token or not record.worker_heartbeat_at:
+        return False
+    try:
+        age = max(0.0, time.time() - _parse_timestamp(record.worker_heartbeat_at))
+    except Exception:
+        return False
+    return age <= WORKER_LEASE_STALE_SECONDS
 
 
 class InstallExecutor(Protocol):
@@ -2758,9 +2945,130 @@ class InstallationManager:
         )
         if not isinstance(self.manifest, InstallManifest):
             raise TypeError("manifest must be an InstallManifest")
-        self.store = store or RuntimeInstallationStore(self.root)
+        self.store = store or RuntimeInstallationStore(
+            self.root,
+            coordination_lock=environment_manager.store.coordination_lock,
+        )
+        # A caller may provide a store rooted separately from the environment
+        # files.  Installation claims and connection migration must still
+        # share one cross-process transaction boundary.
+        self.store.coordination_lock = environment_manager.store.coordination_lock
+        self.store.lock_path = self.store.coordination_lock.path
+        self.store.environment_store = environment_manager.store
         self.executor = executor or RestrictedInstallExecutor()
         self.timeout_seconds = float(timeout_seconds)
+        self.service_instance_id = new_server_id("service")
+        self._worker_lease_lock = threading.RLock()
+        self._worker_leases: dict[str, str] = {}
+
+    def _worker_token_active(self, installation_id: str, token: str) -> bool:
+        if not token:
+            return False
+        with self._worker_lease_lock:
+            return self._worker_leases.get(installation_id) == token
+
+    def _worker_heartbeat_loop(
+        self,
+        installation_id: str,
+        token: str,
+        stop: threading.Event,
+        owner: threading.Thread,
+    ) -> None:
+        while not stop.wait(WORKER_HEARTBEAT_INTERVAL_SECONDS):
+            if not owner.is_alive():
+                self._abandon_worker_lease(installation_id, token)
+                return
+            if not self._worker_token_active(installation_id, token):
+                return
+            try:
+                if not self.store.heartbeat_worker(
+                    installation_id,
+                    worker_instance_id=self.service_instance_id,
+                    worker_token=token,
+                ):
+                    return
+            except Exception:
+                return
+
+    def _abandon_worker_lease(self, installation_id: str, token: str) -> None:
+        with self._worker_lease_lock:
+            if self._worker_leases.get(installation_id) != token:
+                return
+            try:
+                self.store.release_worker_lease(
+                    installation_id,
+                    worker_instance_id=self.service_instance_id,
+                    worker_token=token,
+                )
+            except Exception:
+                pass
+            self._worker_leases.pop(installation_id, None)
+
+    @contextmanager
+    def _worker_lease(self, record: InstallationRecord):
+        """Track a request worker independently from the Web process PID."""
+
+        token = record.worker_token
+        if not token:
+            yield
+            return
+        stop = threading.Event()
+        with self._worker_lease_lock:
+            self._worker_leases[record.installation_id] = token
+        heartbeat = threading.Thread(
+            target=self._worker_heartbeat_loop,
+            args=(record.installation_id, token, stop, threading.current_thread()),
+            daemon=True,
+            name=f"molly-worker-heartbeat-{record.installation_id}",
+        )
+        heartbeat.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            heartbeat.join(timeout=WORKER_HEARTBEAT_INTERVAL_SECONDS + 1.0)
+            with self._worker_lease_lock:
+                if self._worker_leases.get(record.installation_id) == token:
+                    try:
+                        self.store.release_worker_lease(
+                            record.installation_id,
+                            worker_instance_id=self.service_instance_id,
+                            worker_token=token,
+                        )
+                    except Exception:
+                        pass
+                    finally:
+                        self._worker_leases.pop(record.installation_id, None)
+
+    def _claim_recovery(
+        self,
+        record: InstallationRecord,
+        plan: InstallPlan,
+        *,
+        force: bool,
+    ) -> tuple[InstallationRecord, bool]:
+        if plan.status == "READY_TO_CONFIRM":
+            operation = "confirm"
+        elif record.state == "ENABLING":
+            operation = "enable"
+        elif record.state == "RECOVERING":
+            operation = record.worker_operation or "enable"
+        else:
+            operation = "install"
+        worker_token = new_server_id("worker")
+        # Hold the manager registry lock while the durable CAS runs.  This
+        # closes the gap in which one thread can release a local lease while
+        # another thread is deciding whether the old token is still active.
+        with self._worker_lease_lock:
+            active = self._worker_leases.get(record.installation_id) == record.worker_token
+            return self.store.claim_recovery(
+                record.installation_id,
+                force=force,
+                worker_instance_id=self.service_instance_id,
+                worker_token=worker_token,
+                lease_active=active,
+                operation=operation,
+            )
 
     def _current_binding(self, environment_ref: str) -> tuple[EnvironmentProfile, EnvironmentReport, Mapping[str, Any]]:
         profile = self.environment_manager.store.get_profile(environment_ref)
@@ -2845,6 +3153,28 @@ class InstallationManager:
         if self.manifest.catalog_version != plan.catalog_version or self.manifest.digest != plan.catalog_digest:
             raise InstallationConflictError("固定兼容性清单已变化，请重新生成安装计划")
 
+    def _claim_approval(self, plan: InstallPlan) -> tuple[InstallationRecord, bool]:
+        """Recheck the live profile while claiming the installation record.
+
+        Profile migration and installation approval use the same coordination
+        lock.  The profile recheck prevents a stale plan from creating a new
+        transaction after migration has already removed its old environment
+        reference.
+        """
+
+        with self.environment_manager.store.coordination_lock.acquire():
+            try:
+                profile = self.environment_manager.store.get_profile(
+                    plan.environment_ref
+                )
+            except Exception as exc:
+                raise InstallationConfigError(
+                    "安装计划绑定的运行环境已不存在"
+                ) from exc
+            if profile.connection_digest != plan.connection_digest:
+                raise InstallationConflictError("安装计划绑定的运行环境已变化")
+            return self.store.claim_approval(plan)
+
     def confirm(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise InstallationConfigError("安装确认必须是 JSON 对象")
@@ -2872,7 +3202,7 @@ class InstallationManager:
         existing_runtime = self.runtime_for_environment(plan.environment_ref)
         if existing_runtime is not None and existing_runtime.state == "CONFIRMED" and existing_runtime.runtime_id != plan.runtime_id:
             raise InstallationConflictError("当前连接已有已确认运行配置，请使用最新环境方案")
-        existing, created = self.store.claim_approval(plan)
+        existing, created = self._claim_approval(plan)
         if existing.state == "CONFIRMED":
             config = self.store.get_runtime_config(plan.environment_ref)
             return {"installation": existing.to_dict(public=True), "runtime_config": config.to_dict(public=True) if config else None}
@@ -2884,7 +3214,11 @@ class InstallationManager:
             }
         if existing.state != "APPROVED":
             return {"installation": existing.to_dict(public=True), "runtime_config": None, "idempotent_replay": True}
-        claimed, should_execute = self.store.claim_execution(existing.installation_id)
+        claimed, should_execute = self.store.claim_execution(
+            existing.installation_id,
+            worker_instance_id=self.service_instance_id,
+            worker_token=new_server_id("worker"),
+        )
         if not should_execute:
             return {"installation": claimed.to_dict(public=True), "runtime_config": None, "idempotent_replay": True}
         completed = self._execute(claimed, plan)
@@ -3076,6 +3410,27 @@ class InstallationManager:
         plan: InstallPlan,
         *,
         resume: bool = False,
+        claimed_record: InstallationRecord | None = None,
+    ) -> dict[str, Any]:
+        if claimed_record is not None:
+            with self._worker_lease(claimed_record):
+                return self._confirm_existing_environment_body(
+                    plan,
+                    resume=resume,
+                    claimed_record=claimed_record,
+                )
+        return self._confirm_existing_environment_body(
+            plan,
+            resume=resume,
+            claimed_record=None,
+        )
+
+    def _confirm_existing_environment_body(
+        self,
+        plan: InstallPlan,
+        *,
+        resume: bool = False,
+        claimed_record: InstallationRecord | None = None,
     ) -> dict[str, Any]:
         profile, original_report, _ = self._current_binding(plan.environment_ref)
         pending_record = self.store.get_installation_for_plan(plan.plan_id)
@@ -3171,7 +3526,10 @@ class InstallationManager:
                 )
             except InstallationError:
                 previous_weight_records = {}
-        record, created = self.store.claim_approval(plan)
+        if claimed_record is not None:
+            record, created = claimed_record, False
+        else:
+            record, created = self._claim_approval(plan)
         if record.state == "CONFIRMED":
             config = self.store.get_runtime_config(plan.environment_ref)
             return {
@@ -3179,7 +3537,7 @@ class InstallationManager:
                 "runtime_config": config.to_dict(public=True) if config else None,
                 "idempotent_replay": True,
             }
-        if record.state not in {"APPROVED", "VERIFYING"}:
+        if record.state not in {"APPROVED", "VERIFYING", "RECOVERING"}:
             return {
                 "installation": record.to_dict(public=True),
                 "runtime_config": None,
@@ -3191,6 +3549,20 @@ class InstallationManager:
                 "runtime_config": None,
                 "idempotent_replay": True,
             }
+        lease_context = nullcontext()
+        if claimed_record is None and record.state == "APPROVED":
+            record = self._update(
+                record,
+                state="VERIFYING",
+                worker_pid=os.getpid(),
+                worker_instance_id=self.service_instance_id,
+                worker_token=new_server_id("worker"),
+                worker_heartbeat_at=utc_timestamp(),
+                worker_operation="confirm",
+                side_effects_started=False,
+            )
+            lease_context = self._worker_lease(record)
+        lease_context.__enter__()
         try:
             if (
                 previous_runtime_directory is not None
@@ -3298,19 +3670,18 @@ class InstallationManager:
                 "runtime_config": None,
                 "idempotent_replay": False,
             }
+        finally:
+            lease_context.__exit__(None, None, None)
 
     def recover(self, installation_id: str, *, force: bool = False) -> dict[str, Any]:
         record = self.store.get_installation(installation_id)
         plan = self.store.get_plan(record.plan_id)
         if record.state == "ROLLING_BACK":
             return self._recover_rollback(record, plan)
-        if plan.status == "READY_TO_CONFIRM":
-            if not force and record.state == "VERIFYING" and _process_alive(record.worker_pid):
-                raise InstallationConflictError("installation worker is still active")
-            return self._confirm_existing_environment(plan, resume=True)
-        if record.state in {"ENABLING", "RECOVERING"}:
-            claimed, should_recover = self.store.claim_recovery(
-                record.installation_id,
+        if record.state in {"INSTALLING", "VERIFYING", "ENABLING", "RECOVERING"}:
+            claimed, should_recover = self._claim_recovery(
+                record,
+                plan,
                 force=force,
             )
             if not should_recover:
@@ -3320,20 +3691,34 @@ class InstallationManager:
                     "runtime_config": config.to_dict(public=True) if config else None,
                 }
             try:
-                return self._recover_enabling(claimed, plan)
+                if plan.status == "READY_TO_CONFIRM":
+                    return self._confirm_existing_environment(
+                        plan,
+                        resume=True,
+                        claimed_record=claimed,
+                    )
+                if claimed.worker_operation == "enable":
+                    return self._recover_enabling(claimed, plan)
+                completed = self._execute(claimed, plan)
+                config = self.store.get_runtime_config(plan.environment_ref)
+                return {
+                    "installation": completed.to_dict(public=True),
+                    "runtime_config": config.to_dict(public=True) if config else None,
+                }
             finally:
                 self.store.release_recovery(record.installation_id)
-        record = self.store.recover_stale(
-            installation_id,
-            stale_after_seconds=0,
-            force=force,
-        )
+        if plan.status == "READY_TO_CONFIRM":
+            return self._confirm_existing_environment(plan, resume=True)
         if record.state != "APPROVED":
             return {"installation": record.to_dict(public=True), "runtime_config": None}
         profile, report, _ = self._current_binding(plan.environment_ref)
         if report.report_digest != record.report_digest or profile.connection_digest != record.connection_digest:
             raise InstallationConflictError("恢复前连接或探测报告已变化")
-        claimed, should_execute = self.store.claim_execution(record.installation_id)
+        claimed, should_execute = self.store.claim_execution(
+            record.installation_id,
+            worker_instance_id=self.service_instance_id,
+            worker_token=new_server_id("worker"),
+        )
         if not should_execute:
             return {"installation": claimed.to_dict(public=True), "runtime_config": None}
         completed = self._execute(claimed, plan)
@@ -3494,22 +3879,23 @@ class InstallationManager:
         record: InstallationRecord,
         plan: InstallPlan,
     ) -> dict[str, Any]:
-        try:
-            return self._recover_enabling_checked(record, plan)
-        except Exception as exc:
+        with self._worker_lease(record):
             try:
-                profile: EnvironmentProfile | None = self.environment_manager.store.get_profile(
-                    plan.environment_ref
+                return self._recover_enabling_checked(record, plan)
+            except Exception as exc:
+                try:
+                    profile: EnvironmentProfile | None = self.environment_manager.store.get_profile(
+                        plan.environment_ref
+                    )
+                except InstallationError:
+                    profile = None
+                rolling_back = self._enter_rollback(
+                    record,
+                    plan,
+                    exc,
+                    finalized=True,
                 )
-            except InstallationError:
-                profile = None
-            rolling_back = self._enter_rollback(
-                record,
-                plan,
-                exc,
-                finalized=True,
-            )
-            return self._rollback_result(rolling_back, plan, profile=profile)
+                return self._rollback_result(rolling_back, plan, profile=profile)
 
     def _recover_enabling_checked(
         self,
@@ -3553,7 +3939,11 @@ class InstallationManager:
                 if existing_confirmed and existing is not None:
                     self.store.mark_runtime_invalidated(existing.runtime_id)
                 reset = self._update(record, state="APPROVED", error="")
-                claimed, should_execute = self.store.claim_execution(reset.installation_id)
+                claimed, should_execute = self.store.claim_execution(
+                    reset.installation_id,
+                    worker_instance_id=self.service_instance_id,
+                    worker_token=new_server_id("worker"),
+                )
                 if not should_execute:
                     return {"installation": claimed.to_dict(public=True), "runtime_config": None}
                 completed = self._execute(claimed, plan)
@@ -3684,6 +4074,10 @@ class InstallationManager:
         }
 
     def _execute(self, record: InstallationRecord, plan: InstallPlan) -> InstallationRecord:
+        with self._worker_lease(record):
+            return self._execute_body(record, plan)
+
+    def _execute_body(self, record: InstallationRecord, plan: InstallPlan) -> InstallationRecord:
         profile: EnvironmentProfile | None = None
         stage_directory = ""
         target_was_absent = False
@@ -3902,6 +4296,17 @@ class InstallationManager:
         )
 
     def _update(self, record: InstallationRecord, **changes: Any) -> InstallationRecord:
+        next_state = changes.get("state", record.state)
+        if next_state in {"APPROVED", "ROLLING_BACK", "CONFIRMED", "FAILED", "ROLLED_BACK"}:
+            changes.update(
+                {
+                    "worker_pid": 0,
+                    "worker_instance_id": "",
+                    "worker_token": "",
+                    "worker_heartbeat_at": "",
+                    "worker_operation": "",
+                }
+            )
         updated = replace(record, **changes, revision=record.revision + 1, updated_at=utc_timestamp())
         return self.store.update_installation(updated, expected_revision=record.revision)
 

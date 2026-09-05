@@ -1290,29 +1290,30 @@ class MollyWebApplication:
     def _save_environment_profile(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         previous_ref = payload.get("environment_ref")
         previous_runtime = None
-        if isinstance(previous_ref, str) and previous_ref:
-            previous_runtime = self.installation_manager.store.get_runtime_config(previous_ref)
-            previous_profile = self.environment_manager.store.get_profile(previous_ref)
-            requested_profile = EnvironmentProfile.from_payload(
-                payload,
-                environment_ref=previous_profile.environment_ref,
-                created_at=previous_profile.created_at,
-                updated_at=previous_profile.updated_at,
-            )
-            if requested_profile.connection_digest != previous_profile.connection_digest:
-                active = self.installation_manager.store.get_installation_for_environment(
-                    previous_ref
+        with self.environment_manager.store.coordination_lock.acquire():
+            if isinstance(previous_ref, str) and previous_ref:
+                previous_runtime = self.installation_manager.store.get_runtime_config(previous_ref)
+                previous_profile = self.environment_manager.store.get_profile(previous_ref)
+                requested_profile = EnvironmentProfile.from_payload(
+                    payload,
+                    environment_ref=previous_profile.environment_ref,
+                    created_at=previous_profile.created_at,
+                    updated_at=previous_profile.updated_at,
                 )
-                if active is not None:
-                    raise WebRequestError(
-                        409,
-                        "ENVIRONMENT_INSTALLATION_ACTIVE",
-                        "当前运行环境有未完成的安装或回滚事务，请先完成恢复后再修改连接",
+                if requested_profile.connection_digest != previous_profile.connection_digest:
+                    active = self.installation_manager.store.get_installation_for_environment(
+                        previous_ref
                     )
-        profile = self.environment_manager.upsert_profile(payload)
-        if previous_runtime is not None and profile.environment_ref != previous_ref:
-            self.installation_manager.store.mark_runtime_invalidated(previous_runtime.runtime_id)
-        detection = self.environment_manager.store.get_detection(profile.environment_ref)
+                    if active is not None:
+                        raise WebRequestError(
+                            409,
+                            "ENVIRONMENT_INSTALLATION_ACTIVE",
+                            "当前运行环境有未完成的安装或回滚事务，请先完成恢复后再修改连接",
+                        )
+            profile = self.environment_manager.upsert_profile(payload)
+            if previous_runtime is not None and profile.environment_ref != previous_ref:
+                self.installation_manager.store.mark_runtime_invalidated(previous_runtime.runtime_id)
+            detection = self.environment_manager.store.get_detection(profile.environment_ref)
         return {
             "environment": profile.to_public_dict(detection=detection),
             "installation": self.installation_manager.installation_public(profile.environment_ref),

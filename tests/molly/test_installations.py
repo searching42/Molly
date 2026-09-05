@@ -19,7 +19,13 @@ import pytest
 
 from molly.core.ids import canonical_json_bytes, sha256_bytes
 from molly.web import create_application
-from molly.web.environments import EnvironmentDetector, EnvironmentManager, EnvironmentProfile, EnvironmentReport
+from molly.web.environments import (
+    EnvironmentConfigError,
+    EnvironmentDetector,
+    EnvironmentManager,
+    EnvironmentProfile,
+    EnvironmentReport,
+)
 from molly.web.installations import (
     InstallManifest,
     InstallManifestEntry,
@@ -716,6 +722,216 @@ def test_concurrent_enabling_recovery_cannot_rollback_winning_confirmation(
     config = resumed.store.get_runtime_config(environment_ref)
     assert config is not None and config.state == "CONFIRMED"
     assert Path(config.target_directory).is_dir()
+
+
+def test_web_recovery_reclaims_exited_install_worker_without_restart(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"web-install-worker-recovery")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    base = RestrictedInstallExecutor()
+
+    class CrashAfterEnable:
+        def install(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.install(*args, **kwargs)  # type: ignore[arg-type]
+
+        def verify(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+            return base.verify(*args, **kwargs)  # type: ignore[arg-type]
+
+        def finalize(self, *args: object, **kwargs: object) -> None:
+            base.finalize(*args, **kwargs)  # type: ignore[arg-type]
+            raise SystemExit("request thread exited after enable")
+
+        def rollback(self, *args: object, **kwargs: object) -> bool:
+            return bool(base.rollback(*args, **kwargs))  # type: ignore[arg-type]
+
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+        executor=CrashAfterEnable(),  # type: ignore[arg-type]
+    )
+    app = create_application(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        installation_manager=installer,
+    )
+    try:
+        plan = installer.build_plan(environment_ref)
+        errors: list[BaseException] = []
+
+        def crashed_request() -> None:
+            try:
+                app.dispatch(
+                    "POST",
+                    f"/api/environments/{environment_ref}/install/confirm",
+                    _approval(plan),
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        request_thread = threading.Thread(target=crashed_request)
+        request_thread.start()
+        request_thread.join(2)
+        assert not request_thread.is_alive()
+        assert errors and isinstance(errors[0], SystemExit)
+
+        record = installer.store.get_installation_for_plan(plan.plan_id)
+        assert record is not None and record.state == "ENABLING"
+        assert record.worker_token == ""
+
+        status, recovered = app.dispatch(
+            "POST",
+            f"/api/environments/{environment_ref}/install/recover",
+            {"installation_id": record.installation_id},
+        )
+        assert status == 200
+        assert recovered["installation"]["state"] == "CONFIRMED"
+        assert recovered["runtime_config"]["status_label"] == "已确认"
+    finally:
+        app.close()
+
+
+def test_web_recovery_reclaims_exited_compatible_confirmation_without_restart(
+    tmp_path: Path,
+) -> None:
+    environment_manager, environment_ref, _ = _environment(tmp_path, ready=True)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+    )
+    app = create_application(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        installation_manager=installer,
+    )
+    original_save = installer.store.save_runtime_config
+
+    def save_then_exit(config: object) -> None:
+        original_save(config)  # type: ignore[arg-type]
+        raise SystemExit("request thread exited after compatible config write")
+
+    installer.store.save_runtime_config = save_then_exit  # type: ignore[method-assign]
+    try:
+        plan = installer.build_plan(environment_ref)
+        errors: list[BaseException] = []
+
+        def crashed_request() -> None:
+            try:
+                app.dispatch(
+                    "POST",
+                    f"/api/environments/{environment_ref}/install/confirm",
+                    _approval(plan),
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        request_thread = threading.Thread(target=crashed_request)
+        request_thread.start()
+        request_thread.join(2)
+        assert not request_thread.is_alive()
+        assert errors and isinstance(errors[0], SystemExit)
+
+        record = installer.store.get_installation_for_plan(plan.plan_id)
+        assert record is not None and record.state == "VERIFYING"
+        assert record.worker_token == ""
+        installer.store.save_runtime_config = original_save  # type: ignore[method-assign]
+
+        status, recovered = app.dispatch(
+            "POST",
+            f"/api/environments/{environment_ref}/install/recover",
+            {"installation_id": record.installation_id},
+        )
+        assert status == 200
+        assert recovered["installation"]["state"] == "CONFIRMED"
+        assert recovered["runtime_config"]["status_label"] == "已确认"
+    finally:
+        installer.store.save_runtime_config = original_save  # type: ignore[method-assign]
+        app.close()
+
+
+def test_connection_migration_and_approval_share_one_transaction_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "unimolv1.pt"
+    source.write_bytes(b"migration-approval-boundary")
+    environment_manager, environment_ref, _ = _environment(tmp_path)
+    installer = InstallationManager(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        manifest=_manifest(source),
+    )
+    app = create_application(
+        tmp_path / "runtime",
+        environment_manager=environment_manager,
+        installation_manager=installer,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    original_upsert = environment_manager.upsert_profile
+
+    def paused_upsert(payload: Mapping[str, object]) -> EnvironmentProfile:
+        entered.set()
+        assert release.wait(2)
+        return original_upsert(payload)
+
+    monkeypatch.setattr(environment_manager, "upsert_profile", paused_upsert)
+    try:
+        plan = installer.build_plan(environment_ref)
+        migration_result: list[tuple[int, dict[str, object]]] = []
+        approval_result: list[tuple[int, dict[str, object]]] = []
+        approval_done = threading.Event()
+
+        def migrate() -> None:
+            migration_result.append(
+                app.dispatch(
+                    "POST",
+                    "/api/environments",
+                    {
+                        "environment_ref": environment_ref,
+                        "display_name": "迁移中的环境",
+                        "mode": "ssh",
+                        "ssh_target": "compute.example",
+                        "ssh_user": "tester",
+                        "ssh_port": 2222,
+                    },
+                )
+            )
+
+        def approve() -> None:
+            try:
+                approval_result.append(
+                    app.dispatch(
+                        "POST",
+                        f"/api/environments/{environment_ref}/install/confirm",
+                        _approval(plan),
+                    )
+                )
+            finally:
+                approval_done.set()
+
+        migration_thread = threading.Thread(target=migrate)
+        migration_thread.start()
+        assert entered.wait(2)
+        approval_thread = threading.Thread(target=approve)
+        approval_thread.start()
+        assert not approval_done.wait(0.2)
+        release.set()
+        migration_thread.join(2)
+        approval_thread.join(2)
+
+        assert migration_result and migration_result[0][0] == 201
+        assert approval_result and approval_result[0][0] == 400
+        assert installer.store.get_installation_for_plan(plan.plan_id) is None
+        with pytest.raises(InstallationConfigError):
+            installer.store.claim_approval(plan)
+        with pytest.raises(EnvironmentConfigError):
+            environment_manager.store.get_profile(environment_ref)
+    finally:
+        release.set()
+        app.close()
 
 
 def test_web_exposes_active_installation_and_blocks_connection_migration(
